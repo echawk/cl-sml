@@ -4,22 +4,23 @@
   (cond
     ((numberp pat) pat)
     ((eq pat :wild) '_)
-    ;; Use keywords for constructors so they match regardless of package
+
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
-     (intern (string-upcase (second pat)) "KEYWORD"))
+     ;; We QUOTE the symbol so trivia matches the value, rather than binding a variable
+     `',(intern (string-upcase (second pat)) "CL-SML"))
 
     ((and (listp pat) (eq (car pat) :pat-app))
-     (let ((ctor (compile-pat (second pat)))
+     (let ((ctor (intern (string-upcase (second (second pat))) "CL-SML"))
            (payload (compile-pat (third pat))))
-       `(cons ,ctor ,payload)))
+       `(cons ',ctor ,payload)))
 
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
-     (intern (string-upcase (second pat))))
+     (intern (string-upcase (second pat)) "CL-SML"))
 
     ((and (listp pat) (eq (car pat) :pat-nil)) 'nil)
     ((and (listp pat) (eq (car pat) :pat-cons))
-     `(cons ,(intern (string-upcase (second pat)))
-            ,(intern (string-upcase (third pat)))))
+     `(cons ,(intern (string-upcase (second pat)) "CL-SML")
+            ,(intern (string-upcase (third pat)) "CL-SML")))
     (t (error "Unknown pattern ~A" pat))))
 
 (defun compile-expr (ast)
@@ -32,10 +33,10 @@
             (mapping (assoc name *sml-env* :test #'string=)))
        (if mapping
            (cdr mapping)
-           (intern (string-upcase name)))))
+           (intern (string-upcase name) "CL-SML"))))
 
     ((and (listp ast) (eq (car ast) :ctor))
-     `(make-sml-adt ,(intern (string-upcase (second ast)) "KEYWORD")))
+     (intern (string-upcase (second ast)) "CL-SML"))
 
     ;; Replace the :app block in compile-expr
     ((and (listp ast) (eq (car ast) :app))
@@ -43,7 +44,7 @@
            (arg (third ast)))
        (if (and (listp head) (eq (car head) :ctor))
            ;; FIX: Intern constructor as keyword and don't quote it here
-           `(cons ,(intern (string-upcase (second head)) "KEYWORD")
+           `(cons ',(intern (string-upcase (second head)) "CL-SML")
                   ,(compile-expr arg))
            `(funcall ,(compile-expr head) ,(compile-expr arg)))))
 
@@ -60,22 +61,25 @@
           ,(compile-expr (fourth ast))))
 
     ;; --- Local Let Bindings ---
+    ;; --- Local Let Bindings ---
     ((and (listp ast) (eq (car ast) :let))
      (let ((decs (second ast))
            (body-exprs (third ast)))
        `(let* ,(mapcar (lambda (dec)
                          (cond
                            ((eq (car dec) :val)
-                            `(,(intern (string-upcase (second dec))) ,(compile-expr (third dec))))
+                            ;; Force let-bound vals into CL-SML
+                            `(,(intern (string-upcase (second dec)) "CL-SML") ,(compile-expr (third dec))))
                            ((eq (car dec) :fun)
-                            (let* ((name (intern (string-upcase (second dec))))
-                                   (params (mapcar (lambda (p) (intern (string-upcase p))) (third dec)))
+                            ;; Force let-bound function names and parameters into CL-SML
+                            (let* ((name (intern (string-upcase (second dec)) "CL-SML"))
+                                   (params (mapcar (lambda (p) (intern (string-upcase p) "CL-SML")) (third dec)))
                                    (body-expr (compile-expr (fourth dec)))
                                    (curried (reduce (lambda (p b) `(lambda (,p) ,b))
                                                     params :initial-value body-expr :from-end t)))
                               `(,name ,curried)))
                            (t (error "Unknown decl in let: ~A" dec))))
-                decs)
+                       decs)
           ;; let* implicitly returns the result of the final expression
           ,@(mapcar #'compile-expr body-exprs))))
 
@@ -89,37 +93,58 @@
     ((and (listp ast) (eq (car ast) :list))
      `(list ,@(mapcar #'compile-expr (cdr ast))))
 
+    ((and (listp ast) (eq (car ast) :fn))
+     (let ((clauses (second ast))
+           (tmp-arg (gensym "ARG")))
+       `(lambda (,tmp-arg)
+          (trivia:match ,tmp-arg
+            ,@(mapcar (lambda (branch)
+                        `(,(compile-pat (first branch)) ,(compile-expr (second branch))))
+                      clauses)
+            (_ (error "Match failure in anonymous function"))))))
+
     (t (error "Unknown AST: ~A" ast))))
 
 (defun compile-decl (ast)
   "Compiles top level declarations."
   (cond
     ((eq (car ast) :val)
-     `(defparameter ,(intern (string-upcase (second ast)))
+     `(defparameter ,(intern (string-upcase (second ast)) "CL-SML")
                     ,(compile-expr (third ast))))
     ((eq (car ast) :fun)
-     (let* ((name (intern (string-upcase (second ast))))
-            (params (mapcar (lambda (p) (intern (string-upcase p))) (third ast)))
+     (let* ((name (intern (string-upcase (second ast)) "CL-SML"))
+            (params (mapcar (lambda (p) (intern (string-upcase p) "CL-SML")) (third ast)))
             (body (compile-expr (fourth ast)))
             (curried (reduce (lambda (p b) `(lambda (,p) ,b))
                              params :initial-value body :from-end t)))
-       `(defparameter ,name ,curried)))
+       ;; FIX: Wrap in progn and declaim so Lisp knows it's global before compiling the body
+       `(progn
+          (declaim (special ,name))
+          (defparameter ,name ,curried))))
+
+    ;; ((eq (car ast) :fun)
+    ;;  (let* ((name (intern (string-upcase (second ast)) "CL-SML"))
+    ;;         (params (mapcar (lambda (p) (intern (string-upcase p) "CL-SML")) (third ast)))
+    ;;         (body (compile-expr (fourth ast)))
+    ;;         (curried (reduce (lambda (p b) `(lambda (,p) ,b))
+    ;;                          params :initial-value body :from-end t)))
+    ;;    `(defparameter ,name ,curried)))
 
     ;; Replace the :datatype block in compile-decl
     ((eq (car ast) :datatype)
      (let ((ctors (third ast)))
        `(progn
           ,@(mapcar (lambda (c)
-                      (let* ((cname (intern (string-upcase (second c))))
-                             (keyword (intern (string-upcase (second c)) "KEYWORD"))
+                      (let* ((cname (intern (string-upcase (second c)) "CL-SML"))
+                             (keyword (intern (string-upcase (second c)) "CL-SML"))
                              (has-args (fourth c)))
                         (if has-args
                             ;; If it has args, the name refers to a constructor function
                             `(progn
-                               (defun ,cname (payload) (cons ,keyword payload))
+                               (defun ,cname (payload) (cons ',keyword payload))
                                (defparameter ,cname #',cname))
                             ;; If no args, it's just the keyword constant
-                            `(defparameter ,cname ,keyword))))
+                            `(defparameter ,cname ',keyword))))
                     ctors))))
 
     (t (error "Unknown Declaration: ~A" ast))))

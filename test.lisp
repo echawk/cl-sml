@@ -28,20 +28,28 @@
 }#
 )
 ;; 2. SML functions compile to Lisp globals and use Funcall
-(format t "Result is: ~A~%" result) ;; Prints 15
+(format t "Result is: ~A~%" cl-sml::result) ;; Prints 15
 
 ;; 3. Let's call the SML function `maybeAddfoo` directly from Lisp!
 ;; We use our exported struct constructor to pass it an SML 'SOME' value.
 
-(let ((my-opt (cl-sml:make-sml-adt :SOME 100))) ;; Use :SOME
+;; FIXME: FAILS.
+;; (let ((my-opt (cl-sml:make-sml-adt 'cl-sml::some 100))) ;; Use :SOME
+;;   (format t "maybeAddfoo(SOME 100) = ~A~%"
+;;           (funcall cl-sml::maybeAddfoo my-opt)))
+
+;; (format t "maybeAddfoo(NONE) = ~A~%"
+;;         (funcall cl-sml::maybeAddfoo 'cl-sml::NONE)) ;; Use :NONE
+
+(let ((my-opt (cons 'cl-sml::SOME 100)))
   (format t "maybeAddfoo(SOME 100) = ~A~%"
-          (funcall maybeAddfoo my-opt)))
+          (funcall cl-sml::maybeAddfoo my-opt)))
 
 (format t "maybeAddfoo(NONE) = ~A~%"
-        (funcall maybeAddfoo (cl-sml:make-sml-adt :NONE))) ;; Use :NONE
+        (funcall cl-sml::maybeAddfoo 'cl-sml::NONE))
 
 (format t "isSafe(5) = ~A~%"
-           (funcall isSafe 5))
+           (funcall cl-sml::isSafe 5))
 
 (progn
 #{
@@ -57,7 +65,7 @@
 )
 
 ;; Proof that the let block compiled correctly and evaluated!
-(format t "letResult = ~A~%" letResult) ;; Should print 50
+(format t "letResult = ~A~%" cl-sml::letResult) ;; Should print 50
 
 ;; Proof of Lexical Scoping:
 ;; 'a', 'b', and 'multiply' were strictly local to the `let` block.
@@ -68,20 +76,19 @@
   fun sumList lst =
     case lst of
         [] => 0
-      | hd :: tl => hd + sumList tl;
+      | head :: tail => head + sumList tail;
 
   val my_list = [10, 20, 30];
   val list_total = sumList my_list;
 }#
 )
 
-(format t "List to sum: ~A~%" my_list)
-(format t "sumList([10, 20, 30]) = ~A~%" list_total) ;; Should print 60!
+(format t "List to sum: ~A~%" cl-sml::my_list)
+(format t "sumList([10, 20, 30]) = ~A~%" cl-sml::list_total) ;; Should print 60!
 
 ;; We can even call it with a native Lisp list because SML lists ARE Lisp lists!
 (format t "sumList( '(1 2 3 4 5) ) = ~A~%"
-        (funcall sumList '(1 2 3 4 5))) ;; Should print 15
-
+        (funcall cl-sml::sumList '(1 2 3 4 5))) ;; Should print 15
 
 (progn
 #{
@@ -98,8 +105,8 @@
 )
 
 
-(format t "maybeAdd(NONE) = ~A~%" test_none)       ;; Should print 0
-(format t "maybeAdd(SOME 99) = ~A~%" test_some)    ;; Should print 100
+(format t "maybeAdd(SML_NONE) = ~A~%" cl-sml::test_none)       ;; Should print 0
+(format t "maybeAdd(SML_SOME 99) = ~A~%" cl-sml::test_some)    ;; Should print 100
 
 
 (progn
@@ -107,17 +114,15 @@
   fun smlMap f lst =
     case lst of
         [] => []
-      | h :: t => (f h) :: (smlMap f t);
+      | head :: tail => (f head) :: (smlMap f tail);
 
   val nums = [1, 2, 3, 4, 5];
 
-  (* We use 'fn' here to square the numbers *)
+
   val squaredNums = smlMap (fn x => x * x) nums;
 }#
 )
+  ;; (* We use 'fn' here to square the numbers *)
+(format t "Original: ~A~%" cl-sml::nums)
+(format t "Squared:  ~A~%" cl-sml::squaredNums) ;; Should print (1 4 9 16 25)
 
-(format t "Original: ~A~%" nums)
-(format t "Squared:  ~A~%" squaredNums) ;; Should print (1 4 9 16 25)
-
-;; Re-testing your maybeAdd fix:
-(format t "maybeAdd(SML_NONE) = ~A~%" test_none) ;; Should now print 0

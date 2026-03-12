@@ -61,7 +61,7 @@
 (defrule sml-op-mult (or "*" "div" "mod" "/") (:text t))
 (defrule sml-op-add  (or "+" "-" "^") (:text t))
 (defrule sml-op-rel  (or "<=" ">=" "<>" "<" ">" "=") (:text t))
-
+(defrule sml-op-cons "::" (:text t))
 
 ;; --- NEW DATATYPE RULES ---
 ;; Parse everything after "of" until we hit a "|" or ";"
@@ -131,9 +131,6 @@
 (defrule sml-add-expr (and sml-mult-expr (* (and ws sml-op-add ws sml-mult-expr)))
   (:destructure (first rest) (build-infix-ast first rest)))
 
-;; 3. Relational level (=, <, >)
-(defrule sml-rel-expr (and sml-add-expr (* (and ws sml-op-rel ws sml-add-expr)))
-  (:destructure (first rest) (build-infix-ast first rest)))
 
 ;; 4. Logical AND (andalso)
 (defrule sml-andalso-expr (and sml-rel-expr (* (and ws "andalso" ws sml-rel-expr)))
@@ -150,6 +147,16 @@
         first
         (reduce (lambda (left group) `(:orelse ,left ,(fourth group)))
                 rest :initial-value first))))
+
+(defrule sml-cons-expr (and sml-add-expr (? (and ws sml-op-cons ws sml-cons-expr)))
+  (:destructure (left opt-right)
+    (if opt-right
+        `(:app (:app (:var "::") ,left) ,(fourth opt-right))
+        left)))
+
+;; 3. Relational level (=, <, >)
+(defrule sml-rel-expr (and sml-cons-expr (* (and ws sml-op-rel ws sml-add-expr)))
+  (:destructure (first rest) (build-infix-ast first rest)))
 
 ;; --- CONTROL FLOW & PATTERN MATCHING ---
 
@@ -208,9 +215,14 @@
   (:destructure (c w1 expr w2 o w3 first rest) (declare (ignore c w1 w2 o w3))
     `(:case ,expr ,first ,@rest)))
 
+(defrule sml-fn (and "fn" ws sml-first-branch (* sml-match-branch))
+  (:destructure (f w1 first rest)
+    (declare (ignore f w1))
+    `(:fn (,first ,@rest))))
+
 ;; === TOP LEVEL EXPRESSION RULE ===
 ;; This MUST point to sml-orelse-expr to catch the entire logic chain!
-(defrule sml-expr (or sml-case sml-if sml-orelse-expr))
+(defrule sml-expr (or sml-fn sml-case sml-if sml-orelse-expr))
 
 (defrule sml-val (and "val" ws sml-id ws "=" ws sml-expr ws ";")
   (:destructure (v w1 name w2 eq w3 expr w4 semi) (declare (ignore v w1 w2 eq w3 w4 semi))
@@ -225,3 +237,6 @@
   (:lambda (decs)
     `(:program ,@decs)))
 
+;; 2. Add this helper function at the bottom of the file
+(defun parse-sml-string (str)
+  (esrap:parse 'sml-expr str))

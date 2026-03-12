@@ -116,20 +116,21 @@
       (is (equal '(:pat-app (:pat-ctor "SOME") (:pat-app (:pat-ctor "SOME") (:pat-var "x")))
                  (parse 'cl-sml::sml-pat "SOME (SOME x)"))))
 
-(fiveam:test compiler-constructor-consistency
+(test compiler-constructor-consistency
   "Verify that constructors in expressions and patterns use the same package/symbol"
   (let* ((ctor-expr (cl-sml::compile-expr '(:ctor "SML_NONE")))
          (ctor-pat  (cl-sml::compile-pat  '(:pat-ctor "SML_NONE"))))
     ;; These must be identical for trivia:match to work!
-    (fiveam:is (equal ctor-expr ctor-pat))
-    (fiveam:is (keywordp ctor-expr))))
+    (fiveam:is (equal ctor-expr (second ctor-pat)))
+    (fiveam:is (symbolp ctor-expr))))
 
-
-(fiveam:test anonymous-function-parsing
+(test anonymous-function-parsing
   "Test parsing of fn x => x + 1"
   (let ((ast (cl-sml::parse-sml-string "fn x => x + 1")))
-    (fiveam:is (eq (car ast) :fn))
-    (fiveam:is (equal (second ast) '(((:var "x") (:app (:app (:var "+") (:var "x")) (1))))))))
+    (is (eq (car ast) :fn))
+    ;; Fix: expect :PAT-VAR for the parameter and a raw integer 1
+    (is (equal (second ast)
+               '(((:pat-var "x") (:app (:app (:var "+") (:var "x")) 1)))))))
 
 ;; Run the suite!
 (fiveam:run! 'cl-sml-parser-suite)

@@ -24,6 +24,10 @@
 (defun sml-orelse (a) (lambda (b) (or a b)))
 (defun sml-not (v) (not v))
 
+(defun sml-cons (a) (lambda (b) (cons a b)))
+(defun sml-hd (l) (car lst))
+(defun sml-tl (l) (cdr lst))
+
 ;; (defun sml-if (c) (lambda (t) (lambda (e) (if c t e))))
 
 ;; Map SML standard functions to Common Lisp equivalents
@@ -40,6 +44,10 @@
     ("<" . #'sml-<)
     (">=" . #'sml->=)
     ("<=" . #'sml-<=)
+
+    ("::" . #'sml-cons)
+    ("hd" . #'sml-hd)
+    ("tl" . #'sml-tl)
 
     ("not" . #'sml-not)
     ("true" . t)
