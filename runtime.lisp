@@ -1,27 +1,30 @@
 (in-package #:cl-sml)
 
-;; (defmacro defun-curried (name args &rest body)
-;;   "Define a function NAME taking the first ARGs as curried parameters.
-;; Assumes ARGS is a plain parameter list (no &optional/&rest/&key).
-;; Emits a one-argument function for the first parameter that returns nested
-;; lambdas for the remaining parameters and uses BODY as the ultimate body,
-;; with the original argument names bound in the innermost lambda."
-;;   (unless (and (listp args) (every #'symbolp args))
-;;     (error "defun-curried requires a simple list of symbols as ARGS"))
-;;   (let* ((first (car args))
-;;          (rest-args (cdr args))
-;;          ;; build nested lambdas: (lambda (a2) (lambda (a3) ... <inner-body> ...))
-;;          (nested (reduce (lambda (arg acc) `(lambda (,arg) ,acc))
-;;                          (reverse rest-args)
-;;                          :initial-value `(progn ,@body))))
-;;     `(defun ,name (,first)
-;;        ,(when (and (stringp (car body)) (stringp (caar body)))
-;;           ;; if user provided a docstring as first form of body, move it
-;;           nil)
-;;        ,nested)))
-
 (defun make-sml-adt (tag &optional payload)
   (cons tag payload))
+
+(defun sml-unit ()
+  (list :tuple))
+
+(defun make-sml-ref (value)
+  (vector :ref value))
+
+(defun ensure-sml-ref (cell)
+  (unless (and (vectorp cell)
+               (= (length cell) 2)
+               (eq (aref cell 0) :ref))
+    (error "Expected SML ref cell, got ~S" cell))
+  cell)
+
+(defun sml-list-hd (list)
+  (if list
+      (car list)
+      (error "hd called on empty list")))
+
+(defun sml-list-tl (list)
+  (if list
+      (cdr list)
+      (error "tl called on empty list")))
 
 ;; --- Curried Standard Library ---
 ;; SML functions are auto-curried. Lisp's standard functions are not.
@@ -37,53 +40,149 @@
 (defun sml-> (a) (lambda (b) (> a b)))
 (defun sml->= (a) (lambda (b) (>= a b)))
 (defun sml-<= (a) (lambda (b) (<= a b)))
+(defun sml-= (a) (lambda (b) (equal a b)))
+(defun sml-<> (a) (lambda (b) (not (equal a b))))
 
 (defun sml-^ (a) (lambda (b) (concatenate 'string a b)))
+(defun sml-@ (a) (lambda (b) (append a b)))
 
 (defun sml-andalso (a) (lambda (b) (and a b)))
 (defun sml-orelse (a) (lambda (b) (or a b)))
 (defun sml-not (v) (not v))
+(defun sml-abs (v) (abs v))
+(defun sml-floor (v) (floor v))
+(defun sml-ceil (v) (ceiling v))
+(defun sml-round (v) (round v))
+(defun sml-trunc (v) (truncate v))
+(defun sml-sqrt (v) (sqrt v))
+(defun sml-sin (v) (sin v))
+(defun sml-cos (v) (cos v))
+(defun sml-arctan (v) (atan v))
+(defun sml-exp (v) (exp v))
+(defun sml-ln (v) (log v))
+(defun sml-real (v) (coerce v 'double-float))
 
 (defun sml-cons (a) (lambda (b) (cons a b)))
-(defun sml-hd (l) (car l))
-(defun sml-tl (l) (cdr l))
+(defun sml-hd (l) (sml-list-hd l))
+(defun sml-tl (l) (sml-list-tl l))
 (defun sml-length (l) (length l))
 (defun sml-null (l) (null l))
 (defun sml-rev (l) (reverse l))
 (defun sml-map (f) (lambda (l) (mapcar f l)))
+(defun sml-app (f)
+  (lambda (l)
+    (mapc f l)
+    (sml-unit)))
+(defun sml-foldl (fn)
+  (lambda (init)
+    (lambda (list)
+      (let ((acc init))
+        (dolist (item list acc)
+          (setf acc (funcall (funcall fn acc) item)))))))
+(defun sml-foldr (fn)
+  (lambda (init)
+    (lambda (list)
+      (let ((acc init))
+        (dolist (item (reverse list) acc)
+          (setf acc (funcall (funcall fn item) acc)))))))
+(defun sml-concat (strings)
+  (apply #'concatenate 'string strings))
 
-(defun foldl (fn init list)
-  "Left fold: ((fn (fn init x1) x2) ...)."
-  (reduce fn list :from-end nil :initial-value init))
+(defun sml-size (string)
+  (length string))
 
-(defun foldr (fn init list)
-  "Right fold: (fn x1 (fn x2 ... init))."
-  (reduce (lambda (x acc) (funcall fn x acc)) list :from-end t :initial-value init))
+(defun sml-explode (string)
+  (coerce string 'list))
 
-;; (defun sml-if (c) (lambda (t) (lambda (e) (if c t e))))
+(defun sml-implode (chars)
+  (coerce chars 'string))
 
-;; Map SML standard functions to Common Lisp equivalents
+(defun sml-ord (char)
+  (char-code char))
+
+(defun sml-chr (code)
+  (code-char code))
+
+(defun sml-str (char)
+  (string char))
+
+(defun sml-o (f)
+  (lambda (g)
+    (lambda (x)
+      (funcall f (funcall g x)))))
+
+(defun sml-before (a)
+  (lambda (b)
+    (declare (ignore b))
+    a))
+
+(defun sml-ref (value)
+  (make-sml-ref value))
+
+(defun sml-deref (cell)
+  (aref (ensure-sml-ref cell) 1))
+
+(defun sml-assign (cell)
+  (lambda (value)
+    (setf (aref (ensure-sml-ref cell) 1) value)
+    (sml-unit)))
+
+(defun sml-print (value)
+  (princ value)
+  (sml-unit))
+
 (defparameter *sml-env*
   '(("+" . #'sml-+)
     ("-" . #'sml--)
     ("*" . #'sml-*)
+    ("/" . #'sml-/)
     ("div" . #'sml-div)
     ("mod" . #'sml-mod)
     ("^" . #'sml-^)
-    ("print" . #'princ)
-
+    ("@" . #'sml-@)
+    ("=" . #'sml-=)
+    ("<>" . #'sml-<>)
     (">" . #'sml->)
     ("<" . #'sml-<)
     (">=" . #'sml->=)
     ("<=" . #'sml-<=)
-
     ("::" . #'sml-cons)
+    (":=" . #'sml-assign)
+    ("!" . #'sml-deref)
+    ("ref" . #'sml-ref)
     ("hd" . #'sml-hd)
     ("tl" . #'sml-tl)
     ("length" . #'sml-length)
-
+    ("null" . #'sml-null)
+    ("rev" . #'sml-rev)
+    ("map" . #'sml-map)
+    ("app" . #'sml-app)
+    ("foldl" . #'sml-foldl)
+    ("foldr" . #'sml-foldr)
+    ("concat" . #'sml-concat)
+    ("size" . #'sml-size)
+    ("explode" . #'sml-explode)
+    ("implode" . #'sml-implode)
+    ("ord" . #'sml-ord)
+    ("chr" . #'sml-chr)
+    ("str" . #'sml-str)
+    ("abs" . #'sml-abs)
+    ("floor" . #'sml-floor)
+    ("ceil" . #'sml-ceil)
+    ("round" . #'sml-round)
+    ("trunc" . #'sml-trunc)
+    ("sqrt" . #'sml-sqrt)
+    ("sin" . #'sml-sin)
+    ("cos" . #'sml-cos)
+    ("arctan" . #'sml-arctan)
+    ("exp" . #'sml-exp)
+    ("ln" . #'sml-ln)
+    ("real" . #'sml-real)
+    ("o" . #'sml-o)
+    ("before" . #'sml-before)
     ("not" . #'sml-not)
+    ("print" . #'sml-print)
     ("Math.pi" . pi)
     ("true" . t)
-    ("false" . nil)))
-
+    ("false" . nil)
+    ("nil" . nil)))

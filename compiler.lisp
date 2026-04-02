@@ -3,6 +3,8 @@
 (defun compile-pat (pat)
   (cond
     ((numberp pat) pat)
+    ((stringp pat) pat)
+    ((characterp pat) pat)
     ((eq pat :wild) '_)
 
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
@@ -33,6 +35,8 @@
   "Compiles an SML expression AST into a Common Lisp form."
   (cond
     ((numberp ast) ast)
+    ((stringp ast) ast)
+    ((characterp ast) ast)
 
     ((and (listp ast) (eq (car ast) :var))
      (let* ((name (second ast))
@@ -43,6 +47,9 @@
 
     ((and (listp ast) (eq (car ast) :ctor))
      (intern (string-upcase (second ast)) "CL-SML"))
+
+    ((and (listp ast) (eq (car ast) :deref))
+     `(funcall #'sml-deref ,(compile-expr (second ast))))
 
     ;; Replace the :app block in compile-expr
     ((and (listp ast) (eq (car ast) :app))

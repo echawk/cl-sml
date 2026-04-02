@@ -12,7 +12,31 @@
                     ;; Creates an AST of: (:app (:app (:var "+") left) right)
                     `(:app (:app (:var ,op) ,left) ,right)))
                 rest
-                :initial-value first))))
+                :initial-value first)))
+  (defun decode-sml-string-literal (token)
+    (with-output-to-string (out)
+      (loop for i from 1 below (1- (length token))
+            for ch = (char token i)
+            do (if (char= ch #\\)
+                   (progn
+                     (incf i)
+                     (when (>= i (1- (length token)))
+                       (error "Invalid SML string literal: ~A" token))
+                     (write-char
+                      (case (char token i)
+                        (#\\ #\\)
+                        (#\" #\")
+                        (#\n #\Newline)
+                        (#\t #\Tab)
+                        (#\r #\Return)
+                        (t (char token i)))
+                      out))
+                   (write-char ch out)))))
+  (defun decode-sml-char-literal (token)
+    (let ((string-value (decode-sml-string-literal (subseq token 1))))
+      (unless (= (length string-value) 1)
+        (error "Invalid SML char literal: ~A" token))
+      (char string-value 0))))
 
 ;; Whitespace
 (defrule ws (* (or #\Space #\Tab #\Newline)) (:constant nil))
@@ -20,7 +44,7 @@
 ;; --- KEYWORD AND ID RULES ---
 ;; Define reserved keywords (added andalso, orelse, if, then, else)
 (defrule sml-keyword
-  (and (or "val" "fun" "case" "of" "if" "then" "else" "let" "in" "end" "andalso" "orelse")
+  (and (or "val" "fun" "fn" "case" "of" "if" "then" "else" "let" "in" "end" "datatype" "andalso" "orelse")
        (! (or (alphanumericp character) #\_ #\'))))
 
 ;; A raw identifier is any standard word
@@ -37,6 +61,33 @@
   (:destructure (neg digits)
     (let ((n (parse-integer (text digits))))
       (if neg (- n) n))))
+
+(defrule sml-real
+  (and (? "~") (+ (character-ranges (#\0 #\9))) "." (+ (character-ranges (#\0 #\9))))
+  (:destructure (neg whole dot frac)
+    (declare (ignore dot))
+    (let* ((whole-part (parse-integer (text whole)))
+           (frac-text (text frac))
+           (frac-part (parse-integer frac-text))
+           (scale (expt 10 (length frac-text)))
+           (value (+ whole-part (/ frac-part scale))))
+      (coerce (if neg (- value) value) 'double-float))))
+
+(defrule sml-string
+  (and #\" (* (or (and #\\ character)
+                  (and (! (or #\\ #\")) character)))
+       #\")
+  (:text t)
+  (:lambda (token)
+    (decode-sml-string-literal token)))
+
+(defrule sml-char
+  (and #\# #\" (* (or (and #\\ character)
+                      (and (! (or #\\ #\")) character)))
+       #\")
+  (:text t)
+  (:lambda (token)
+    (decode-sml-char-literal token)))
 
 (defrule sml-pat-ctor-head sml-id
   (:lambda (name)
@@ -61,7 +112,7 @@
 (defrule sml-op-mult (or "*" "div" "mod" "/") (:text t))
 (defrule sml-op-add  (or "+" "-" "^") (:text t))
 (defrule sml-op-rel  (or "<=" ">=" "<>" "<" ">" "=") (:text t))
-(defrule sml-op-cons "::" (:text t))
+(defrule sml-op-list (or "::" "@") (:text t))
 
 ;; --- NEW DATATYPE RULES ---
 ;; Parse everything after "of" until we hit a "|" or ";"
@@ -109,7 +160,13 @@
     (cons first (mapcar #'fourth rest))))
 
 ;; Base Expressions
-(defrule sml-primary (or sml-let sml-list sml-int sml-var-or-ctor sml-parens))
+(defrule sml-atomic (or sml-let sml-list sml-char sml-string sml-real sml-int sml-var-or-ctor sml-parens))
+
+(defrule sml-deref (and "!" ws sml-prefix)
+  (:destructure (bang w expr) (declare (ignore bang w))
+    `(:deref ,expr)))
+
+(defrule sml-prefix (or sml-deref sml-atomic))
 
 (defrule sml-parens (and "(" ws (? sml-paren-elements) ws ")")
   (:destructure (lp w1 elems w2 rp) (declare (ignore lp w1 w2 rp))
@@ -119,7 +176,7 @@
       (t `(:tuple ,@elems)))))
 
 ;; Application: f x y
-(defrule sml-app (and sml-primary (* (and ws sml-primary)))
+(defrule sml-app (and sml-prefix (* (and ws sml-prefix)))
   (:destructure (first rest)
     (if (null rest)
         first
@@ -155,14 +212,14 @@
         (reduce (lambda (left group) `(:orelse ,left ,(fourth group)))
                 rest :initial-value first))))
 
-(defrule sml-cons-expr (and sml-add-expr (? (and ws sml-op-cons ws sml-cons-expr)))
+(defrule sml-list-expr (and sml-add-expr (? (and ws sml-op-list ws sml-list-expr)))
   (:destructure (left opt-right)
     (if opt-right
-        `(:app (:app (:var "::") ,left) ,(fourth opt-right))
+        `(:app (:app (:var ,(second opt-right)) ,left) ,(fourth opt-right))
         left)))
 
 ;; 3. Relational level (=, <, >)
-(defrule sml-rel-expr (and sml-cons-expr (* (and ws sml-op-rel ws sml-add-expr)))
+(defrule sml-rel-expr (and sml-list-expr (* (and ws sml-op-rel ws sml-add-expr)))
   (:destructure (first rest) (build-infix-ast first rest)))
 
 ;; --- CONTROL FLOW & PATTERN MATCHING ---
@@ -240,7 +297,13 @@
 
 ;; === TOP LEVEL EXPRESSION RULE ===
 ;; This MUST point to sml-orelse-expr to catch the entire logic chain!
-(defrule sml-expr (or sml-fn sml-case sml-if sml-orelse-expr))
+(defrule sml-assign-expr (and sml-orelse-expr (? (and ws ":=" ws sml-assign-expr)))
+  (:destructure (left opt-right)
+    (if opt-right
+        `(:app (:app (:var ":=") ,left) ,(fourth opt-right))
+        left)))
+
+(defrule sml-expr (or sml-fn sml-case sml-if sml-assign-expr))
 
 (defrule sml-val (and "val" ws sml-id ws "=" ws sml-expr ws ";")
   (:destructure (v w1 name w2 eq w3 expr w4 semi) (declare (ignore v w1 w2 eq w3 w4 semi))

@@ -14,6 +14,17 @@
   (is (equal 42 (parse 'cl-sml::sml-int "42")))
   (is (equal -10 (parse 'cl-sml::sml-int "~10"))))
 
+(test parse-real-literals
+  (is (= 3.8d0 (parse 'cl-sml::sml-real "3.8")))
+  (is (= -0.5d0 (parse 'cl-sml::sml-real "~0.5"))))
+
+(test parse-string-and-char-literals
+  (is (equal "hello" (parse 'cl-sml::sml-string "\"hello\"")))
+  (is (char= #\a (parse 'cl-sml::sml-char "#\"a\"")))
+  (is (equal "line
+tab	"
+             (parse 'cl-sml::sml-string "\"line\\ntab\\t\""))))
+
 (test parse-identifiers
   (is (equal '(:var "x") (parse 'cl-sml::sml-var-or-ctor "x")))
   (is (equal '(:ctor "SOME") (parse 'cl-sml::sml-var-or-ctor "SOME"))))
@@ -37,6 +48,14 @@
   (is (equal '(:app (:app (:var "+") (:var "a"))
                (:app (:app (:var "*") (:var "b")) (:var "c")))
              (parse 'cl-sml::sml-expr "a + b * c"))))
+
+(test parse-append-and-assignment
+  (is (equal '(:app (:app (:var "@") (:var "xs")) (:var "ys"))
+             (parse 'cl-sml::sml-expr "xs @ ys")))
+  (is (equal '(:app (:app (:var ":=") (:var "r")) 10)
+             (parse 'cl-sml::sml-expr "r := 10")))
+  (is (equal '(:deref (:var "r"))
+             (parse 'cl-sml::sml-expr "! r"))))
 
 
 (test parse-case-statement
