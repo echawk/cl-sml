@@ -1,5 +1,100 @@
 (in-package #:cl-sml)
 
+(defun pattern-bound-symbols (pat)
+  (cond
+    ((or (numberp pat) (stringp pat) (characterp pat) (eq pat :wild))
+     nil)
+    ((and (listp pat) (member (car pat) '(:pat-var :var)))
+     (list (intern (string-upcase (second pat)) "CL-SML")))
+    ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
+     nil)
+    ((and (listp pat) (eq (car pat) :pat-app))
+     (pattern-bound-symbols (third pat)))
+    ((and (listp pat) (member (car pat) '(:pat-tuple)))
+     (mapcan #'pattern-bound-symbols (cdr pat)))
+    ((and (listp pat) (member (car pat) '(:pat-unit :pat-nil)))
+     nil)
+    ((and (listp pat) (eq (car pat) :pat-cons))
+     (list (intern (string-upcase (second pat)) "CL-SML")
+           (intern (string-upcase (third pat)) "CL-SML")))
+    (t
+     (error "Unknown pattern for variable extraction: ~A" pat))))
+
+(defun compile-clause-pattern (params)
+  (if (= (length params) 1)
+      (first params)
+      `(:pat-tuple ,@params)))
+
+(defun compile-fn-clauses (clauses)
+  (let* ((arity (length (first (first clauses))))
+         (tmp-args (loop repeat arity collect (gensym "ARG"))))
+    (unless (every (lambda (clause) (= (length (first clause)) arity)) clauses)
+      (error "All fun clauses must have the same arity: ~A" clauses))
+    (reduce (lambda (arg body) `(lambda (,arg) ,body))
+            tmp-args
+            :from-end t
+            :initial-value
+            `(trivia:match ,(if (= arity 1)
+                                (first tmp-args)
+                                `(list :tuple ,@tmp-args))
+               ,@(mapcar (lambda (clause)
+                           `(,(compile-pat (compile-clause-pattern (first clause)))
+                             ,(compile-expr (second clause))))
+                         clauses)
+               (_ (error "Match failure in function"))))))
+
+(defun compile-local-val-binding (pat expr body)
+  (cond
+    ((and (listp pat) (member (car pat) '(:pat-var :var)))
+     `(let ((,(intern (string-upcase (second pat)) "CL-SML") ,expr))
+        ,body))
+    ((eq pat :wild)
+     (let ((tmp (gensym "IGNORED")))
+       `(let ((,tmp ,expr))
+          (declare (ignore ,tmp))
+          ,body)))
+    (t
+     (let ((tmp (gensym "MATCHED")))
+       `(let ((,tmp ,expr))
+          (trivia:match ,tmp
+            (,(compile-pat pat) ,body)
+            (_ (error "Pattern match failure in val binding"))))))))
+
+(defun compile-local-decls (decs body)
+  (if (null decs)
+      body
+      (let ((dec (first decs)))
+        (compile-local-decl dec (compile-local-decls (rest decs) body)))))
+
+(defun compile-local-decl (dec body)
+  (cond
+    ((eq (car dec) :val)
+     (compile-local-val-binding (second dec) (compile-expr (third dec)) body))
+    ((eq (car dec) :fun)
+     (let ((name (intern (string-upcase (second dec)) "CL-SML")))
+       `(let ((,name nil))
+          (setf ,name ,(compile-fn-clauses (third dec)))
+          ,body)))
+    (t
+     (error "Unknown decl in let: ~A" dec))))
+
+(defun compile-top-level-val (pat expr)
+  (cond
+    ((and (listp pat) (member (car pat) '(:pat-var :var)))
+     `(defparameter ,(intern (string-upcase (second pat)) "CL-SML") ,expr))
+    ((eq pat :wild)
+     expr)
+    (t
+     (let ((tmp (gensym "MATCHED"))
+           (bound-symbols (remove-duplicates (pattern-bound-symbols pat) :test #'eq)))
+       `(let ((,tmp ,expr))
+          (trivia:match ,tmp
+            (,(compile-pat pat)
+             (progn
+               ,@(mapcar (lambda (sym) `(defparameter ,sym ,sym)) bound-symbols)
+               ,tmp))
+            (_ (error "Pattern match failure in top-level val"))))))))
+
 (defun compile-pat (pat)
   (cond
     ((numberp pat) pat)
@@ -73,34 +168,18 @@
           ,(compile-expr (third ast))
           ,(compile-expr (fourth ast))))
 
-    ;; --- Local Let Bindings ---
-    ;; --- Local Let Bindings ---
     ((and (listp ast) (eq (car ast) :let))
-     (let ((decs (second ast))
-           (body-exprs (third ast)))
-       `(let* ,(mapcar (lambda (dec)
-                         (cond
-                           ((eq (car dec) :val)
-                            ;; Force let-bound vals into CL-SML
-                            `(,(intern (string-upcase (second dec)) "CL-SML") ,(compile-expr (third dec))))
-                           ((eq (car dec) :fun)
-                            ;; Force let-bound function names and parameters into CL-SML
-                            (let* ((name (intern (string-upcase (second dec)) "CL-SML"))
-                                   (params (mapcar (lambda (p) (intern (string-upcase p) "CL-SML")) (third dec)))
-                                   (body-expr (compile-expr (fourth dec)))
-                                   (curried (reduce (lambda (p b) `(lambda (,p) ,b))
-                                                    params :initial-value body-expr :from-end t)))
-                              `(,name ,curried)))
-                           (t (error "Unknown decl in let: ~A" dec))))
-                       decs)
-          ;; let* implicitly returns the result of the final expression
-          ,@(mapcar #'compile-expr body-exprs))))
+     (compile-local-decls (second ast)
+                          `(progn ,@(mapcar #'compile-expr (third ast)))))
 
     ((and (listp ast) (eq (car ast) :andalso))
      `(and ,(compile-expr (second ast)) ,(compile-expr (third ast))))
 
     ((and (listp ast) (eq (car ast) :orelse))
      `(or ,(compile-expr (second ast)) ,(compile-expr (third ast))))
+
+    ((and (listp ast) (eq (car ast) :seq))
+     `(progn ,@(mapcar #'compile-expr (cdr ast))))
 
     ;; Add this to compile-expr!
     ((and (listp ast) (eq (car ast) :list))
@@ -128,26 +207,12 @@
   "Compiles top level declarations."
   (cond
     ((eq (car ast) :val)
-     `(defparameter ,(intern (string-upcase (second ast)) "CL-SML")
-                    ,(compile-expr (third ast))))
+     (compile-top-level-val (second ast) (compile-expr (third ast))))
     ((eq (car ast) :fun)
-     (let* ((name (intern (string-upcase (second ast)) "CL-SML"))
-            (params (mapcar (lambda (p) (intern (string-upcase p) "CL-SML")) (third ast)))
-            (body (compile-expr (fourth ast)))
-            (curried (reduce (lambda (p b) `(lambda (,p) ,b))
-                             params :initial-value body :from-end t)))
-       ;; FIX: Wrap in progn and declaim so Lisp knows it's global before compiling the body
+     (let ((name (intern (string-upcase (second ast)) "CL-SML")))
        `(progn
           (declaim (special ,name))
-          (defparameter ,name ,curried))))
-
-    ;; ((eq (car ast) :fun)
-    ;;  (let* ((name (intern (string-upcase (second ast)) "CL-SML"))
-    ;;         (params (mapcar (lambda (p) (intern (string-upcase p) "CL-SML")) (third ast)))
-    ;;         (body (compile-expr (fourth ast)))
-    ;;         (curried (reduce (lambda (p b) `(lambda (,p) ,b))
-    ;;                          params :initial-value body :from-end t)))
-    ;;    `(defparameter ,name ,curried)))
+          (defparameter ,name ,(compile-fn-clauses (third ast))))))
 
     ;; Replace the :datatype block in compile-decl
     ((eq (car ast) :datatype)

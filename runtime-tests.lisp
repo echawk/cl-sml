@@ -127,4 +127,34 @@
   (is (= 7.0d0 (sml-value "realed")))
   (is (= 42 (sml-value "ref_result"))))
 
+(test integration-patterned-values-and-functions
+  (eval-sml-program
+   "val (x, y) = (10, 20);
+    val SOME z = SOME 9;
+    fun swap (a, b) = (b, a);
+    fun fact 0 = 1
+      | fact n = n * fact (n - 1);
+    val seq_value =
+      let
+        val cell = ref 0;
+      in
+        cell := x + y;
+        !cell
+      end;
+    val swapped = swap (x, y);
+    val factorial_5 = fact 5;")
+  (is (= 10 (sml-value "x")))
+  (is (= 20 (sml-value "y")))
+  (is (= 9 (sml-value "z")))
+  (is (equal '(:tuple 20 10) (sml-value "swapped")))
+  (is (= 30 (sml-value "seq_value")))
+  (is (= 120 (sml-value "factorial_5"))))
+
+(test load-actual-sml-file
+  (cl-sml:load-sml-file #P"testdata/sample-program.sml")
+  (is (= 11 (sml-value "file_x")))
+  (is (= 31 (sml-value "file_y")))
+  (is (= 120 (sml-value "file_result")))
+  (is (string= "done" (sml-value "file_comment_ok"))))
+
 (fiveam:run! 'cl-sml-runtime-suite)

@@ -29,6 +29,10 @@ tab	"
   (is (equal '(:var "x") (parse 'cl-sml::sml-var-or-ctor "x")))
   (is (equal '(:ctor "SOME") (parse 'cl-sml::sml-var-or-ctor "SOME"))))
 
+(test parse-comments
+  (is (equal '(:program (:val (:pat-var "x") 10))
+             (parse 'cl-sml::sml-program "(* outer (* inner *) *) val x = 10;"))))
+
 (test parse-applications
   ;; FIX: Tests updated to expect proper strict currying
   (is (equal '(:app (:var "f") (:var "x"))
@@ -57,6 +61,10 @@ tab	"
   (is (equal '(:deref (:var "r"))
              (parse 'cl-sml::sml-expr "! r"))))
 
+(test parse-sequencing
+  (is (equal '(:seq (:app (:var "print") 1) 2)
+             (parse 'cl-sml::sml-expr "print 1; 2"))))
+
 
 (test parse-case-statement
   (is (equal '(:case (:var "opt")
@@ -66,12 +74,27 @@ tab	"
              (parse 'cl-sml::sml-expr "case opt of SOME v => add v 1 | NONE => 0"))))
 
 (test parse-declarations
-      (is (equal '(:val "x" 10)
+      (is (equal '(:val (:pat-var "x") 10)
                  (parse 'cl-sml::sml-val "val x = 10;")))
 
-      (is (equal '(:fun "add" ("a" "b")
-                   (:app (:app (:var "+") (:var "a")) (:var "b")))
+      (is (equal '(:val (:pat-tuple (:pat-var "x") (:pat-var "y"))
+                        (:tuple 1 2))
+                 (parse 'cl-sml::sml-val "val (x, y) = (1, 2);")))
+
+      (is (equal '(:fun "add" ((((:pat-var "a") (:pat-var "b"))
+                                (:app (:app (:var "+") (:var "a")) (:var "b")))))
                  (parse 'cl-sml::sml-fun "fun add a b = a + b;"))))
+
+(test parse-multi-clause-fun
+  (is (equal '(:fun "length" ((((:pat-nil)) 0)
+                              (((:pat-cons "x" "xs"))
+                               (:app (:app (:var "+") 1)
+                                (:app (:var "length") (:var "xs"))))))
+             (parse 'cl-sml::sml-fun
+                    "fun length [] = 0 | length x :: xs = 1 + length xs;")))
+  (is (equal '(:fun "swap" ((((:pat-tuple (:pat-var "x") (:pat-var "y")))
+                             (:tuple (:var "y") (:var "x")))))
+             (parse 'cl-sml::sml-fun "fun swap (x, y) = (y, x);"))))
 
 (test parse-let-expression
   (let ((prog "let
@@ -81,17 +104,19 @@ tab	"
                  add_x 10;
                  add_x 20
                end"))
-    (is (equal '(:let ((:val "x" 1)
-                       (:fun "add_x" ("y") (:app (:app (:var "+") (:var "x")) (:var "y"))))
-                      ((:app (:var "add_x") 10)
-                       (:app (:var "add_x") 20)))
+    (is (equal '(:let ((:val (:pat-var "x") 1)
+                       (:fun "add_x" ((((:pat-var "y"))
+                                       (:app (:app (:var "+") (:var "x")) (:var "y"))))))
+                      ((:seq (:app (:var "add_x") 10)
+                             (:app (:var "add_x") 20))))
                (parse 'cl-sml::sml-expr prog)))))
 
 (test parse-full-program
       (let ((prog "val x = 10; fun add a b = a + b;"))
         (is (equal '(:program
-                     (:val "x" 10)
-                     (:fun "add" ("a" "b") (:app (:app (:var "+") (:var "a")) (:var "b"))))
+                     (:val (:pat-var "x") 10)
+                     (:fun "add" ((((:pat-var "a") (:pat-var "b"))
+                                   (:app (:app (:var "+") (:var "a")) (:var "b"))))))
                    (parse 'cl-sml::sml-program prog)))))
 
 (test parse-lists

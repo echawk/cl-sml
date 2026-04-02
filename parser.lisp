@@ -38,8 +38,16 @@
         (error "Invalid SML char literal: ~A" token))
       (char string-value 0))))
 
+(defrule sml-comment-char
+  (and (! "(*") (! "*)") character))
+
+(defrule sml-comment-body (* (or sml-comment sml-comment-char)))
+
+(defrule sml-comment (and "(*" sml-comment-body "*)")
+  (:constant nil))
+
 ;; Whitespace
-(defrule ws (* (or #\Space #\Tab #\Newline)) (:constant nil))
+(defrule ws (* (or #\Space #\Tab #\Newline sml-comment)) (:constant nil))
 
 ;; --- KEYWORD AND ID RULES ---
 ;; Define reserved keywords (added andalso, orelse, if, then, else)
@@ -49,6 +57,9 @@
 
 ;; A raw identifier is any standard word
 (defrule sml-id-raw (and (alpha-char-p character) (* (or (alphanumericp character) #\_ #\')))
+  (:text t))
+
+(defrule sml-capitalized-id (and (character-ranges (#\A #\Z)) (* (or (alphanumericp character) #\_ #\')))
   (:text t))
 
 ;; A valid SML identifier is a raw ID that is NOT a keyword
@@ -89,11 +100,9 @@
   (:lambda (token)
     (decode-sml-char-literal token)))
 
-(defrule sml-pat-ctor-head sml-id
+(defrule sml-pat-ctor-head sml-capitalized-id
   (:lambda (name)
-    (if (upper-case-p (char name 0))
-        `(:pat-ctor ,name)
-        (error "Expected a constructor (capitalized), got ~A" name))))
+    `(:pat-ctor ,name)))
 
 ;; Notice we check upper/lower case to distinguish variables from constructors!
 (defrule sml-pat-var-or-ctor sml-id
@@ -264,7 +273,10 @@
 
 
 (defrule sml-pat-primary
-    (or sml-int
+    (or sml-real
+        sml-int
+        sml-string
+        sml-char
         sml-pat-var-or-ctor
         (and "_" (:constant :wild))
         sml-pat-tuple-or-parens))
@@ -295,23 +307,39 @@
     (declare (ignore f w1))
     `(:fn (,first ,@rest))))
 
-;; === TOP LEVEL EXPRESSION RULE ===
-;; This MUST point to sml-orelse-expr to catch the entire logic chain!
 (defrule sml-assign-expr (and sml-orelse-expr (? (and ws ":=" ws sml-assign-expr)))
   (:destructure (left opt-right)
     (if opt-right
         `(:app (:app (:var ":=") ,left) ,(fourth opt-right))
         left)))
 
-(defrule sml-expr (or sml-fn sml-case sml-if sml-assign-expr))
+(defrule sml-seq-expr (and sml-assign-expr (* (and ws ";" ws sml-assign-expr)))
+  (:destructure (first rest)
+    (if (null rest)
+        first
+        `(:seq ,first ,@(mapcar #'fourth rest)))))
 
-(defrule sml-val (and "val" ws sml-id ws "=" ws sml-expr ws ";")
-  (:destructure (v w1 name w2 eq w3 expr w4 semi) (declare (ignore v w1 w2 eq w3 w4 semi))
-    `(:val ,name ,expr)))
+(defrule sml-expr (or sml-fn sml-case sml-if sml-seq-expr))
 
-(defrule sml-fun (and "fun" ws sml-id (+ (and ws sml-id)) ws "=" ws sml-expr ws ";")
-  (:destructure (f w1 name params w2 eq w3 expr w4 semi) (declare (ignore f w1 w2 eq w3 w4 semi))
-    `(:fun ,name ,(mapcar #'second params) ,expr)))
+(defrule sml-val (and "val" ws sml-pat ws "=" ws sml-expr ws ";")
+  (:destructure (v w1 pat w2 eq w3 expr w4 semi) (declare (ignore v w1 w2 eq w3 w4 semi))
+    `(:val ,pat ,expr)))
+
+(defrule sml-fun-clause (and sml-id (+ (and ws sml-pat)) ws "=" ws sml-expr)
+  (:destructure (name params w1 eq w2 expr)
+    (declare (ignore w1 eq w2))
+    `(,name ,(mapcar #'second params) ,expr)))
+
+(defrule sml-fun (and "fun" ws sml-fun-clause (* (and ws "|" ws sml-fun-clause)) ws ";")
+  (:destructure (f w1 first rest w2 semi)
+    (declare (ignore f w1 w2 semi))
+    (let* ((name (first first))
+           (clauses (cons first (mapcar #'fourth rest))))
+      (unless (every (lambda (clause) (string= (first clause) name)) clauses)
+        (error "All clauses in a fun binding must name the same function: ~S" clauses))
+      `(:fun ,name ,(mapcar (lambda (clause)
+                              `(,(second clause) ,(third clause)))
+                            clauses)))))
 
 ;; Program rule simply uses the new reusable sml-decs block
 (defrule sml-program sml-decs
