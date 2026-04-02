@@ -17,6 +17,12 @@
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
      (intern (string-upcase (second pat)) "CL-SML"))
 
+    ((and (listp pat) (eq (car pat) :pat-unit))
+     `(list :tuple))
+
+    ((and (listp pat) (eq (car pat) :pat-tuple))
+     `(list :tuple ,@(mapcar #'compile-pat (cdr pat))))
+
     ((and (listp pat) (eq (car pat) :pat-nil)) 'nil)
     ((and (listp pat) (eq (car pat) :pat-cons))
      `(cons ,(intern (string-upcase (second pat)) "CL-SML")
@@ -92,6 +98,12 @@
     ;; Add this to compile-expr!
     ((and (listp ast) (eq (car ast) :list))
      `(list ,@(mapcar #'compile-expr (cdr ast))))
+
+    ((and (listp ast) (eq (car ast) :unit))
+     `(list :tuple))
+
+    ((and (listp ast) (eq (car ast) :tuple))
+     `(list :tuple ,@(mapcar #'compile-expr (cdr ast))))
 
     ((and (listp ast) (eq (car ast) :fn))
      (let ((clauses (second ast))

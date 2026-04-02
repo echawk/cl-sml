@@ -104,12 +104,19 @@
   (:destructure (lb w1 elems w2 rb) (declare (ignore lb w1 w2 rb))
     `(:list ,@elems)))
 
+(defrule sml-paren-elements (and sml-expr (* (and ws "," ws sml-expr)))
+  (:destructure (first rest)
+    (cons first (mapcar #'fourth rest))))
 
 ;; Base Expressions
 (defrule sml-primary (or sml-let sml-list sml-int sml-var-or-ctor sml-parens))
 
-(defrule sml-parens (and "(" ws sml-expr ws ")")
-  (:destructure (lp w1 expr w2 rp) (declare (ignore lp w1 w2 rp)) expr))
+(defrule sml-parens (and "(" ws (? sml-paren-elements) ws ")")
+  (:destructure (lp w1 elems w2 rp) (declare (ignore lp w1 w2 rp))
+    (cond
+      ((null elems) '(:unit))
+      ((null (rest elems)) (first elems))
+      (t `(:tuple ,@elems)))))
 
 ;; Application: f x y
 (defrule sml-app (and sml-primary (* (and ws sml-primary)))
@@ -187,12 +194,23 @@
 (defrule sml-pat-parens (and "(" ws sml-pat ws ")")
   (:destructure (lp w1 pat w2 rp) (declare (ignore lp w1 w2 rp)) pat))
 
+(defrule sml-pat-paren-elements (and sml-pat (* (and ws "," ws sml-pat)))
+  (:destructure (first rest)
+    (cons first (mapcar #'fourth rest))))
+
+(defrule sml-pat-tuple-or-parens (and "(" ws (? sml-pat-paren-elements) ws ")")
+  (:destructure (lp w1 elems w2 rp) (declare (ignore lp w1 w2 rp))
+    (cond
+      ((null elems) '(:pat-unit))
+      ((null (rest elems)) (first elems))
+      (t `(:pat-tuple ,@elems)))))
+
 
 (defrule sml-pat-primary
     (or sml-int
         sml-pat-var-or-ctor
         (and "_" (:constant :wild))
-        sml-pat-parens))
+        sml-pat-tuple-or-parens))
 
 ;; Patterns for case statements
 ;; Order is critical! Complex patterns (cons, app) must come before simple vars

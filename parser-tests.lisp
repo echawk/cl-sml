@@ -81,11 +81,25 @@
   (is (equal '(:list)
              (parse 'cl-sml::sml-expr "[]"))))
 
+(test parse-tuples-and-unit
+  (is (equal '(:tuple 1 2)
+             (parse 'cl-sml::sml-expr "(1, 2)")))
+  (is (equal '(:tuple (:var "x") (:app (:app (:var "+") (:var "y")) 1))
+             (parse 'cl-sml::sml-expr "(x, y + 1)")))
+  (is (equal '(:unit)
+             (parse 'cl-sml::sml-expr "()"))))
+
 (test parse-list-patterns
   (is (equal '(:pat-cons "x" "xs")
              (parse 'cl-sml::sml-pat "x :: xs")))
   (is (equal '(:pat-nil)
              (parse 'cl-sml::sml-pat "[]"))))
+
+(test parse-tuple-patterns-and-unit
+  (is (equal '(:pat-tuple (:pat-var "x") (:pat-var "y"))
+             (parse 'cl-sml::sml-pat "(x, y)")))
+  (is (equal '(:pat-unit)
+             (parse 'cl-sml::sml-pat "()"))))
 
 (test parse-datatype
   (is (equal '(:datatype "color" ((:ctor-def "Red" :has-args nil) (:ctor-def "Blue" :has-args nil)))

@@ -126,3 +126,18 @@
 (format t "Original: ~A~%" cl-sml::nums)
 (format t "Squared:  ~A~%" cl-sml::squaredNums) ;; Should print (1 4 9 16 25)
 
+(progn
+#{
+  val pair = (10, 20);
+  val unitValue = ();
+  val swapped = (fn (x, y) => (y, x)) pair;
+  val tuple_sum =
+    case pair of
+        (x, y) => x + y;
+}#
+)
+
+(format t "pair = ~A~%" cl-sml::pair)
+(format t "unitValue = ~A~%" cl-sml::unitValue)
+(format t "swapped = ~A~%" cl-sml::swapped)
+(format t "tuple_sum = ~A~%" cl-sml::tuple_sum)
