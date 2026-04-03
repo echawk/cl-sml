@@ -5,4 +5,5 @@
            #:make-sml-adt
            #:compile-sml-program-string
            #:compile-sml-file
-           #:load-sml-file))
+           #:load-sml-file
+           #:repl))

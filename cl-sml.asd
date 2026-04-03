@@ -6,4 +6,5 @@
                (:file "runtime")
                (:file "parser")
                (:file "compiler")
-               (:file "reader")))
+               (:file "reader")
+               (:file "repl")))
