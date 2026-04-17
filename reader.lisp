@@ -6,15 +6,20 @@
           until (eql c :eof)
           do (write-char c out))))
 
-(defun compile-sml-program-string (sml-text)
-  (compile-program (esrap:parse 'sml-program sml-text)))
+(defun compile-sml-program-string (sml-text &key package)
+  (let ((*sml-package* (ensure-sml-package (or package (current-sml-package)))))
+    (compile-program (esrap:parse 'sml-program sml-text))))
 
-(defun compile-sml-file (pathname)
+(defun compile-sml-file (pathname &key package)
   (with-open-file (stream pathname :direction :input)
-    (compile-sml-program-string (read-sml-source stream))))
+    (let* ((target-package (ensure-sml-package (or package (pathname->sml-package-name pathname))))
+           (form (compile-sml-program-string (read-sml-source stream) :package target-package)))
+      (values form target-package))))
 
-(defun load-sml-file (pathname)
-  (eval (compile-sml-file pathname)))
+(defun load-sml-file (pathname &key package)
+  (multiple-value-bind (form target-package)
+      (compile-sml-file pathname :package package)
+    (values target-package (eval form))))
 
 (defun read-sml-block (stream char arg)
   (declare (ignore char arg))
@@ -28,7 +33,7 @@
                              (return)
                              (progn (write-char c out) (write-char next out))))
                   else do (write-char c out)))))
-    (compile-sml-program-string sml-text)))
+    (compile-sml-program-string sml-text :package (current-sml-package))))
 
 (defreadtable sml-readtable
   (:merge :standard)

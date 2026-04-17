@@ -8,12 +8,29 @@
 
 (in-suite cl-sml-repl-suite)
 
+(defun sml-user-symbol-status (name)
+  (nth-value 1 (find-symbol (string-upcase name) "SML-USER")))
+
 (defun run-repl-session (input)
   (let ((out (make-string-output-stream))
         (err (make-string-output-stream)))
     (let ((result
             (with-input-from-string (stream input)
               (cl-sml:repl :input stream :output out :error-output err :prompt t))))
+      (values result
+              (get-output-stream-string out)
+              (get-output-stream-string err)))))
+
+(defun run-repl-session-in-package (input package)
+  (let ((out (make-string-output-stream))
+        (err (make-string-output-stream)))
+    (let ((result
+            (with-input-from-string (stream input)
+              (cl-sml:repl :input stream
+                           :output out
+                           :error-output err
+                           :prompt t
+                           :package package))))
       (values result
               (get-output-stream-string out)
               (get-output-stream-string err)))))
@@ -25,6 +42,7 @@
     (is (search "- " output))
     (is (search "val x = 10" output))
     (is (search "val it = 15" output))
+    (is (eq :external (sml-user-symbol-status "x")))
     (is (string= "" error-output))))
 
 (test repl-supports-expression-semicolons-and-multiline-definitions
@@ -48,8 +66,18 @@
   (multiple-value-bind (result output error-output)
       (run-repl-session (format nil "fileFact 4~%:quit~%"))
     (is (eq :quit result))
-    (is (search "val it = 24" output))
-    (is (string= "" error-output))))
+    (is (search "Error:" error-output))
+    (is (not (search "val it = 24" output)))))
+
+(test repl-can-target-file-package
+  (multiple-value-bind (package result)
+      (cl-sml:load-sml-file #P"testdata/sample-program.sml")
+    (declare (ignore result))
+    (multiple-value-bind (repl-result output error-output)
+        (run-repl-session-in-package (format nil "fileFact 4~%:quit~%") package)
+      (is (eq :quit repl-result))
+      (is (search "val it = 24" output))
+      (is (string= "" error-output)))))
 
 (test repl-returns-eof-on-end-of-input
   (multiple-value-bind (result output error-output)

@@ -1,6 +1,7 @@
 (in-package #:cl-sml)
 
-(defparameter *repl-it-symbol* (intern "IT" "CL-SML"))
+(defun repl-it-symbol ()
+  (sml-symbol "it"))
 
 (defun trim-repl-input (source)
   (string-trim '(#\Space #\Tab #\Newline #\Return) source))
@@ -26,13 +27,15 @@
          (error (condition)
            (values nil nil condition)))))))
 
-(defun cl-sml-symbol-p (value)
+(defun sml-namespaced-symbol-p (value)
   (and (symbolp value)
-       (eq (symbol-package value) (find-package "CL-SML"))))
+       (let ((package (symbol-package value)))
+         (and package
+              (sml-package-name-p (package-name package))))))
 
 (defun constructor-value-p (value)
   (and (consp value)
-       (cl-sml-symbol-p (car value))))
+       (sml-namespaced-symbol-p (car value))))
 
 (defun sml-value->string (value)
   (cond
@@ -59,7 +62,7 @@
      (format nil "#~S" (string value)))
     ((stringp value)
      (prin1-to-string value))
-    ((cl-sml-symbol-p value)
+    ((sml-namespaced-symbol-p value)
      (symbol-name value))
     (t
      (princ-to-string value))))
@@ -76,7 +79,7 @@
                        (sml-value->string (symbol-value sym))))
              (remove-duplicates (pattern-bound-symbols (second decl)) :test #'eq)))
     (:fun
-     (let ((sym (intern (string-upcase (second decl)) "CL-SML")))
+     (let ((sym (sml-symbol (second decl))))
        (list (format nil "val ~A = <fn>" (repl-symbol-display-name sym)))))
     (:datatype
      (list (format nil "datatype ~A"
@@ -90,7 +93,8 @@
 
 (defun eval-repl-expression (ast)
   (let ((value (eval (compile-expr ast))))
-    (setf (symbol-value *repl-it-symbol*) value)
+    (setf (symbol-value (repl-it-symbol)) value)
+    (export-sml-symbols (list (repl-it-symbol)))
     (list (format nil "val it = ~A" (sml-value->string value)))))
 
 (defun prompt-string (continuation-p)
@@ -99,8 +103,10 @@
 (defun repl (&key (input *standard-input*)
                   (output *standard-output*)
                   (error-output *error-output*)
-                  (prompt t))
-  (let ((buffer ""))
+                  (prompt t)
+                  (package "SML-USER"))
+  (let ((*sml-package* (ensure-sml-package package))
+        (buffer ""))
     (labels ((emit-prompt ()
                (when prompt
                  (write-string (prompt-string (not (string= buffer ""))) output)

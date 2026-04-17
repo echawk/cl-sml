@@ -9,14 +9,23 @@
 
 (in-suite cl-sml-runtime-suite)
 
+(defparameter *test-sml-package* "SML-USER")
+
 (defun eval-sml-program (source)
-  (eval (cl-sml::compile-program (parse 'cl-sml::sml-program source))))
+  (eval (cl-sml:compile-sml-program-string source :package *test-sml-package*)))
 
 (defun eval-sml-expr (source)
-  (eval (cl-sml::compile-expr (parse 'cl-sml::sml-expr source))))
+  (let ((cl-sml::*sml-package* (cl-sml::ensure-sml-package *test-sml-package*)))
+    (eval (cl-sml::compile-expr (parse 'cl-sml::sml-expr source)))))
 
-(defun sml-value (name)
-  (symbol-value (find-symbol (string-upcase name) "CL-SML")))
+(defun sml-symbol (name &optional (package *test-sml-package*))
+  (find-symbol (string-upcase name) package))
+
+(defun sml-value (name &optional (package *test-sml-package*))
+  (symbol-value (sml-symbol name package)))
+
+(defun sml-symbol-status (name &optional (package *test-sml-package*))
+  (nth-value 1 (find-symbol (string-upcase name) package)))
 
 (test runtime-list-and-equality-functions
   (is (equal '(1 2 3 4)
@@ -150,11 +159,47 @@
   (is (= 30 (sml-value "seq_value")))
   (is (= 120 (sml-value "factorial_5"))))
 
+(test integration-val-rec-and-symbol-export
+  (eval-sml-program
+   "val rec fact = fn 0 => 1 | n => n * fact (n - 1);
+    val rec sumTo = fn 0 => 0 | n => n + sumTo (n - 1);")
+  (is (= 120 (funcall (sml-value "fact") 5)))
+  (is (= 15 (funcall (sml-value "sumTo") 5)))
+  (is (eq :external (sml-symbol-status "fact")))
+  (is (eq :external (sml-symbol-status "sumTo"))))
+
+(test integration-default-user-package-namespace
+  (eval-sml-program
+   "val namespace_value = 99;
+    datatype namespace_option = NamespaceNone | NamespaceSome of int;")
+  (is (= 99 (sml-value "namespace_value")))
+  (is (eq :external (sml-symbol-status "namespace_value")))
+  (is (eq :external (sml-symbol-status "NamespaceNone")))
+  (is (eq :external (sml-symbol-status "NamespaceSome")))
+  (is (string= "SML-USER" (package-name (symbol-package (sml-symbol "namespace_value"))))))
+
+(test reader-block-targets-current-package-derived-sml-package
+  (let* ((host-package (or (find-package "CL-SML-READER-TEMP")
+                           (make-package "CL-SML-READER-TEMP" :use '("COMMON-LISP"))))
+         (sml-package-name "SML.CL-SML-READER-TEMP"))
+    (let ((*package* host-package)
+          (*readtable* (named-readtables:find-readtable 'cl-sml:sml-readtable)))
+      (eval (read-from-string "#{
+        val reader_value = 77;
+      }#")))
+    (is (= 77 (sml-value "reader_value" sml-package-name)))
+    (is (eq :external (sml-symbol-status "reader_value" sml-package-name)))))
+
 (test load-actual-sml-file
-  (cl-sml:load-sml-file #P"testdata/sample-program.sml")
-  (is (= 11 (sml-value "file_x")))
-  (is (= 31 (sml-value "file_y")))
-  (is (= 120 (sml-value "file_result")))
-  (is (string= "done" (sml-value "file_comment_ok"))))
+  (multiple-value-bind (package result)
+      (cl-sml:load-sml-file #P"testdata/sample-program.sml")
+    (declare (ignore result))
+    (let ((package-name (package-name package)))
+      (is (string= "SML.FILE.TESTDATA.SAMPLE-PROGRAM" package-name))
+      (is (= 11 (sml-value "file_x" package-name)))
+      (is (= 31 (sml-value "file_y" package-name)))
+      (is (= 120 (sml-value "file_result" package-name)))
+      (is (string= "done" (sml-value "file_comment_ok" package-name)))
+      (is (eq :external (sml-symbol-status "file_result" package-name))))))
 
 (fiveam:run! 'cl-sml-runtime-suite)

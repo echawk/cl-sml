@@ -74,16 +74,22 @@ tab	"
              (parse 'cl-sml::sml-expr "case opt of SOME v => add v 1 | NONE => 0"))))
 
 (test parse-declarations
-      (is (equal '(:val (:pat-var "x") 10)
-                 (parse 'cl-sml::sml-val "val x = 10;")))
-
-      (is (equal '(:val (:pat-tuple (:pat-var "x") (:pat-var "y"))
-                        (:tuple 1 2))
-                 (parse 'cl-sml::sml-val "val (x, y) = (1, 2);")))
-
-      (is (equal '(:fun "add" ((((:pat-var "a") (:pat-var "b"))
-                                (:app (:app (:var "+") (:var "a")) (:var "b")))))
-                 (parse 'cl-sml::sml-fun "fun add a b = a + b;"))))
+  (is (equal '(:val (:pat-var "x") 10)
+             (parse 'cl-sml::sml-val "val x = 10;")))
+  (is (equal '(:val-rec "fact"
+               (:fn ((0 1)
+                     ((:pat-var "n")
+                      (:app (:app (:var "*") (:var "n"))
+                       (:app (:var "fact")
+                        (:app (:app (:var "-") (:var "n")) 1)))))))
+             (parse 'cl-sml::sml-val-rec
+                    "val rec fact = fn 0 => 1 | n => n * fact (n - 1);")))
+  (is (equal '(:val (:pat-tuple (:pat-var "x") (:pat-var "y"))
+                    (:tuple 1 2))
+             (parse 'cl-sml::sml-val "val (x, y) = (1, 2);")))
+  (is (equal '(:fun "add" ((((:pat-var "a") (:pat-var "b"))
+                            (:app (:app (:var "+") (:var "a")) (:var "b")))))
+             (parse 'cl-sml::sml-fun "fun add a b = a + b;"))))
 
 (test parse-multi-clause-fun
   (is (equal '(:fun "length" ((((:pat-nil)) 0)
@@ -112,12 +118,18 @@ tab	"
                (parse 'cl-sml::sml-expr prog)))))
 
 (test parse-full-program
-      (let ((prog "val x = 10; fun add a b = a + b;"))
-        (is (equal '(:program
-                     (:val (:pat-var "x") 10)
-                     (:fun "add" ((((:pat-var "a") (:pat-var "b"))
-                                   (:app (:app (:var "+") (:var "a")) (:var "b"))))))
-                   (parse 'cl-sml::sml-program prog)))))
+  (let ((prog "val x = 10; val rec fact = fn 0 => 1 | n => n * fact (n - 1); fun add a b = a + b;"))
+    (is (equal '(:program
+                 (:val (:pat-var "x") 10)
+                 (:val-rec "fact"
+                  (:fn ((0 1)
+                        ((:pat-var "n")
+                         (:app (:app (:var "*") (:var "n"))
+                          (:app (:var "fact")
+                           (:app (:app (:var "-") (:var "n")) 1)))))))
+                 (:fun "add" ((((:pat-var "a") (:pat-var "b"))
+                               (:app (:app (:var "+") (:var "a")) (:var "b"))))))
+               (parse 'cl-sml::sml-program prog)))))
 
 (test parse-lists
   (is (equal '(:list 1 2 3)

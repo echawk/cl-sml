@@ -2,6 +2,12 @@
 (in-package :cl-user)
 (named-readtables:in-readtable cl-sml:sml-readtable)
 
+(defun sml-user-symbol (name)
+  (find-symbol (string-upcase name) "SML-USER"))
+
+(defun sml-user-value (name)
+  (symbol-value (sml-user-symbol name)))
+
 ;; 1. Embed SML code directly in your Lisp file!
 (progn
 #{
@@ -28,7 +34,7 @@
 }#
 )
 ;; 2. SML functions compile to Lisp globals and use Funcall
-(format t "Result is: ~A~%" cl-sml::result) ;; Prints 15
+(format t "Result is: ~A~%" (sml-user-value "result")) ;; Prints 15
 
 ;; 3. Let's call the SML function `maybeAddfoo` directly from Lisp!
 ;; We use our exported struct constructor to pass it an SML 'SOME' value.
@@ -41,15 +47,15 @@
 ;; (format t "maybeAddfoo(NONE) = ~A~%"
 ;;         (funcall cl-sml::maybeAddfoo 'cl-sml::NONE)) ;; Use :NONE
 
-(let ((my-opt (cons 'cl-sml::SOME 100)))
+(let ((my-opt (cons (sml-user-symbol "SOME") 100)))
   (format t "maybeAddfoo(SOME 100) = ~A~%"
-          (funcall cl-sml::maybeAddfoo my-opt)))
+          (funcall (sml-user-value "maybeAddfoo") my-opt)))
 
 (format t "maybeAddfoo(NONE) = ~A~%"
-        (funcall cl-sml::maybeAddfoo 'cl-sml::NONE))
+        (funcall (sml-user-value "maybeAddfoo") (sml-user-symbol "NONE")))
 
 (format t "isSafe(5) = ~A~%"
-           (funcall cl-sml::isSafe 5))
+           (funcall (sml-user-value "isSafe") 5))
 
 (progn
 #{
@@ -65,7 +71,7 @@
 )
 
 ;; Proof that the let block compiled correctly and evaluated!
-(format t "letResult = ~A~%" cl-sml::letResult) ;; Should print 50
+(format t "letResult = ~A~%" (sml-user-value "letResult")) ;; Should print 50
 
 ;; Proof of Lexical Scoping:
 ;; 'a', 'b', and 'multiply' were strictly local to the `let` block.
@@ -83,12 +89,12 @@
 }#
 )
 
-(format t "List to sum: ~A~%" cl-sml::my_list)
-(format t "sumList([10, 20, 30]) = ~A~%" cl-sml::list_total) ;; Should print 60!
+(format t "List to sum: ~A~%" (sml-user-value "my_list"))
+(format t "sumList([10, 20, 30]) = ~A~%" (sml-user-value "list_total")) ;; Should print 60!
 
 ;; We can even call it with a native Lisp list because SML lists ARE Lisp lists!
 (format t "sumList( '(1 2 3 4 5) ) = ~A~%"
-        (funcall cl-sml::sumList '(1 2 3 4 5))) ;; Should print 15
+        (funcall (sml-user-value "sumList") '(1 2 3 4 5))) ;; Should print 15
 
 (progn
 #{
@@ -105,8 +111,8 @@
 )
 
 
-(format t "maybeAdd(SML_NONE) = ~A~%" cl-sml::test_none)       ;; Should print 0
-(format t "maybeAdd(SML_SOME 99) = ~A~%" cl-sml::test_some)    ;; Should print 100
+(format t "maybeAdd(SML_NONE) = ~A~%" (sml-user-value "test_none"))       ;; Should print 0
+(format t "maybeAdd(SML_SOME 99) = ~A~%" (sml-user-value "test_some"))    ;; Should print 100
 
 
 (progn
@@ -123,8 +129,8 @@
 }#
 )
   ;; (* We use 'fn' here to square the numbers *)
-(format t "Original: ~A~%" cl-sml::nums)
-(format t "Squared:  ~A~%" cl-sml::squaredNums) ;; Should print (1 4 9 16 25)
+(format t "Original: ~A~%" (sml-user-value "nums"))
+(format t "Squared:  ~A~%" (sml-user-value "squaredNums")) ;; Should print (1 4 9 16 25)
 
 (progn
 #{
@@ -137,7 +143,7 @@
 }#
 )
 
-(format t "pair = ~A~%" cl-sml::pair)
-(format t "unitValue = ~A~%" cl-sml::unitValue)
-(format t "swapped = ~A~%" cl-sml::swapped)
-(format t "tuple_sum = ~A~%" cl-sml::tuple_sum)
+(format t "pair = ~A~%" (sml-user-value "pair"))
+(format t "unitValue = ~A~%" (sml-user-value "unitValue"))
+(format t "swapped = ~A~%" (sml-user-value "swapped"))
+(format t "tuple_sum = ~A~%" (sml-user-value "tuple_sum"))

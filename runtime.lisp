@@ -1,5 +1,63 @@
 (in-package #:cl-sml)
 
+(defun string-prefix-p (prefix string)
+  (let ((prefix-length (length prefix)))
+    (and (<= prefix-length (length string))
+         (string= prefix string :end1 prefix-length :end2 prefix-length))))
+
+(defun sanitize-sml-package-fragment (string)
+  (let ((upper (string-upcase string)))
+    (with-output-to-string (out)
+      (loop for ch across upper
+            do (write-char (if (or (alphanumericp ch) (char= ch #\-))
+                               ch
+                               #\-)
+                           out)))))
+
+(defun sml-package-name-p (name)
+  (or (string= name "SML-USER")
+      (string-prefix-p "SML." name)))
+
+(defun ensure-sml-package (designator)
+  (let* ((name (etypecase designator
+                 (package (package-name designator))
+                 (string (string-upcase designator))
+                 (symbol (string-upcase (symbol-name designator)))))
+         (existing (find-package name)))
+    (or existing
+        (make-package name :use '("COMMON-LISP")))))
+
+(defun current-sml-package-name (&optional (package *package*))
+  (let ((name (package-name (find-package package))))
+    (cond
+      ((string= name "COMMON-LISP-USER") "SML-USER")
+      ((string= name "CL-USER") "SML-USER")
+      ((sml-package-name-p name) name)
+      (t (format nil "SML.~A" (sanitize-sml-package-fragment name))))))
+
+(defun current-sml-package (&optional (package *package*))
+  (ensure-sml-package (current-sml-package-name package)))
+
+(defun pathname->sml-package-name (pathname)
+  (let* ((pn (pathname pathname))
+         (directory (pathname-directory pn))
+         (segments (append (when (listp directory) (rest directory))
+                           (list (or (pathname-name pn) "ANONYMOUS")))))
+    (format nil "SML.FILE~{.~A~}"
+            (mapcar (lambda (segment)
+                      (sanitize-sml-package-fragment (princ-to-string segment)))
+                    segments))))
+
+(defparameter *sml-package* (ensure-sml-package "SML-USER"))
+
+(defun sml-symbol (name &optional (package *sml-package*))
+  (intern (string-upcase name) (ensure-sml-package package)))
+
+(defun export-sml-symbols (symbols &optional (package *sml-package*))
+  (when symbols
+    (export symbols (ensure-sml-package package)))
+  symbols)
+
 (defun make-sml-adt (tag &optional payload)
   (cons tag payload))
 

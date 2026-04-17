@@ -1,11 +1,18 @@
 (in-package #:cl-sml)
 
+(defun target-sml-package-name ()
+  (package-name (ensure-sml-package *sml-package*)))
+
+(defun compile-export-form (symbols)
+  (when symbols
+    `(export ',symbols ,(target-sml-package-name))))
+
 (defun pattern-bound-symbols (pat)
   (cond
     ((or (numberp pat) (stringp pat) (characterp pat) (eq pat :wild))
      nil)
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
-     (list (intern (string-upcase (second pat)) "CL-SML")))
+     (list (sml-symbol (second pat))))
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
      nil)
     ((and (listp pat) (eq (car pat) :pat-app))
@@ -15,8 +22,8 @@
     ((and (listp pat) (member (car pat) '(:pat-unit :pat-nil)))
      nil)
     ((and (listp pat) (eq (car pat) :pat-cons))
-     (list (intern (string-upcase (second pat)) "CL-SML")
-           (intern (string-upcase (third pat)) "CL-SML")))
+     (list (sml-symbol (second pat))
+           (sml-symbol (third pat))))
     (t
      (error "Unknown pattern for variable extraction: ~A" pat))))
 
@@ -46,7 +53,7 @@
 (defun compile-local-val-binding (pat expr body)
   (cond
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
-     `(let ((,(intern (string-upcase (second pat)) "CL-SML") ,expr))
+     `(let ((,(sml-symbol (second pat)) ,expr))
         ,body))
     ((eq pat :wild)
      (let ((tmp (gensym "IGNORED")))
@@ -71,9 +78,14 @@
     ((eq (car dec) :val)
      (compile-local-val-binding (second dec) (compile-expr (third dec)) body))
     ((eq (car dec) :fun)
-     (let ((name (intern (string-upcase (second dec)) "CL-SML")))
+     (let ((name (sml-symbol (second dec))))
        `(let ((,name nil))
           (setf ,name ,(compile-fn-clauses (third dec)))
+          ,body)))
+    ((eq (car dec) :val-rec)
+     (let ((name (sml-symbol (second dec))))
+       `(let ((,name nil))
+          (setf ,name ,(compile-expr (third dec)))
           ,body)))
     (t
      (error "Unknown decl in let: ~A" dec))))
@@ -81,17 +93,21 @@
 (defun compile-top-level-val (pat expr)
   (cond
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
-     `(defparameter ,(intern (string-upcase (second pat)) "CL-SML") ,expr))
+     (let ((sym (sml-symbol (second pat))))
+       `(progn
+          (defparameter ,sym ,expr)
+          ,(compile-export-form (list sym)))))
     ((eq pat :wild)
      expr)
     (t
      (let ((tmp (gensym "MATCHED"))
            (bound-symbols (remove-duplicates (pattern-bound-symbols pat) :test #'eq)))
        `(let ((,tmp ,expr))
-          (trivia:match ,tmp
+         (trivia:match ,tmp
             (,(compile-pat pat)
              (progn
                ,@(mapcar (lambda (sym) `(defparameter ,sym ,sym)) bound-symbols)
+               ,(compile-export-form bound-symbols)
                ,tmp))
             (_ (error "Pattern match failure in top-level val"))))))))
 
@@ -104,15 +120,15 @@
 
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
      ;; We QUOTE the symbol so trivia matches the value, rather than binding a variable
-     `',(intern (string-upcase (second pat)) "CL-SML"))
+     `',(sml-symbol (second pat)))
 
     ((and (listp pat) (eq (car pat) :pat-app))
-     (let ((ctor (intern (string-upcase (second (second pat))) "CL-SML"))
+     (let ((ctor (sml-symbol (second (second pat))))
            (payload (compile-pat (third pat))))
        `(cons ',ctor ,payload)))
 
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
-     (intern (string-upcase (second pat)) "CL-SML"))
+     (sml-symbol (second pat)))
 
     ((and (listp pat) (eq (car pat) :pat-unit))
      `(list :tuple))
@@ -122,8 +138,8 @@
 
     ((and (listp pat) (eq (car pat) :pat-nil)) 'nil)
     ((and (listp pat) (eq (car pat) :pat-cons))
-     `(cons ,(intern (string-upcase (second pat)) "CL-SML")
-            ,(intern (string-upcase (third pat)) "CL-SML")))
+     `(cons ,(sml-symbol (second pat))
+            ,(sml-symbol (third pat))))
     (t (error "Unknown pattern ~A" pat))))
 
 (defun compile-expr (ast)
@@ -138,10 +154,10 @@
             (mapping (assoc name *sml-env* :test #'string=)))
        (if mapping
            (cdr mapping)
-           (intern (string-upcase name) "CL-SML"))))
+           (sml-symbol name))))
 
     ((and (listp ast) (eq (car ast) :ctor))
-     (intern (string-upcase (second ast)) "CL-SML"))
+     (sml-symbol (second ast)))
 
     ((and (listp ast) (eq (car ast) :deref))
      `(funcall #'sml-deref ,(compile-expr (second ast))))
@@ -152,7 +168,7 @@
            (arg (third ast)))
        (if (and (listp head) (eq (car head) :ctor))
            ;; FIX: Intern constructor as keyword and don't quote it here
-           `(cons ',(intern (string-upcase (second head)) "CL-SML")
+           `(cons ',(sml-symbol (second head))
                   ,(compile-expr arg))
            `(funcall ,(compile-expr head) ,(compile-expr arg)))))
 
@@ -208,28 +224,40 @@
   (cond
     ((eq (car ast) :val)
      (compile-top-level-val (second ast) (compile-expr (third ast))))
-    ((eq (car ast) :fun)
-     (let ((name (intern (string-upcase (second ast)) "CL-SML")))
+    ((eq (car ast) :val-rec)
+     (let ((name (sml-symbol (second ast))))
        `(progn
           (declaim (special ,name))
-          (defparameter ,name ,(compile-fn-clauses (third ast))))))
+          (defparameter ,name nil)
+          (setf ,name ,(compile-expr (third ast)))
+          ,(compile-export-form (list name)))))
+    ((eq (car ast) :fun)
+     (let ((name (sml-symbol (second ast))))
+       `(progn
+          (declaim (special ,name))
+          (defparameter ,name ,(compile-fn-clauses (third ast)))
+          ,(compile-export-form (list name)))))
 
     ;; Replace the :datatype block in compile-decl
     ((eq (car ast) :datatype)
      (let ((ctors (third ast)))
        `(progn
           ,@(mapcar (lambda (c)
-                      (let* ((cname (intern (string-upcase (second c)) "CL-SML"))
-                             (keyword (intern (string-upcase (second c)) "CL-SML"))
+                      (let* ((cname (sml-symbol (second c)))
+                             (keyword (sml-symbol (second c)))
                              (has-args (fourth c)))
                         (if has-args
                             ;; If it has args, the name refers to a constructor function
                             `(progn
                                (defun ,cname (payload) (cons ',keyword payload))
-                               (defparameter ,cname #',cname))
+                               (defparameter ,cname #',cname)
+                               ,(compile-export-form (list cname)))
                             ;; If no args, it's just the keyword constant
-                            `(defparameter ,cname ',keyword))))
-                    ctors))))
+                            `(progn
+                               (defparameter ,cname ',keyword)
+                               ,(compile-export-form (list cname))))))
+                    ctors)
+          ,(compile-export-form nil))))
 
     (t (error "Unknown Declaration: ~A" ast))))
 

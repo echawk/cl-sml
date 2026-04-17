@@ -52,7 +52,7 @@
 ;; --- KEYWORD AND ID RULES ---
 ;; Define reserved keywords (added andalso, orelse, if, then, else)
 (defrule sml-keyword
-  (and (or "val" "fun" "fn" "case" "of" "if" "then" "else" "let" "in" "end" "datatype" "andalso" "orelse")
+  (and (or "val" "rec" "fun" "fn" "case" "of" "if" "then" "else" "let" "in" "end" "datatype" "andalso" "orelse")
        (! (or (alphanumericp character) #\_ #\'))))
 
 ;; A raw identifier is any standard word
@@ -144,7 +144,7 @@
     `(:datatype ,name ,defs)))
 
 
-(defrule sml-decs (* (and ws (or sml-datatype sml-val sml-fun) ws))
+(defrule sml-decs (* (and ws (or sml-datatype sml-val-rec sml-val sml-fun) ws))
   (:destructure (&rest items)
     (mapcar #'second items)))
 
@@ -324,6 +324,11 @@
 (defrule sml-val (and "val" ws sml-pat ws "=" ws sml-expr ws ";")
   (:destructure (v w1 pat w2 eq w3 expr w4 semi) (declare (ignore v w1 w2 eq w3 w4 semi))
     `(:val ,pat ,expr)))
+
+(defrule sml-val-rec (and "val" ws "rec" ws sml-id ws "=" ws sml-expr ws ";")
+  (:destructure (v w1 rec w2 name w3 eq w4 expr w5 semi)
+    (declare (ignore v w1 rec w2 w3 eq w4 w5 semi))
+    `(:val-rec ,name ,expr)))
 
 (defrule sml-fun-clause (and sml-id (+ (and ws sml-pat)) ws "=" ws sml-expr)
   (:destructure (name params w1 eq w2 expr)
