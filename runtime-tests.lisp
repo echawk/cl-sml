@@ -81,6 +81,21 @@
     (is (equal '(:tuple) (funcall (cl-sml::sml-assign cell) 42)))
     (is (= 42 (cl-sml::sml-deref cell)))))
 
+(test runtime-record-and-exception-helpers
+  (let* ((record (cl-sml::make-sml-record (list (cons "y" 2)
+                                              (cons "x" 1))))
+         (nullary (cl-sml::make-sml-exception-constructor "E"))
+         (payload-ctor (cl-sml::make-sml-exception-function "FailInt"))
+         (payload (funcall payload-ctor 7)))
+    (is (cl-sml::sml-record-p record))
+    (is (= 1 (cl-sml::sml-record-select record "x")))
+    (is (equal '(("x" . 1) ("y" . 2))
+               (cl-sml::sml-record-fields record)))
+    (is (cl-sml::sml-exception-p nullary))
+    (is (string= "E" (cl-sml::sml-exception-name nullary)))
+    (is (cl-sml::sml-exception-p payload))
+    (is (= 7 (cl-sml::sml-exception-payload payload)))))
+
 (test integration-standard-library-usage
   (eval-sml-program
    "val appended = [1, 2] @ [3, 4];
@@ -158,6 +173,49 @@
   (is (equal '(:tuple 20 10) (sml-value "swapped")))
   (is (= 30 (sml-value "seq_value")))
   (is (= 120 (sml-value "factorial_5"))))
+
+(test integration-records-exceptions-and-type-metadata
+  (eval-sml-program
+   "val point = {y = 2, x = 1};
+    val x_coord = #x point;
+    val {x = rx, y = ry} = point;
+    fun swap {x, y} = {x = y, y = x};
+    val swapped_point = swap point;
+    val point_sum = case point of {x, y} => x + y;
+    exception E;
+    exception FailInt of int;
+    val handled_nullary = ((raise E) handle E => 1 | _ => 0);
+    val handled_payload = ((raise (FailInt 7)) handle FailInt n => n | _ => 0);
+    val local_payload =
+      let
+        exception Local of int;
+      in
+        ((raise (Local 9)) handle Local n => n | _ => 0)
+      end;")
+  (is (equal '(:record ("x" . 1) ("y" . 2))
+             (sml-value "point")))
+  (is (= 1 (sml-value "x_coord")))
+  (is (= 1 (sml-value "rx")))
+  (is (= 2 (sml-value "ry")))
+  (is (equal '(:record ("x" . 2) ("y" . 1))
+             (sml-value "swapped_point")))
+  (is (= 3 (sml-value "point_sum")))
+  (is (= 1 (sml-value "handled_nullary")))
+  (is (= 7 (sml-value "handled_payload")))
+  (is (= 9 (sml-value "local_payload")))
+  (is (eq :external (sml-symbol-status "E")))
+  (is (eq :external (sml-symbol-status "FailInt")))
+  (is (equal '(:record ("x" . "int") ("y" . "int"))
+             (cl-sml:lookup-sml-binding-type "point" *test-sml-package*)))
+  (is (equal '(:fn "int" "exn")
+             (cl-sml:lookup-sml-binding-type "FailInt" *test-sml-package*)))
+  (is (string= "{x: int, y: int}"
+               (cl-sml:sml-type->string
+                (cl-sml:lookup-sml-binding-type "point" *test-sml-package*)))))
+
+(test integration-nonmatching-handler-reraises
+  (signals cl-sml::sml-raised-exception
+    (eval-sml-expr "let exception E; exception F; in ((raise E) handle F => 1) end")))
 
 (test integration-val-rec-and-symbol-export
   (eval-sml-program

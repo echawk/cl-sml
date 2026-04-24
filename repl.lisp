@@ -37,6 +37,28 @@
   (and (consp value)
        (sml-namespaced-symbol-p (car value))))
 
+(defun sml-type-known-p (type)
+  (cond
+    ((null type) nil)
+    ((eq type :unknown) nil)
+    ((stringp type) t)
+    ((and (consp type) (eq (car type) :list))
+     (sml-type-known-p (second type)))
+    ((and (consp type) (eq (car type) :tuple))
+     (every #'sml-type-known-p (cdr type)))
+    ((and (consp type) (eq (car type) :record))
+     (every #'sml-type-known-p (mapcar #'cdr (cdr type))))
+    ((and (consp type) (eq (car type) :fn))
+     (and (sml-type-known-p (second type))
+          (sml-type-known-p (third type))))
+    (t nil)))
+
+(defun repl-type-suffix (symbol)
+  (let ((type (lookup-sml-binding-type symbol)))
+    (if (sml-type-known-p type)
+        (format nil " : ~A" (sml-type->string type))
+        "")))
+
 (defun sml-value->string (value)
   (cond
     ((functionp value) "<fn>")
@@ -44,6 +66,19 @@
           (= (length value) 2)
           (eq (aref value 0) :ref))
      (format nil "ref ~A" (sml-value->string (aref value 1))))
+    ((sml-record-p value)
+     (format nil "{~{~A~^, ~}}"
+             (mapcar (lambda (field)
+                       (format nil "~A = ~A"
+                               (car field)
+                               (sml-value->string (cdr field))))
+                     (sml-record-fields value))))
+    ((and (consp value) (sml-exception-p value))
+     (format nil "~A ~A"
+             (sml-exception-name value)
+             (sml-value->string (sml-exception-payload value))))
+    ((sml-exception-tag-p value)
+     (sml-exception-name value))
     ((eq value t) "true")
     ((null value) "[]")
     ((and (listp value) (eq (car value) :tuple))
@@ -74,16 +109,31 @@
   (case (car decl)
     (:val
      (mapcar (lambda (sym)
-               (format nil "val ~A = ~A"
+               (format nil "val ~A = ~A~A"
                        (repl-symbol-display-name sym)
-                       (sml-value->string (symbol-value sym))))
+                       (sml-value->string (symbol-value sym))
+                       (repl-type-suffix sym)))
              (remove-duplicates (pattern-bound-symbols (second decl)) :test #'eq)))
+    (:val-rec
+     (let ((sym (sml-symbol (second decl))))
+       (list (format nil "val ~A = <fn>~A"
+                     (repl-symbol-display-name sym)
+                     (repl-type-suffix sym)))))
     (:fun
      (let ((sym (sml-symbol (second decl))))
-       (list (format nil "val ~A = <fn>" (repl-symbol-display-name sym)))))
+       (list (format nil "val ~A = <fn>~A"
+                     (repl-symbol-display-name sym)
+                     (repl-type-suffix sym)))))
     (:datatype
      (list (format nil "datatype ~A"
                    (string-downcase (second decl)))))
+    (:exception
+     (let ((sym (sml-symbol (second decl))))
+       (list (format nil "exception ~A~A"
+                     (sml-exception-name (symbol-value sym))
+                     (if (getf (cddr decl) :arg-type)
+                         (format nil " of ~A" (getf (cddr decl) :arg-type))
+                         "")))))
     (otherwise
      (list (format nil "~S" decl)))))
 
@@ -92,10 +142,14 @@
   (mapcan #'repl-report-decl (cdr ast)))
 
 (defun eval-repl-expression (ast)
-  (let ((value (eval (compile-expr ast))))
+  (let* ((type (infer-sml-ast-type ast :package *sml-package*))
+         (value (eval (compile-expr ast))))
     (setf (symbol-value (repl-it-symbol)) value)
+    (register-sml-binding-type (repl-it-symbol) type)
     (export-sml-symbols (list (repl-it-symbol)))
-    (list (format nil "val it = ~A" (sml-value->string value)))))
+    (list (format nil "val it = ~A~A"
+                  (sml-value->string value)
+                  (repl-type-suffix (repl-it-symbol))))))
 
 (defun prompt-string (continuation-p)
   (if continuation-p "= " "- "))

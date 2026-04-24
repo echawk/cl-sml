@@ -79,6 +79,16 @@
       (is (search "val it = 24" output))
       (is (string= "" error-output)))))
 
+(test repl-shows-records-exceptions-and-types
+  (multiple-value-bind (result output error-output)
+      (run-repl-session
+       (format nil "val point = {y = 2, x = 1};~%exception E;~%#x point~%((raise E) handle E => 1)~%:quit~%"))
+    (is (eq :quit result))
+    (is (search "val point = {x = 1, y = 2} : {x: int, y: int}" output))
+    (is (search "exception E" output))
+    (is (search "val it = 1 : int" output))
+    (is (string= "" error-output))))
+
 (test repl-returns-eof-on-end-of-input
   (multiple-value-bind (result output error-output)
       (run-repl-session "")

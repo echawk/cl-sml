@@ -6,4 +6,6 @@
            #:compile-sml-program-string
            #:compile-sml-file
            #:load-sml-file
+           #:lookup-sml-binding-type
+           #:sml-type->string
            #:repl))

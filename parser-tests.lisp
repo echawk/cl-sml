@@ -158,8 +158,32 @@ tab	"
              (parse 'cl-sml::sml-pat "()"))))
 
 (test parse-datatype
-  (is (equal '(:datatype "color" ((:ctor-def "Red" :has-args nil) (:ctor-def "Blue" :has-args nil)))
+  (is (equal '(:datatype "color" ((:ctor-def "Red" :has-args nil :arg-type nil)
+                                  (:ctor-def "Blue" :has-args nil :arg-type nil)))
              (parse 'cl-sml::sml-datatype "datatype color = Red | Blue ;"))))
+
+(test parse-records-and-selectors
+  (is (equal '(:record ("x" 1) ("y" 2))
+             (parse 'cl-sml::sml-expr "{x = 1, y = 2}")))
+  (is (equal '(:app (:selector "x") (:var "point"))
+             (parse 'cl-sml::sml-expr "#x point"))))
+
+(test parse-record-patterns
+  (is (equal '(:pat-record ("x" (:pat-var "x"))
+                           ("y" (:pat-var "value")))
+             (parse 'cl-sml::sml-pat "{x, y = value}"))))
+
+(test parse-exception-declarations-and-handling
+  (is (equal '(:exception "E" :arg-type nil)
+             (parse 'cl-sml::sml-exception "exception E;")))
+  (is (equal '(:exception "FailInt" :arg-type "int")
+             (parse 'cl-sml::sml-exception "exception FailInt of int;")))
+  (is (equal '(:handle (:raise (:ctor "E"))
+               (((:pat-ctor "E") 1) (:wild 0)))
+             (parse 'cl-sml::sml-expr "(raise E) handle E => 1 | _ => 0")))
+  (is (equal '(:raise (:handle (:ctor "E")
+                        (((:pat-ctor "E") 1))))
+             (parse 'cl-sml::sml-expr "raise E handle E => 1"))))
 
 (test parse-capitalization-logic
   ;; Check that lowercase is a var and uppercase is a ctor

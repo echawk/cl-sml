@@ -36,7 +36,9 @@
     (let ((string-value (decode-sml-string-literal (subseq token 1))))
       (unless (= (length string-value) 1)
         (error "Invalid SML char literal: ~A" token))
-      (char string-value 0))))
+      (char string-value 0)))
+  (defun trim-sml-type-text (text)
+    (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
 
 (defrule sml-comment-char
   (and (! "(*") (! "*)") character))
@@ -52,7 +54,8 @@
 ;; --- KEYWORD AND ID RULES ---
 ;; Define reserved keywords (added andalso, orelse, if, then, else)
 (defrule sml-keyword
-  (and (or "val" "rec" "fun" "fn" "case" "of" "if" "then" "else" "let" "in" "end" "datatype" "andalso" "orelse")
+  (and (or "val" "rec" "fun" "fn" "case" "of" "if" "then" "else" "let" "in" "end"
+           "datatype" "exception" "raise" "handle" "andalso" "orelse")
        (! (or (alphanumericp character) #\_ #\'))))
 
 ;; A raw identifier is any standard word
@@ -61,6 +64,10 @@
 
 (defrule sml-capitalized-id (and (character-ranges (#\A #\Z)) (* (or (alphanumericp character) #\_ #\')))
   (:text t))
+
+(defrule sml-label
+  (or sml-id-raw
+      (and (+ (character-ranges (#\0 #\9))) (:text t))))
 
 ;; A valid SML identifier is a raw ID that is NOT a keyword
 (defrule sml-id (and (! sml-keyword) sml-id-raw)
@@ -126,14 +133,16 @@
 ;; --- NEW DATATYPE RULES ---
 ;; Parse everything after "of" until we hit a "|" or ";"
 ;; We do this because Lisp doesn't need the static type info at runtime!
-(defrule sml-type-blob (and ws "of" (+ (and (! (or "|" ";")) character)))
-  (:constant t))
+(defrule sml-type-blob (and ws "of" ws (+ (and (! (or "|" ";")) character)))
+  (:destructure (w1 of w2 chars)
+    (declare (ignore w1 of w2))
+    (trim-sml-type-text (text chars))))
 
 (defrule sml-ctor-def (and ws sml-id (? sml-type-blob))
   (:destructure (w1 name has-args) (declare (ignore w1))
     (if has-args
-        `(:ctor-def ,name :has-args t)
-        `(:ctor-def ,name :has-args nil))))
+        `(:ctor-def ,name :has-args t :arg-type ,has-args)
+        `(:ctor-def ,name :has-args nil :arg-type nil))))
 
 (defrule sml-ctor-defs (and sml-ctor-def (* (and ws "|" sml-ctor-def)))
   (:destructure (first rest)
@@ -143,8 +152,13 @@
   (:destructure (dt w1 name w2 eq defs w3 semi) (declare (ignore dt w1 w2 eq w3 semi))
     `(:datatype ,name ,defs)))
 
+(defrule sml-exception (and "exception" ws sml-id (? sml-type-blob) ws ";")
+  (:destructure (exn w1 name arg-type w2 semi)
+    (declare (ignore exn w1 w2 semi))
+    `(:exception ,name :arg-type ,arg-type)))
 
-(defrule sml-decs (* (and ws (or sml-datatype sml-val-rec sml-val sml-fun) ws))
+
+(defrule sml-decs (* (and ws (or sml-datatype sml-exception sml-val-rec sml-val sml-fun) ws))
   (:destructure (&rest items)
     (mapcar #'second items)))
 
@@ -164,12 +178,31 @@
   (:destructure (lb w1 elems w2 rb) (declare (ignore lb w1 w2 rb))
     `(:list ,@elems)))
 
+(defrule sml-record-field (and sml-label ws "=" ws sml-expr)
+  (:destructure (label w1 eq w2 expr)
+    (declare (ignore w1 eq w2))
+    (list label expr)))
+
+(defrule sml-record-fields (and sml-record-field (* (and ws "," ws sml-record-field)))
+  (:destructure (first rest)
+    (cons first (mapcar #'fourth rest))))
+
+(defrule sml-record (and "{" ws (? sml-record-fields) ws "}")
+  (:destructure (lb w1 fields w2 rb)
+    (declare (ignore lb w1 w2 rb))
+    `(:record ,@fields)))
+
 (defrule sml-paren-elements (and sml-expr (* (and ws "," ws sml-expr)))
   (:destructure (first rest)
     (cons first (mapcar #'fourth rest))))
 
 ;; Base Expressions
-(defrule sml-atomic (or sml-let sml-list sml-char sml-string sml-real sml-int sml-var-or-ctor sml-parens))
+(defrule sml-selector (and "#" sml-label)
+  (:destructure (hash label)
+    (declare (ignore hash))
+    `(:selector ,label)))
+
+(defrule sml-atomic (or sml-let sml-record sml-list sml-selector sml-char sml-string sml-real sml-int sml-var-or-ctor sml-parens))
 
 (defrule sml-deref (and "!" ws sml-prefix)
   (:destructure (bang w expr) (declare (ignore bang w))
@@ -264,6 +297,23 @@
   (:destructure (first rest)
     (cons first (mapcar #'fourth rest))))
 
+(defrule sml-pat-record-field
+  (or (and sml-label ws "=" ws sml-pat)
+      sml-label)
+  (:lambda (field)
+    (if (stringp field)
+        (list field `(:pat-var ,field))
+        (list (first field) (fifth field)))))
+
+(defrule sml-pat-record-fields (and sml-pat-record-field (* (and ws "," ws sml-pat-record-field)))
+  (:destructure (first rest)
+    (cons first (mapcar #'fourth rest))))
+
+(defrule sml-pat-record (and "{" ws (? sml-pat-record-fields) ws "}")
+  (:destructure (lb w1 fields w2 rb)
+    (declare (ignore lb w1 w2 rb))
+    `(:pat-record ,@fields)))
+
 (defrule sml-pat-tuple-or-parens (and "(" ws (? sml-pat-paren-elements) ws ")")
   (:destructure (lp w1 elems w2 rp) (declare (ignore lp w1 w2 rp))
     (cond
@@ -271,14 +321,19 @@
       ((null (rest elems)) (first elems))
       (t `(:pat-tuple ,@elems)))))
 
+(defrule sml-wildcard "_"
+  (:lambda (token)
+    (declare (ignore token))
+    :wild))
 
 (defrule sml-pat-primary
     (or sml-real
         sml-int
         sml-string
         sml-char
+        sml-pat-record
         sml-pat-var-or-ctor
-        (and "_" (:constant :wild))
+        sml-wildcard
         sml-pat-tuple-or-parens))
 
 ;; Patterns for case statements
@@ -313,13 +368,46 @@
         `(:app (:app (:var ":=") ,left) ,(fourth opt-right))
         left)))
 
-(defrule sml-seq-expr (and sml-assign-expr (* (and ws ";" ws sml-assign-expr)))
+(defrule sml-handle-branch (and sml-pat ws "=>" ws sml-expr)
+  (:destructure (pat w1 arr w2 expr)
+    (declare (ignore w1 arr w2))
+    `(,pat ,expr)))
+
+(defrule sml-handle-match-branch (and ws "|" ws sml-pat ws "=>" ws sml-expr)
+  (:destructure (w1 bar w2 pat w3 arr w4 expr)
+    (declare (ignore w1 bar w2 w3 arr w4))
+    `(,pat ,expr)))
+
+(defrule sml-base-expr
+  (or sml-fn
+      sml-case
+      sml-if
+      sml-assign-expr))
+
+(defrule sml-handle-expr (and sml-base-expr (? (and ws "handle" ws sml-handle-branch (* sml-handle-match-branch))))
+  (:destructure (expr opt-handle)
+    (if opt-handle
+        `(:handle ,expr (,(fourth opt-handle) ,@(fifth opt-handle)))
+        expr)))
+
+(defrule sml-raise-expr
+  (or (and "raise" ws sml-raise-expr)
+      sml-handle-expr)
+  (:lambda (result)
+    (if (and (consp result)
+             (= (length result) 3)
+             (stringp (first result))
+             (string= (first result) "raise"))
+        `(:raise ,(third result))
+        result)))
+
+(defrule sml-seq-expr (and sml-raise-expr (* (and ws ";" ws sml-raise-expr)))
   (:destructure (first rest)
     (if (null rest)
         first
         `(:seq ,first ,@(mapcar #'fourth rest)))))
 
-(defrule sml-expr (or sml-fn sml-case sml-if sml-seq-expr))
+(defrule sml-expr sml-seq-expr)
 
 (defrule sml-val (and "val" ws sml-pat ws "=" ws sml-expr ws ";")
   (:destructure (v w1 pat w2 eq w3 expr w4 semi) (declare (ignore v w1 w2 eq w3 w4 semi))
