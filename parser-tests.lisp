@@ -91,6 +91,14 @@ tab	"
                             (:app (:app (:var "+") (:var "a")) (:var "b")))))
              (parse 'cl-sml::sml-fun "fun add a b = a + b;"))))
 
+(test parse-local-declaration
+  (is (equal '(:local
+               ((:fun "helper" ((((:pat-var "x"))
+                                 (:app (:app (:var "+") (:var "x")) 1)))))
+               ((:val (:pat-var "y") (:app (:var "helper") 2))))
+             (parse 'cl-sml::sml-local
+                    "local fun helper x = x + 1; in val y = helper 2; end;"))))
+
 (test parse-multi-clause-fun
   (is (equal '(:fun "length" ((((:pat-nil)) 0)
                               (((:pat-cons "x" "xs"))

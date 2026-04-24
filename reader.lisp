@@ -10,6 +10,13 @@
   (let ((*sml-package* (ensure-sml-package (or package (current-sml-package)))))
     (compile-program (esrap:parse 'sml-program sml-text))))
 
+(defun compile-sml-declarations-string (sml-text &key package)
+  (compile-sml-program-string sml-text :package package))
+
+(defun compile-sml-expression-string (sml-text &key package)
+  (let ((*sml-package* (ensure-sml-package (or package (current-sml-package)))))
+    (compile-expr (esrap:parse 'sml-expr sml-text))))
+
 (defun compile-sml-file (pathname &key package)
   (with-open-file (stream pathname :direction :input)
     (let* ((target-package (ensure-sml-package (or package (pathname->sml-package-name pathname))))

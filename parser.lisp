@@ -54,7 +54,7 @@
 ;; --- KEYWORD AND ID RULES ---
 ;; Define reserved keywords (added andalso, orelse, if, then, else)
 (defrule sml-keyword
-  (and (or "val" "rec" "fun" "fn" "case" "of" "if" "then" "else" "let" "in" "end"
+  (and (or "val" "rec" "fun" "fn" "case" "of" "if" "then" "else" "let" "in" "end" "local"
            "datatype" "exception" "raise" "handle" "andalso" "orelse")
        (! (or (alphanumericp character) #\_ #\'))))
 
@@ -158,9 +158,14 @@
     `(:exception ,name :arg-type ,arg-type)))
 
 
-(defrule sml-decs (* (and ws (or sml-datatype sml-exception sml-val-rec sml-val sml-fun) ws))
+(defrule sml-decs (* (and ws (or sml-local sml-datatype sml-exception sml-val-rec sml-val sml-fun) ws))
   (:destructure (&rest items)
     (mapcar #'second items)))
+
+(defrule sml-local (and "local" ws sml-decs ws "in" ws sml-decs ws "end" ws (? ";"))
+  (:destructure (local-kw w1 local-decs w2 in-kw w3 body-decs w4 end-kw w5 opt-semi)
+    (declare (ignore local-kw w1 w2 in-kw w3 w4 end-kw w5 opt-semi))
+    `(:local ,local-decs ,body-decs)))
 
 (defrule sml-let (and "let" ws sml-decs ws "in" ws sml-expr (* (and ws ";" ws sml-expr)) ws (? ";") ws "end")
   (:destructure (let-kw w1 decs w2 in-kw w3 e1 rest w4 opt-semi w5 end-kw)

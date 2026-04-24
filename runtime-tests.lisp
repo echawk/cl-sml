@@ -217,6 +217,29 @@
   (signals cl-sml::sml-raised-exception
     (eval-sml-expr "let exception E; exception F; in ((raise E) handle F => 1) end")))
 
+(test integration-local-declarations
+  (let ((*test-sml-package* "SML.LOCAL-DECL-TEST"))
+    (eval-sml-program
+     "local
+        fun helper x = x + 1;
+        datatype opt = NONE | SOME of int;
+        exception Hidden;
+      in
+        val y = helper 2;
+        val picked = case SOME 5 of SOME x => x | NONE => 0;
+        val caught = ((raise Hidden) handle Hidden => 1);
+      end;")
+    (is (= 3 (sml-value "y" *test-sml-package*)))
+    (is (= 5 (sml-value "picked" *test-sml-package*)))
+    (is (= 1 (sml-value "caught" *test-sml-package*)))
+    (is (eq :external (sml-symbol-status "y" *test-sml-package*)))
+    (is (eq :external (sml-symbol-status "picked" *test-sml-package*)))
+    (is (eq :external (sml-symbol-status "caught" *test-sml-package*)))
+    (is (not (eq :external (sml-symbol-status "helper" *test-sml-package*))))
+    (is (not (eq :external (sml-symbol-status "Hidden" *test-sml-package*))))
+    (is (not (eq :external (sml-symbol-status "SOME" *test-sml-package*))))
+    (is (not (eq :external (sml-symbol-status "NONE" *test-sml-package*))))))
+
 (test integration-val-rec-and-symbol-export
   (eval-sml-program
    "val rec fact = fn 0 => 1 | n => n * fact (n - 1);

@@ -3,6 +3,7 @@ export XDG_CACHE_HOME="$PWD/.cache"
 
 sbcl --eval "(ql:quickload '(:cl-sml :fiveam))" \
      --load parser-tests.lisp \
+     --load compiler-tests.lisp \
      --load runtime-tests.lisp \
      --load repl-tests.lisp \
      --load test.lisp \

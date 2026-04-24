@@ -143,22 +143,55 @@
             (,(compile-pat pat local-exceptions) ,body)
             (_ (error "Pattern match failure in val binding"))))))))
 
-(defun extend-local-exceptions (local-exceptions dec)
-  (if (eq (car dec) :exception)
-      (acons (second dec)
-             (not (null (getf (cddr dec) :arg-type)))
-             local-exceptions)
-      local-exceptions))
+(defun compile-local-datatype-bindings (ctors body)
+  (let ((bindings
+          (mapcar (lambda (ctor)
+                    (let ((name (sml-symbol (second ctor))))
+                      (list name
+                            (if (fourth ctor)
+                                `(lambda (payload)
+                                   (cons ',name payload))
+                                `',name))))
+                  ctors)))
+    `(let ,bindings
+       (declare (ignorable ,@(mapcar #'first bindings)))
+       ,body)))
 
-(defun compile-local-decls (decs body-asts &optional (local-exceptions nil))
+(defun declaration-exposed-exceptions (dec)
+  (cond
+    ((eq (car dec) :exception)
+     (list (cons (second dec)
+                 (not (null (getf (cddr dec) :arg-type))))))
+    ((eq (car dec) :local)
+     (declarations-exposed-exceptions (third dec)))
+    (t
+     nil)))
+
+(defun declarations-exposed-exceptions (decs)
+  (mapcan #'declaration-exposed-exceptions decs))
+
+(defun extend-local-exceptions (local-exceptions dec)
+  (append (declaration-exposed-exceptions dec)
+          local-exceptions))
+
+(defun compile-local-decls-into-body (decs body &optional (local-exceptions nil))
   (if (null decs)
-      `(progn ,@(mapcar (lambda (expr)
-                          (compile-expr expr local-exceptions))
-                        body-asts))
+      body
       (let* ((dec (first decs))
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
-             (body (compile-local-decls (rest decs) body-asts extended-exceptions)))
-        (compile-local-decl dec body local-exceptions))))
+             (wrapped-body (compile-local-decls-into-body (rest decs) body extended-exceptions)))
+        (compile-local-decl dec wrapped-body local-exceptions))))
+
+(defun compile-local-decls (decs body-asts &optional (local-exceptions nil))
+  (compile-local-decls-into-body
+   decs
+   `(progn ,@(mapcar (lambda (expr)
+                       (compile-expr expr local-exceptions))
+                     body-asts))
+   local-exceptions))
+
+(defun compile-program-decls-body (decs &optional (local-exceptions nil))
+  `(progn ,@(compile-program-decls decs local-exceptions)))
 
 (defun compile-local-decl (dec body &optional local-exceptions)
   (cond
@@ -177,14 +210,25 @@
        `(let ((,name nil))
           (setf ,name ,(compile-expr (third dec) local-exceptions))
           ,body)))
+    ((eq (car dec) :datatype)
+     (compile-local-datatype-bindings (third dec) body))
     ((eq (car dec) :exception)
      (let* ((name (sml-symbol (second dec)))
             (arg-type (getf (cddr dec) :arg-type)))
        (if arg-type
            `(let ((,name (make-sml-exception-function ,(second dec))))
+              (declare (ignorable ,name))
               ,body)
            `(let ((,name (make-sml-exception-constructor ,(second dec))))
+              (declare (ignorable ,name))
               ,body))))
+    ((eq (car dec) :local)
+     (let* ((local-decs (second dec))
+            (body-decs (third dec))
+            (inner-exceptions (append (declarations-exposed-exceptions local-decs)
+                                      local-exceptions))
+            (inner-body (compile-local-decls-into-body body-decs body inner-exceptions)))
+       (compile-local-decls-into-body local-decs inner-body local-exceptions)))
     (t
      (error "Unknown decl in let: ~A" dec))))
 
@@ -453,6 +497,15 @@
               (defparameter ,name (make-sml-exception-constructor ,(second ast)))
               ,(compile-type-registration-form name "exn")
               ,(compile-export-form (list name))))))
+    ((eq (car ast) :local)
+     (let* ((local-decs (second ast))
+            (body-decs (third ast))
+            (inner-exceptions (append (declarations-exposed-exceptions local-decs)
+                                      local-exceptions)))
+       (compile-local-decls-into-body
+        local-decs
+        (compile-program-decls-body body-decs inner-exceptions)
+        local-exceptions)))
 
     (t (error "Unknown Declaration: ~A" ast))))
 
