@@ -168,7 +168,26 @@ tab	"
 (test parse-datatype
   (is (equal '(:datatype "color" ((:ctor-def "Red" :has-args nil :arg-type nil)
                                   (:ctor-def "Blue" :has-args nil :arg-type nil)))
-             (parse 'cl-sml::sml-datatype "datatype color = Red | Blue ;"))))
+             (parse 'cl-sml::sml-datatype "datatype color = Red | Blue ;")))
+  (is (equal '(:datatype "option" ((:ctor-def "NONE" :has-args nil :arg-type nil)
+                                   (:ctor-def "SOME" :has-args t :arg-type "'a")))
+             (parse 'cl-sml::sml-datatype "datatype 'a option = NONE | SOME of 'a")))
+  (is (equal '(:datatype-replication "list" "list")
+             (parse 'cl-sml::sml-datatype-replication "datatype list = datatype list"))))
+
+(test parse-hamlet-basis-declaration-forms
+  (is (equal '(:program (:infix "infix" 7 "* / div mod")
+                       (:infix "infixr" 5 ":: @"))
+             (parse 'cl-sml::sml-program
+                    (format nil "(* basis infix *)~%infix  7 * / div mod~%infixr 5 :: @;"))))
+  (is (equal '(:type "unit" "{}")
+             (parse 'cl-sml::sml-type-decl "type unit = {}")))
+  (is (equal '(:exception-alias "Bind" "Bind")
+             (parse 'cl-sml::sml-exception-alias "exception Bind = Bind")))
+  (is (equal '(:val (:pat-var "use") (:var "use") :type "string -> unit")
+             (parse 'cl-sml::sml-val "val use : string -> unit = use")))
+  (is (equal '(:program (:expr (:seq 1 (:app (:app (:var "+") 2) 3))))
+             (parse 'cl-sml::sml-program "1; 2 + 3;"))))
 
 (test parse-records-and-selectors
   (is (equal '(:record ("x" 1) ("y" 2))

@@ -50,7 +50,11 @@
 
 (defparameter *sml-package* (ensure-sml-package "SML-USER"))
 
+(defparameter *sml-current-directory* nil)
+
 (defparameter *sml-binding-types* (make-hash-table :test #'eq))
+
+(defparameter *sml-type-aliases* (make-hash-table :test #'equal))
 
 (defparameter *sml-exception-function-tags* (make-hash-table :test #'eq))
 
@@ -143,13 +147,22 @@
     ("before" . (:fn :unknown (:fn :unknown :unknown)))
     ("not" . (:fn "bool" "bool"))
     ("print" . (:fn :unknown "unit"))
+    ("use" . (:fn "string" "unit"))
     ("Math.pi" . "real")
     ("true" . "bool")
     ("false" . "bool")
     ("nil" . (:list :unknown))))
 
 (defun sml-symbol (name &optional (package *sml-package*))
-  (intern (string-upcase name) (ensure-sml-package package)))
+  (let* ((pkg (ensure-sml-package package))
+         (symbol-name (string-upcase name)))
+    (multiple-value-bind (symbol status) (find-symbol symbol-name pkg)
+      (cond
+        ((eq status :inherited)
+         (shadow symbol-name pkg)
+         (intern symbol-name pkg))
+        (symbol symbol)
+        (t (intern symbol-name pkg))))))
 
 (defun export-sml-symbols (symbols &optional (package *sml-package*))
   (when symbols
@@ -158,6 +171,15 @@
 
 (defun register-sml-binding-type (symbol type)
   (setf (gethash symbol *sml-binding-types*) type))
+
+(defun register-sml-type-alias (package name target)
+  (setf (gethash (list (package-name (ensure-sml-package package)) name)
+                 *sml-type-aliases*)
+        target))
+
+(defun lookup-sml-type-alias (name &optional (package *sml-package*))
+  (gethash (list (package-name (ensure-sml-package package)) name)
+           *sml-type-aliases*))
 
 (defun lookup-sml-binding-type (symbol-or-name &optional (package *sml-package*))
   (etypecase symbol-or-name
@@ -457,6 +479,13 @@
   (princ value)
   (sml-unit))
 
+(defun sml-use (path)
+  (let ((pathname (merge-pathnames path
+                                   (or *sml-current-directory*
+                                       *default-pathname-defaults*))))
+    (load-sml-file pathname :package *sml-package*)
+    (sml-unit)))
+
 (defparameter *sml-env*
   '(("+" . #'sml-+)
     ("-" . #'sml--)
@@ -508,6 +537,7 @@
     ("before" . #'sml-before)
     ("not" . #'sml-not)
     ("print" . #'sml-print)
+    ("use" . #'sml-use)
     ("Math.pi" . pi)
     ("true" . t)
     ("false" . nil)

@@ -283,4 +283,32 @@
       (is (string= "done" (sml-value "file_comment_ok" package-name)))
       (is (eq :external (sml-symbol-status "file_result" package-name))))))
 
+(test load-sml-use-resolves-relative-files
+  (multiple-value-bind (package result)
+      (cl-sml:load-sml-file #P"testdata/use-main.sml"
+                            :package "SML.USE-TEST")
+    (declare (ignore result))
+    (let ((package-name (package-name package)))
+      (is (= 41 (sml-value "used_child" package-name)))
+      (is (= 42 (sml-value "used_main" package-name))))))
+
+(test load-hamlet-basis-prefix-files
+  (let ((package-name "SML.HAMLET-BASIS-SMOKE"))
+    (cl-sml:load-sml-file #P"hamlet/basis/infix.sml" :package package-name)
+    (cl-sml:load-sml-file #P"hamlet/basis/types.sml" :package package-name)
+    (cl-sml:load-sml-file #P"hamlet/basis/exceptions.sml" :package package-name)
+    (let ((some-symbol (cl-sml::sml-symbol "SOME" package-name)))
+      (is (not (eq some-symbol 'cl:some)))
+      (is (eq (symbol-package some-symbol)
+              (find-package package-name))))
+    (is (eq (sml-value "NONE" package-name)
+            (cl-sml::sml-symbol "NONE" package-name)))
+    (is (functionp (sml-value "SOME" package-name)))
+    (is (eq :external (sml-symbol-status "LESS" package-name)))
+    (is (cl-sml::sml-exception-p (sml-value "Bind" package-name)))
+    (is (functionp (sml-value "Fail" package-name)))
+    (is (equal '(:fn "string" "exn")
+               (cl-sml:lookup-sml-binding-type "Fail" package-name)))
+    (is (string= "int" (cl-sml::lookup-sml-type-alias "int" package-name)))))
+
 (fiveam:run! 'cl-sml-runtime-suite)

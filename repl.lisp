@@ -14,7 +14,12 @@
        (values nil nil nil))
       ((char= (char trimmed (1- length)) #\;)
        (handler-case
-           (values :program (esrap:parse 'sml-program trimmed) nil)
+           (let ((program (esrap:parse 'sml-program trimmed)))
+             (if (and (= (length program) 2)
+                      (consp (second program))
+                      (eq (car (second program)) :expr))
+                 (values :expr (second (second program)) nil)
+                 (values :program program nil)))
          (error (program-error)
            (let ((expr-source (trim-repl-input (subseq trimmed 0 (1- length)))))
              (handler-case

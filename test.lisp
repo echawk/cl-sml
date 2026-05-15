@@ -147,3 +147,19 @@
 (format t "unitValue = ~A~%" (sml-user-value "unitValue"))
 (format t "swapped = ~A~%" (sml-user-value "swapped"))
 (format t "tuple_sum = ~A~%" (sml-user-value "tuple_sum"))
+
+
+;; FIXME: below test does not work.
+;; (progn
+;; #{
+
+;;   fun fastfib 0 = (0, 1)
+;;     | fastfib n =
+;;       let val (a, b) = fastfib (n - 1)
+;;       in (b, a + b)
+;;       end;
+
+;;   fun fib n = #1 (fastfib n)
+;; }#
+;; )
+

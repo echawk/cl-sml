@@ -28,6 +28,9 @@
 (defun compile-type-registration-form (symbol type)
   `(register-sml-binding-type ',symbol ',type))
 
+(defun compile-type-alias-form (name target)
+  `(register-sml-type-alias ,(target-sml-package-name) ,name ,target))
+
 (defun compile-type-declaim-form (symbol type)
   (let ((cl-type (sml-type->cl-type type)))
     (unless (or (eq cl-type t) (eq cl-type 'function))
@@ -36,6 +39,20 @@
 (defun compile-export-form (symbols)
   (when symbols
     `(export ',symbols ,(target-sml-package-name))))
+
+(defun exception-alias-type (target)
+  (or (lookup-sml-binding-type target *sml-package*) "exn"))
+
+(defun compile-top-level-exception-alias (name target)
+  (let ((symbol (sml-symbol name))
+        (target-symbol (sml-symbol target)))
+    `(progn
+       (defparameter ,symbol
+         (if (boundp ',target-symbol)
+             (symbol-value ',target-symbol)
+             (make-sml-exception-constructor ,name)))
+       ,(compile-type-registration-form symbol (exception-alias-type target))
+       ,(compile-export-form (list symbol)))))
 
 (defun record-fields-sorted-by-label (fields)
   (sort (copy-list fields) #'string< :key #'first))
@@ -162,6 +179,10 @@
     ((eq (car dec) :exception)
      (list (cons (second dec)
                  (not (null (getf (cddr dec) :arg-type))))))
+    ((eq (car dec) :exception-alias)
+     (let ((type (exception-alias-type (third dec))))
+       (list (cons (second dec)
+                   (payload-exception-type-p type)))))
     ((eq (car dec) :local)
      (declarations-exposed-exceptions (third dec)))
     (t
@@ -212,6 +233,8 @@
           ,body)))
     ((eq (car dec) :datatype)
      (compile-local-datatype-bindings (third dec) body))
+    ((member (car dec) '(:type :infix :datatype-replication :expr))
+     body)
     ((eq (car dec) :exception)
      (let* ((name (sml-symbol (second dec)))
             (arg-type (getf (cddr dec) :arg-type)))
@@ -222,6 +245,14 @@
            `(let ((,name (make-sml-exception-constructor ,(second dec))))
               (declare (ignorable ,name))
               ,body))))
+    ((eq (car dec) :exception-alias)
+     (let ((name (sml-symbol (second dec)))
+           (target (sml-symbol (third dec))))
+       `(let ((,name (if (boundp ',target)
+                         (symbol-value ',target)
+                         (make-sml-exception-constructor ,(second dec)))))
+          (declare (ignorable ,name))
+          ,body)))
     ((eq (car dec) :local)
      (let* ((local-decs (second dec))
             (body-decs (third dec))
@@ -485,6 +516,16 @@
                                ,(compile-export-form (list cname))))))
                     ctors)
           ,(compile-export-form nil))))
+    ((eq (car ast) :datatype-replication)
+     `(progn
+        ,(compile-type-alias-form (second ast) (third ast))))
+    ((eq (car ast) :type)
+     `(progn
+        ,(compile-type-alias-form (second ast) (third ast))))
+    ((eq (car ast) :infix)
+     `(progn))
+    ((eq (car ast) :expr)
+     (compile-expr (second ast) local-exceptions))
     ((eq (car ast) :exception)
      (let* ((name (sml-symbol (second ast)))
             (arg-type (getf (cddr ast) :arg-type)))
@@ -497,6 +538,8 @@
               (defparameter ,name (make-sml-exception-constructor ,(second ast)))
               ,(compile-type-registration-form name "exn")
               ,(compile-export-form (list name))))))
+    ((eq (car ast) :exception-alias)
+     (compile-top-level-exception-alias (second ast) (third ast)))
     ((eq (car ast) :local)
      (let* ((local-decs (second ast))
             (body-decs (third ast))

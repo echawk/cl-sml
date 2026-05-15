@@ -6,6 +6,9 @@
           until (eql c :eof)
           do (write-char c out))))
 
+(defun sml-file-directory (pathname)
+  (make-pathname :directory (pathname-directory (truename pathname))))
+
 (defun compile-sml-program-string (sml-text &key package)
   (let ((*sml-package* (ensure-sml-package (or package (current-sml-package)))))
     (compile-program (esrap:parse 'sml-program sml-text))))
@@ -26,7 +29,9 @@
 (defun load-sml-file (pathname &key package)
   (multiple-value-bind (form target-package)
       (compile-sml-file pathname :package package)
-    (values target-package (eval form))))
+    (let ((*sml-package* target-package)
+          (*sml-current-directory* (sml-file-directory pathname)))
+      (values target-package (eval form)))))
 
 (defun read-sml-block (stream char arg)
   (declare (ignore char arg))

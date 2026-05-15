@@ -37,6 +37,19 @@
       (unless (= (length string-value) 1)
         (error "Invalid SML char literal: ~A" token))
       (char string-value 0)))
+  (defun trim-and-collapse-sml-type-text (text)
+    (let ((trimmed (trim-sml-type-text text)))
+      (with-output-to-string (out)
+        (loop with previous-space = nil
+              for ch across trimmed
+              for spacep = (member ch '(#\Space #\Tab #\Newline #\Return))
+              do (cond
+                   ((and spacep (not previous-space))
+                    (write-char #\Space out)
+                    (setf previous-space t))
+                   ((not spacep)
+                    (write-char ch out)
+                    (setf previous-space nil)))))))
   (defun trim-sml-type-text (text)
     (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
 
@@ -55,7 +68,9 @@
 ;; Define reserved keywords (added andalso, orelse, if, then, else)
 (defrule sml-keyword
   (and (or "val" "rec" "fun" "fn" "case" "of" "if" "then" "else" "let" "in" "end" "local"
-           "datatype" "exception" "raise" "handle" "andalso" "orelse")
+           "datatype" "exception" "raise" "handle" "andalso" "orelse" "type" "eqtype"
+           "infix" "infixr" "nonfix" "and" "op" "open" "structure" "signature" "sig"
+           "struct" "where" "sharing" "include" "functor" "abstype" "with" "withtype")
        (! (or (alphanumericp character) #\_ #\'))))
 
 ;; A raw identifier is any standard word
@@ -68,6 +83,9 @@
 (defrule sml-label
   (or sml-id-raw
       (and (+ (character-ranges (#\0 #\9))) (:text t))))
+
+(defrule sml-tyvar (and "'" (+ (or (alphanumericp character) #\_ #\')))
+  (:text t))
 
 ;; A valid SML identifier is a raw ID that is NOT a keyword
 (defrule sml-id (and (! sml-keyword) sml-id-raw)
@@ -133,10 +151,34 @@
 ;; --- NEW DATATYPE RULES ---
 ;; Parse everything after "of" until we hit a "|" or ";"
 ;; We do this because Lisp doesn't need the static type info at runtime!
-(defrule sml-type-blob (and ws "of" ws (+ (and (! (or "|" ";")) character)))
+(defrule sml-type-blob (and ws "of" ws (+ (and (! (or "|" ";" #\Newline)) character)))
   (:destructure (w1 of w2 chars)
     (declare (ignore w1 of w2))
-    (trim-sml-type-text (text chars))))
+    (trim-and-collapse-sml-type-text (text chars))))
+
+(defrule sml-type-text-to-eol (+ (and (! (or ";" #\Newline)) character))
+  (:text t)
+  (:lambda (text)
+    (trim-and-collapse-sml-type-text text)))
+
+(defrule sml-type-text-before-equals (+ (and (! "=") character))
+  (:text t)
+  (:lambda (text)
+    (trim-and-collapse-sml-type-text text)))
+
+(defrule sml-type-constraint (and ws ":" ws sml-type-text-before-equals)
+  (:destructure (w1 colon w2 type)
+    (declare (ignore w1 colon w2))
+    type))
+
+(defrule sml-type-params
+  (or sml-tyvar
+      (and "(" ws sml-tyvar (* (and ws "," ws sml-tyvar)) ws ")")))
+
+(defrule sml-tycon-name (and (? (and sml-type-params ws)) sml-id)
+  (:destructure (params name)
+    (declare (ignore params))
+    name))
 
 (defrule sml-ctor-def (and ws sml-id (? sml-type-blob))
   (:destructure (w1 name has-args) (declare (ignore w1))
@@ -148,17 +190,41 @@
   (:destructure (first rest)
     (cons first (mapcar #'third rest))))
 
-(defrule sml-datatype (and "datatype" ws sml-id ws "=" sml-ctor-defs ws ";")
+(defrule sml-datatype-replication
+  (and "datatype" ws sml-tycon-name ws "=" ws "datatype" ws sml-type-text-to-eol ws (? ";"))
+  (:destructure (dt w1 name w2 eq w3 dt2 w4 source w5 semi)
+    (declare (ignore dt w1 w2 eq w3 dt2 w4 w5 semi))
+    `(:datatype-replication ,name ,source)))
+
+(defrule sml-datatype (and "datatype" ws sml-tycon-name ws "=" sml-ctor-defs ws (? ";"))
   (:destructure (dt w1 name w2 eq defs w3 semi) (declare (ignore dt w1 w2 eq w3 semi))
     `(:datatype ,name ,defs)))
 
-(defrule sml-exception (and "exception" ws sml-id (? sml-type-blob) ws ";")
+(defrule sml-exception-alias (and "exception" ws sml-id ws "=" ws sml-type-text-to-eol ws (? ";"))
+  (:destructure (exn w1 name w2 eq w3 target w4 semi)
+    (declare (ignore exn w1 w2 eq w3 w4 semi))
+    `(:exception-alias ,name ,target)))
+
+(defrule sml-exception (and "exception" ws sml-id (? sml-type-blob) ws (? ";"))
   (:destructure (exn w1 name arg-type w2 semi)
     (declare (ignore exn w1 w2 semi))
     `(:exception ,name :arg-type ,arg-type)))
 
+(defrule sml-type-decl (and "type" ws sml-tycon-name ws "=" ws sml-type-text-to-eol ws (? ";"))
+  (:destructure (type-kw w1 name w2 eq w3 target w4 semi)
+    (declare (ignore type-kw w1 w2 eq w3 w4 semi))
+    `(:type ,name ,target)))
 
-(defrule sml-decs (* (and ws (or sml-local sml-datatype sml-exception sml-val-rec sml-val sml-fun) ws))
+(defrule sml-infix-decl
+  (and (or "infixr" "infix" "nonfix") (? (and ws (+ (character-ranges (#\0 #\9))))) ws
+       sml-type-text-to-eol ws (? ";"))
+  (:destructure (kind precedence w1 names w2 semi)
+    (declare (ignore w1 w2 semi))
+    `(:infix ,kind ,(and precedence (parse-integer (text (second precedence)))) ,names)))
+
+(defrule sml-decs (* (and ws (or sml-local sml-infix-decl sml-type-decl sml-datatype-replication
+                                 sml-datatype sml-exception-alias sml-exception sml-val-rec
+                                 sml-val sml-fun sml-top-expr) ws))
   (:destructure (&rest items)
     (mapcar #'second items)))
 
@@ -414,11 +480,14 @@
 
 (defrule sml-expr sml-seq-expr)
 
-(defrule sml-val (and "val" ws sml-pat ws "=" ws sml-expr ws ";")
-  (:destructure (v w1 pat w2 eq w3 expr w4 semi) (declare (ignore v w1 w2 eq w3 w4 semi))
-    `(:val ,pat ,expr)))
+(defrule sml-val (and "val" ws sml-pat (? sml-type-constraint) ws "=" ws sml-expr ws (? ";"))
+  (:destructure (v w1 pat type w2 eq w3 expr w4 semi)
+    (declare (ignore v w1 w2 eq w3 w4 semi))
+    (if type
+        `(:val ,pat ,expr :type ,type)
+        `(:val ,pat ,expr))))
 
-(defrule sml-val-rec (and "val" ws "rec" ws sml-id ws "=" ws sml-expr ws ";")
+(defrule sml-val-rec (and "val" ws "rec" ws sml-id ws "=" ws sml-expr ws (? ";"))
   (:destructure (v w1 rec w2 name w3 eq w4 expr w5 semi)
     (declare (ignore v w1 rec w2 w3 eq w4 w5 semi))
     `(:val-rec ,name ,expr)))
@@ -428,7 +497,7 @@
     (declare (ignore w1 eq w2))
     `(,name ,(mapcar #'second params) ,expr)))
 
-(defrule sml-fun (and "fun" ws sml-fun-clause (* (and ws "|" ws sml-fun-clause)) ws ";")
+(defrule sml-fun (and "fun" ws sml-fun-clause (* (and ws "|" ws sml-fun-clause)) ws (? ";"))
   (:destructure (f w1 first rest w2 semi)
     (declare (ignore f w1 w2 semi))
     (let* ((name (first first))
@@ -439,9 +508,15 @@
                               `(,(second clause) ,(third clause)))
                             clauses)))))
 
+(defrule sml-top-expr (and sml-expr ws ";")
+  (:destructure (expr w semi)
+    (declare (ignore w semi))
+    `(:expr ,expr)))
+
 ;; Program rule simply uses the new reusable sml-decs block
-(defrule sml-program sml-decs
-  (:lambda (decs)
+(defrule sml-program (and ws sml-decs ws)
+  (:destructure (w1 decs w2)
+    (declare (ignore w1 w2))
     `(:program ,@decs)))
 
 ;; 2. Add this helper function at the bottom of the file
