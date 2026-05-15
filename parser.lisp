@@ -13,25 +13,59 @@
                     `(:app (:app (:var ,op) ,left) ,right)))
                 rest
                 :initial-value first)))
+  (defun sml-string-format-char-p (ch)
+    (member ch '(#\Space #\Tab #\Newline #\Return #\Page) :test #'char=))
+  (defun decode-sml-decimal-escape (token start content-end)
+    (let ((digit-end (+ start 3)))
+      (unless (and (<= digit-end content-end)
+                   (every #'digit-char-p (subseq token start digit-end)))
+        (error "Invalid SML decimal escape in string literal: ~A" token))
+      (or (code-char (parse-integer token :start start :end digit-end))
+          (error "Invalid SML character code in string literal: ~A" token))))
   (defun decode-sml-string-literal (token)
     (with-output-to-string (out)
-      (loop for i from 1 below (1- (length token))
-            for ch = (char token i)
-            do (if (char= ch #\\)
-                   (progn
-                     (incf i)
-                     (when (>= i (1- (length token)))
-                       (error "Invalid SML string literal: ~A" token))
-                     (write-char
-                      (case (char token i)
-                        (#\\ #\\)
-                        (#\" #\")
-                        (#\n #\Newline)
-                        (#\t #\Tab)
-                        (#\r #\Return)
-                        (t (char token i)))
-                      out))
-                   (write-char ch out)))))
+      (let ((i 1)
+            (content-end (1- (length token))))
+        (loop while (< i content-end)
+              for ch = (char token i)
+              do (cond
+                   ((char= ch #\\)
+                    (incf i)
+                    (when (>= i content-end)
+                      (error "Invalid SML string literal: ~A" token))
+                    (let ((escape (char token i)))
+                      (cond
+                        ((sml-string-format-char-p escape)
+                         (loop while (and (< i content-end)
+                                          (sml-string-format-char-p (char token i)))
+                               do (incf i))
+                         (unless (and (< i content-end) (char= (char token i) #\\))
+                           (error "Invalid SML string gap in string literal: ~A" token)))
+                        ((digit-char-p escape)
+                         (write-char (decode-sml-decimal-escape token i content-end) out)
+                         (incf i 2))
+                        ((char= escape #\^)
+                         (incf i)
+                         (when (>= i content-end)
+                           (error "Invalid SML control escape in string literal: ~A" token))
+                         (write-char (code-char (logand (char-code (char token i)) #x1f)) out))
+                        (t
+                         (write-char
+                          (case escape
+                            (#\\ #\\)
+                            (#\" #\")
+                            (#\a (code-char 7))
+                            (#\b (code-char 8))
+                            (#\t #\Tab)
+                            (#\n #\Newline)
+                            (#\v (code-char 11))
+                            (#\f (code-char 12))
+                            (#\r #\Return)
+                            (t escape))
+                          out)))))
+                   (t
+                    (write-char ch out)))
+                 (incf i)))))
   (defun decode-sml-char-literal (token)
     (let ((string-value (decode-sml-string-literal (subseq token 1))))
       (unless (= (length string-value) 1)
@@ -71,18 +105,96 @@
                    (string= segment (string-upcase segment)))))))
   (defun build-fun-binding-ast (first rest)
     (let* ((name (first first))
-           (clauses (cons first (mapcar #'fourth rest))))
+           (clauses (normalize-sml-fun-clause-arities
+                     (cons first (mapcar #'fourth rest)))))
       (unless (every (lambda (clause) (string= (first clause) name)) clauses)
         (error "All clauses in a fun binding must name the same function: ~S" clauses))
       `(:fun ,name ,(mapcar (lambda (clause)
                               `(,(second clause) ,(third clause)))
                             clauses))))
+  (defun sml-known-nullary-constructor-name-p (name)
+    (member name '("NONE" "nil" "true" "false") :test #'string=))
+  (defun flatten-leading-nullary-constructor-pattern (pat)
+    (if (and (consp pat)
+             (eq (car pat) :pat-app)
+             (consp (second pat))
+             (eq (car (second pat)) :pat-ctor)
+             (sml-known-nullary-constructor-name-p (second (second pat))))
+        (cons (second pat)
+              (flatten-leading-nullary-constructor-pattern (third pat)))
+        (list pat)))
+  (defun normalize-sml-fun-clause-arities (clauses)
+    (let* ((expanded (mapcar (lambda (clause)
+                               `(,(first clause)
+                                 ,(mapcan #'flatten-leading-nullary-constructor-pattern
+                                          (second clause))
+                                 ,(third clause)))
+                             clauses))
+           (target-arity (loop for clause in clauses
+                               maximize (length (second clause)))))
+      (if (every (lambda (clause)
+                   (= (length (second clause)) target-arity))
+                 expanded)
+          expanded
+          clauses)))
   (defun build-list-pattern-ast (elements)
     (reduce (lambda (element tail)
               `(:pat-cons ,element ,tail))
             elements
             :from-end t
-            :initial-value '(:pat-nil))))
+            :initial-value '(:pat-nil)))
+  (defun normalize-sml-infix-pattern-operand (op pat)
+    (if (and (string= op "@@")
+             (consp pat)
+             (eq (car pat) :pat-ctor)
+             (not (member (second pat) '("true" "false" "nil" "NONE")
+                          :test #'string=)))
+        `(:pat-var ,(second pat))
+        pat))
+	  (defun build-sml-val-ast (pat type expr expr-type)
+	    (let* ((inline-type (and (consp expr) (eq (car expr) :typed) (third expr)))
+	           (pat-type (and (consp pat) (eq (car pat) :pat-typed) (third pat)))
+           (raw-value-pat (if pat-type (second pat) pat))
+           (value-pat (if (and (consp raw-value-pat)
+                               (eq (car raw-value-pat) :pat-ctor))
+                          `(:pat-var ,(second raw-value-pat))
+                          raw-value-pat))
+           (value-expr (if inline-type (second expr) expr)))
+      (cond
+	        (type `(:val ,value-pat ,value-expr :type ,type))
+	        (pat-type `(:val ,value-pat ,value-expr :type ,pat-type))
+	        (expr-type `(:val ,value-pat ,value-expr :type ,expr-type))
+	        (inline-type `(:val ,value-pat ,value-expr :type ,inline-type))
+	        (t `(:val ,value-pat ,expr)))))
+  (defun sml-parser-fragment-string (value)
+    (with-output-to-string (out)
+      (labels ((walk (item)
+                 (cond
+                   ((characterp item)
+                    (write-char item out))
+                   ((stringp item)
+                    (write-string item out))
+                   ((consp item)
+                    (mapc #'walk item)))))
+        (walk value))))
+  (defun sml-functor-param-name (text)
+    (let* ((chars (sml-parser-fragment-string text))
+           (open (position #\( chars)))
+      (when open
+        (let ((start (position-if-not
+                      (lambda (ch)
+                        (member ch '(#\Space #\Tab #\Newline #\Return)))
+                      chars
+                      :start (1+ open))))
+          (when (and start (alpha-char-p (char chars start)))
+            (let ((end (or (position-if-not
+                            (lambda (ch)
+                              (or (alphanumericp ch)
+                                  (member ch '(#\_ #\') :test #'char=)))
+                            chars
+                            :start start)
+                           (length chars))))
+              (subseq chars start end))))))))
 
 (defrule sml-comment-char
   (and (! "(*") (! "*)") character))
@@ -91,6 +203,8 @@
 
 (defrule sml-comment (and "(*" sml-comment-body "*)")
   (:constant nil))
+
+(defrule sml-format-char (or #\Space #\Tab #\Newline #\Return #\Page))
 
 ;; Whitespace
 (defrule ws (* (or #\Space #\Tab #\Newline sml-comment)) (:constant nil))
@@ -157,6 +271,12 @@
     (declare (ignore not-kw))
     (join-sml-id-parts id rest)))
 
+(defrule sml-long-id (and (! sml-keyword) sml-id-raw "." (or sml-id-raw sml-symbolic-id)
+                          (* (and "." (or sml-id-raw sml-symbolic-id))))
+  (:destructure (not-kw id dot tail rest)
+    (declare (ignore not-kw))
+    (join-sml-id-parts id (cons (list dot tail) rest))))
+
 (defrule sml-int (and (? "~") (+ (character-ranges (#\0 #\9))))
   (:destructure (neg digits)
     (let ((n (parse-integer (text digits))))
@@ -191,7 +311,8 @@
       (coerce (if neg (- value) value) 'double-float))))
 
 (defrule sml-string
-  (and #\" (* (or (and #\\ character)
+  (and #\" (* (or (and #\\ (+ sml-format-char) #\\)
+                  (and #\\ character)
                   (and (! (or #\\ #\")) character)))
        #\")
   (:text t)
@@ -199,7 +320,8 @@
     (decode-sml-string-literal token)))
 
 (defrule sml-char
-  (and #\# #\" (* (or (and #\\ character)
+  (and #\# #\" (* (or (and #\\ (+ sml-format-char) #\\)
+                      (and #\\ character)
                       (and (! (or #\\ #\")) character)))
        #\")
   (:text t)
@@ -220,7 +342,7 @@
     (declare (ignore not-kw dot))
     (format nil "~A.~A" first rest)))
 
-(defrule sml-pat-ctor-head (or sml-long-capitalized-id sml-capitalized-id)
+(defrule sml-pat-ctor-head (or sml-long-id sml-capitalized-id)
   (:lambda (name)
     `(:pat-ctor ,name)))
 
@@ -235,7 +357,8 @@
 ;; Notice we check upper/lower case to distinguish variables from constructors!
 (defrule sml-pat-var-or-ctor sml-id
   (:lambda (name)
-    (if (sml-constructor-looking-id-p name)
+    (if (or (position #\. name)
+            (sml-constructor-looking-id-p name))
         `(:pat-ctor ,name)
         `(:pat-var ,name))))
 
@@ -250,6 +373,12 @@
 (defrule sml-bare-equals-symbol (and "=" (! sml-symbolic-char)))
 
 (defrule sml-bare-tilde-symbol (and "~" (! sml-symbolic-char)))
+
+(defrule sml-bare-tilde-var
+  (and sml-bare-tilde-symbol (! (and ws sml-prefix)))
+  (:destructure (tilde not-prefix)
+    (declare (ignore tilde not-prefix))
+    '(:var "~")))
 
 (defrule sml-selector-start
   (and "#" (or (alpha-char-p character) (character-ranges (#\0 #\9)))))
@@ -284,8 +413,16 @@
 ;; Operators
 (defrule sml-op-mult (or "*" "div" "mod" "/") (:text t))
 (defrule sml-op-add  (or "+" "-" "^") (:text t))
-(defrule sml-op-rel  (or "<=" ">=" "<>" "<" ">" "=") (:text t))
-(defrule sml-op-list (or "::" "@") (:text t))
+(defrule sml-op-rel
+  (or "<=" ">=" "<>"
+      (and "<" (! sml-symbolic-char))
+      (and ">" (! sml-symbolic-char))
+      (and "=" (! sml-symbolic-char)))
+  (:text t))
+(defrule sml-op-append (and "@" (! sml-symbolic-char))
+  (:constant "@"))
+
+(defrule sml-op-list (or "::" sml-op-append) (:text t))
 
 ;; --- NEW DATATYPE RULES ---
 (defrule sml-type-brace-block
@@ -310,6 +447,38 @@
 (defrule sml-type-text-to-eol
   (+ (or sml-type-text-id
          (and (! (or ";" #\Newline sml-end-keyword)) character)))
+  (:text t)
+  (:lambda (text)
+    (trim-and-collapse-sml-type-text text)))
+
+(defrule sml-decl-start-after-newline
+  (and #\Newline (* (or #\Space #\Tab))
+       (or "abstype" "datatype" "exception" "fun" "functor" "in" "infix"
+           "infixr" "local" "nonfix" "open" "signature" "structure" "type"
+           "val" "withtype" "end")
+       ws))
+
+(defrule sml-decl-start-line
+  (and (* (or #\Space #\Tab))
+       (or "abstype" "datatype" "exception" "fun" "functor" "in" "infix"
+           "infixr" "local" "nonfix" "open" "signature" "structure" "type"
+           "val" "withtype" "end")
+       ws))
+
+(defrule sml-type-continuation-line
+  (and #\Newline (! sml-decl-start-line)
+       (* (and (! #\Newline) character))))
+
+(defrule sml-type-text-multiline
+  (and sml-type-text-to-eol (* sml-type-continuation-line))
+  (:text t)
+  (:lambda (text)
+    (trim-and-collapse-sml-type-text text)))
+
+(defrule sml-type-text-to-decl-boundary
+  (+ (or sml-type-paren-block
+         (and (! ";") (! sml-end-keyword) (! sml-decl-start-after-newline)
+              character)))
   (:text t)
   (:lambda (text)
     (trim-and-collapse-sml-type-text text)))
@@ -368,7 +537,9 @@
     (declare (ignore params))
     name))
 
-(defrule sml-ctor-def (and ws sml-id (? sml-type-blob))
+(defrule sml-ctor-name (or sml-id sml-symbolic-id))
+
+(defrule sml-ctor-def (and ws sml-ctor-name (? sml-type-blob))
   (:destructure (w1 name has-args) (declare (ignore w1))
     (if has-args
         `(:ctor-def ,name :has-args t :arg-type ,has-args)
@@ -384,9 +555,22 @@
     (declare (ignore dt w1 w2 eq w3 dt2 w4 w5 semi))
     `(:datatype-replication ,name ,source)))
 
-(defrule sml-datatype (and "datatype" ws sml-tycon-name ws "=" sml-ctor-defs ws (? ";"))
-  (:destructure (dt w1 name w2 eq defs w3 semi) (declare (ignore dt w1 w2 eq w3 semi))
-    `(:datatype ,name ,defs)))
+(defrule sml-withtype-tail
+  (and ws "withtype" ws sml-tycon-name ws "=" ws sml-type-decl-rhs
+       (* (and ws "and" ws sml-tycon-name ws "=" ws sml-type-decl-rhs)))
+  (:constant nil))
+
+(defrule sml-datatype-and-tail
+  (and ws "and" ws sml-tycon-name ws "=" sml-ctor-defs)
+  (:destructure (w1 and-kw w2 name w3 eq defs)
+    (declare (ignore w1 and-kw w2 name w3 eq))
+    defs))
+
+(defrule sml-datatype (and "datatype" ws sml-tycon-name ws "=" sml-ctor-defs
+                           (* sml-datatype-and-tail) (? sml-withtype-tail) ws (? ";"))
+  (:destructure (dt w1 name w2 eq defs and-defs withtype w3 semi)
+    (declare (ignore dt w1 w2 eq withtype w3 semi))
+    `(:datatype ,name ,(append defs (mapcan #'identity and-defs)))))
 
 (defrule sml-exception-alias (and "exception" ws sml-id ws "=" ws sml-type-text-to-eol ws (? ";"))
   (:destructure (exn w1 name w2 eq w3 target w4 semi)
@@ -398,7 +582,7 @@
     (declare (ignore exn w1 w2 semi))
     `(:exception ,name :arg-type ,arg-type)))
 
-(defrule sml-type-decl-rhs (or sml-type-brace-block sml-type-text-to-eol))
+(defrule sml-type-decl-rhs (or sml-type-brace-block sml-type-text-multiline))
 
 (defrule sml-type-decl (and "type" ws sml-tycon-name ws "=" ws sml-type-decl-rhs ws (? ";"))
   (:destructure (type-kw w1 name w2 eq w3 target w4 semi)
@@ -432,7 +616,16 @@
     (declare (ignore sig-kw w1 w2 eq w3 body w4 semi))
     `(:signature ,name)))
 
-(defrule sml-open (and "open" ws sml-type-text-to-eol ws (? ";"))
+(defrule sml-open-let-boundary
+  (and ws1 (or "in" "end") (! (or (alphanumericp character) #\_ #\'))))
+
+(defrule sml-open-names-text
+  (+ (and (! ";") (! #\Newline) (! sml-open-let-boundary) character))
+  (:text t)
+  (:lambda (text)
+    (trim-and-collapse-sml-type-text text)))
+
+(defrule sml-open (and "open" ws sml-open-names-text ws (? ";"))
   (:destructure (open-kw w1 names w2 semi)
     (declare (ignore open-kw w1 w2 semi))
     `(:open ,names)))
@@ -446,6 +639,14 @@
               (and (! (or "(" ")")) character)))
        ")")
   (:constant nil))
+
+(defrule sml-module-paren-text
+  (and "(" (* (or sml-module-paren-text
+              sml-sig-block
+              sml-ignored-struct-block
+              (and (! (or "(" ")")) character)))
+       ")")
+  (:text t))
 
 (defrule sml-module-post-ascription
   (and ws ":" (? ">") ws (or sml-sig-block sml-type-text-to-eol))
@@ -461,10 +662,10 @@
 
 (defrule sml-structure-functor-app
   (and "structure" ws sml-id ws (* sml-structure-functor-app-char)
-       "=" ws sml-id ws sml-module-paren-block (? sml-module-post-ascription) ws (? ";"))
+       "=" ws sml-id ws sml-module-paren-text (? sml-module-post-ascription) ws (? ";"))
   (:destructure (structure-kw w1 name w2 ascription eq w3 functor-name w4 args post w5 semi)
-    (declare (ignore structure-kw w1 w2 ascription eq w3 w4 args post w5 semi))
-    `(:structure-app ,name ,functor-name)))
+    (declare (ignore structure-kw w1 w2 ascription eq w3 w4 post w5 semi))
+    `(:structure-app ,name ,functor-name ,args)))
 
 (defrule sml-structure-alias
   (and "structure" ws sml-id ws (* (and (! (or "where" "=")) character)) "=" ws sml-id ws (? ";"))
@@ -483,8 +684,8 @@
   (and "functor" ws sml-id ws (* sml-structure-ascription-char)
        "=" ws sml-struct-keyword ws sml-decs ws sml-end-keyword ws (? ";"))
   (:destructure (functor-kw w1 name w2 ascription eq w3 struct-kw w4 decs w5 end-kw w6 semi)
-    (declare (ignore functor-kw w1 w2 ascription eq w3 struct-kw w4 w5 end-kw w6 semi))
-    `(:functor ,name ,decs)))
+    (declare (ignore functor-kw w1 w2 eq w3 struct-kw w4 w5 end-kw w6 semi))
+    `(:functor ,name ,decs :param ,(sml-functor-param-name ascription))))
 
 (defrule sml-decs (* (and ws (or sml-signature sml-functor sml-structure-functor-app
                                  sml-structure-alias sml-structure sml-open
@@ -541,7 +742,7 @@
     `(:selector ,label)))
 
 (defrule sml-atomic (or sml-let sml-record sml-list sml-selector sml-char sml-string sml-word sml-real sml-int
-                        sml-op-var sml-symbolic-var sml-var-or-ctor sml-parens))
+                        sml-op-var sml-bare-tilde-var sml-symbolic-var sml-var-or-ctor sml-parens))
 
 (defrule sml-deref (and "!" ws sml-prefix)
   (:destructure (bang w expr) (declare (ignore bang w))
@@ -561,14 +762,18 @@
       (t `(:tuple ,@elems)))))
 
 ;; Application: f x y
-(defrule sml-app-arg (and ws (! sml-generic-word-infix-op) (! sml-generic-symbolic-infix-op) sml-prefix))
+(defrule sml-app-arg (and ws
+                          (! sml-op-mult) (! sml-op-add) (! sml-op-rel)
+                          (! sml-op-list) (! ":=")
+                          (! sml-generic-word-infix-op) (! sml-generic-symbolic-infix-op)
+                          sml-prefix))
 
 (defrule sml-app (and sml-prefix (* sml-app-arg))
   (:destructure (first rest)
     (if (null rest)
         first
         (reduce (lambda (left group)
-                  `(:app ,left ,(fourth group)))
+                  `(:app ,left ,(ninth group)))
                 rest
                 :initial-value first))))
 
@@ -605,7 +810,7 @@
 (defrule sml-generic-infix-expr (and sml-rel-expr (* (and ws sml-generic-infix-op ws sml-rel-expr)))
   (:destructure (first rest) (build-infix-ast first rest)))
 
-(defrule sml-andalso-expr (and sml-generic-infix-expr (* (and ws "andalso" ws sml-generic-infix-expr)))
+(defrule sml-andalso-expr (and sml-generic-infix-expr (* (and ws "andalso" ws sml-raise-expr)))
   (:destructure (first rest)
     (if (null rest)
         first
@@ -613,7 +818,7 @@
                 rest :initial-value first))))
 
 ;; 5. Logical OR (orelse)
-(defrule sml-orelse-expr (and sml-andalso-expr (* (and ws "orelse" ws sml-andalso-expr)))
+(defrule sml-orelse-expr (and sml-andalso-expr (* (and ws "orelse" ws sml-raise-expr)))
   (:destructure (first rest)
     (if (null rest)
         first
@@ -636,6 +841,11 @@
   (:destructure (i w1 cond w2 t1 w3 then-expr w4 e1 w5 else-expr)
     (declare (ignore i w1 w2 t1 w3 w4 e1 w5))
     `(:if ,cond ,then-expr ,else-expr)))
+
+(defrule sml-while (and "while" ws sml-expr ws "do" ws sml-ascribed-expr)
+  (:destructure (while-kw w1 cond w2 do-kw w3 body)
+    (declare (ignore while-kw w1 w2 do-kw w3))
+    `(:while ,cond ,body)))
 
 ;; --- LIST PATTERNS (For Case Statements) ---
 ;; Parse empty list pattern []
@@ -686,7 +896,7 @@
 
 (defrule sml-pat-record-fields (and sml-pat-record-field (* (and ws "," ws sml-pat-record-field)))
   (:destructure (first rest)
-    (remove :record-rest (cons first (mapcar #'fourth rest)))))
+    (cons first (mapcar #'fourth rest))))
 
 (defrule sml-pat-record (and "{" ws (? sml-pat-record-fields) ws "}")
   (:destructure (lb w1 fields w2 rb)
@@ -724,6 +934,7 @@
         sml-int
         sml-string
         sml-char
+        sml-pat-list
         sml-pat-record
         sml-pat-var-or-ctor
         sml-wildcard
@@ -744,17 +955,36 @@
 (defrule sml-pat-as (and sml-pat-ascribed ws "as" ws sml-pat)
   (:destructure (alias w1 as-kw w2 pat)
     (declare (ignore w1 as-kw w2))
-    `(:pat-as ,alias ,pat)))
+    `(:pat-as ,(if (and (consp alias)
+                        (eq (car alias) :pat-ctor))
+                   `(:pat-var ,(second alias))
+                   alias)
+              ,pat)))
 
 ;; Parse the right-associative cons pattern: h :: t.
 (defrule sml-pat-cons (and (or sml-pat-as sml-pat-ascribed) ws "::" ws sml-pat)
   (:destructure (h w1 op w2 t-pat) (declare (ignore w1 op w2))
     `(:pat-cons ,h ,t-pat)))
 
+(defrule sml-pat-symbolic-infix-op
+  (and (! "::") (! ":=") (! "=>") (! "->") (! "=") (! "|") sml-symbolic-id)
+  (:destructure (not-cons not-assign not-match-arrow not-type-arrow not-equals not-bar op)
+    (declare (ignore not-cons not-assign not-match-arrow not-type-arrow not-equals not-bar))
+    op))
+
+(defrule sml-pat-symbolic-infix
+  (and sml-pat-ascribed ws sml-pat-symbolic-infix-op ws sml-pat)
+  (:destructure (left w1 op w2 right)
+    (declare (ignore w1 w2))
+    `(:pat-app (:pat-ctor ,op)
+               (:pat-tuple ,(normalize-sml-infix-pattern-operand op left)
+                           ,(normalize-sml-infix-pattern-operand op right)))))
+
 ;; Patterns for case statements
 ;; Order is critical! Complex patterns (cons, app) must come before simple vars
 
 (defrule sml-pat (or sml-pat-cons
+                     sml-pat-symbolic-infix
                      sml-pat-as
                      sml-pat-ascribed))
 
@@ -796,6 +1026,7 @@
   (or sml-fn
       sml-case
       sml-if
+      sml-while
       sml-assign-expr))
 
 (defrule sml-handle-expr (and sml-base-expr (? (and ws "handle" ws sml-handle-branch (* sml-handle-match-branch))))
@@ -829,20 +1060,20 @@
 
 (defrule sml-expr sml-seq-expr)
 
-(defrule sml-val (and "val" ws sml-pat (? sml-type-constraint) ws "=" ws sml-expr
-                      (? sml-expression-type-constraint) ws (? ";"))
-  (:destructure (v w1 pat type w2 eq w3 expr expr-type w4 semi)
-    (declare (ignore v w1 w2 eq w3 w4 semi))
-    (let* ((inline-type (and (consp expr) (eq (car expr) :typed) (third expr)))
-           (pat-type (and (consp pat) (eq (car pat) :pat-typed) (third pat)))
-           (value-pat (if pat-type (second pat) pat))
-           (value-expr (if inline-type (second expr) expr)))
-      (cond
-        (type `(:val ,value-pat ,value-expr :type ,type))
-        (pat-type `(:val ,value-pat ,value-expr :type ,pat-type))
-        (expr-type `(:val ,value-pat ,value-expr :type ,expr-type))
-        (inline-type `(:val ,value-pat ,value-expr :type ,inline-type))
-        (t `(:val ,pat ,expr))))))
+(defrule sml-val-binding (and sml-pat (? sml-type-constraint) ws "=" ws sml-expr
+                              (? sml-expression-type-constraint))
+  (:destructure (pat type w1 eq w2 expr expr-type)
+    (declare (ignore w1 eq w2))
+    (build-sml-val-ast pat type expr expr-type)))
+
+(defrule sml-val (and "val" ws sml-val-binding (* (and ws "and" ws sml-val-binding))
+                      ws (? ";"))
+  (:destructure (v w1 first rest w2 semi)
+    (declare (ignore v w1 w2 semi))
+    (let ((bindings (cons first (mapcar #'fourth rest))))
+      (if (rest bindings)
+          `(:vals ,@bindings)
+          first))))
 
 (defrule sml-val-rec (and "val" ws "rec" ws sml-id ws "=" ws sml-expr ws (? ";"))
   (:destructure (v w1 rec w2 name w3 eq w4 expr w5 semi)
@@ -851,7 +1082,19 @@
 
 (defrule sml-fun-name (or sml-op-id sml-symbolic-id sml-id))
 
-(defrule sml-infix-fun-name (or sml-op-id sml-symbolic-id "o" "before")
+(defrule sml-known-word-infix-id
+  (and (or "IBplusI" "TEplus" "oplusVEandTE" "oplusTE"
+           "oplusSE" "oplusG" "oplusF" "oplusE"
+           "plusVEandTE" "plusVE" "plusTE" "plusSE"
+           "plusG" "plusF" "plusE" "plusT" "plusU" "plusI"
+           "plus" "before" "o")
+       (! (or (alphanumericp character) #\_ #\')))
+  (:text t))
+
+(defrule sml-infix-fun-name (or sml-op-id sml-symbolic-id sml-known-word-infix-id)
+  (:text t))
+
+(defrule sml-paren-infix-fun-name (or sml-infix-fun-name sml-id)
   (:text t))
 
 (defrule sml-fun-prefix-clause (and sml-fun-name (+ (and ws sml-pat)) ws "=" ws sml-expr)
@@ -860,18 +1103,25 @@
     `(,name ,(mapcar #'second params) ,expr)))
 
 (defrule sml-fun-paren-infix-clause
-  (and "(" ws sml-pat ws1 sml-infix-fun-name ws1 sml-pat ws ")" (* (and ws sml-pat)) ws "=" ws sml-expr)
+  (and "(" ws sml-pat ws1 sml-paren-infix-fun-name ws1 sml-pat ws ")" (* (and ws sml-pat)) ws "=" ws sml-expr)
   (:destructure (lp w1 left w2 name w3 right w4 rp rest w5 eq w6 expr)
     (declare (ignore lp w1 w2 w3 w4 rp w5 eq w6))
     `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
 
+(defrule sml-fun-bare-id-infix-clause
+  (and sml-pat-tuple-or-parens ws1 sml-id ws1 sml-pat (* (and ws sml-pat)) ws "=" ws sml-expr)
+  (:destructure (left w1 name w2 right rest w3 eq w4 expr)
+    (declare (ignore w1 w2 w3 eq w4))
+    `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
+
 (defrule sml-fun-bare-infix-clause
-  (and sml-pat ws1 sml-infix-fun-name ws1 sml-pat (* (and ws sml-pat)) ws "=" ws sml-expr)
+  (and sml-pat-primary ws1 sml-infix-fun-name ws1 sml-pat (* (and ws sml-pat)) ws "=" ws sml-expr)
   (:destructure (left w1 name w2 right rest w3 eq w4 expr)
     (declare (ignore w1 w2 w3 eq w4))
     `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
 
 (defrule sml-fun-clause (or sml-fun-paren-infix-clause
+                            sml-fun-bare-id-infix-clause
                             sml-fun-bare-infix-clause
                             sml-fun-prefix-clause))
 

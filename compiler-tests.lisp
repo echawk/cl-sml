@@ -39,4 +39,9 @@
       (is (string= "SML.FILE.TESTDATA.SAMPLE-PROGRAM" (package-name package)))
       (is (search "FILE_RESULT" printed)))))
 
+(test compile-functor-argument-value-bindings-tolerate-whitespace
+  (is (equal '(("compare" . "TyName.compare"))
+             (cl-sml::functor-argument-value-bindings
+              "(type ord_key = TyName.TyName; val  compare = TyName.compare)"))))
+
 (fiveam:run! 'cl-sml-compiler-suite)

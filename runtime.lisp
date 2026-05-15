@@ -54,11 +54,15 @@
 
 (defparameter *sml-binding-types* (make-hash-table :test #'eq))
 
+(defparameter *sml-constructor-symbols* (make-hash-table :test #'eq))
+
 (defparameter *sml-type-aliases* (make-hash-table :test #'equal))
 
 (defparameter *sml-structure-members* (make-hash-table :test #'equal))
 
 (defparameter *sml-functor-members* (make-hash-table :test #'equal))
+
+(defparameter *sml-functor-params* (make-hash-table :test #'equal))
 
 (defparameter *sml-exception-function-tags* (make-hash-table :test #'eq))
 
@@ -75,33 +79,128 @@
 (defun lookup-sml-structure-members (package-name structure-name)
   (copy-list (gethash (sml-module-key package-name structure-name) *sml-structure-members*)))
 
-(defun register-sml-functor-members (package-name functor-name member-names)
+(defun register-sml-functor-members (package-name functor-name member-names
+                                      &optional param-name)
   (setf (gethash (sml-module-key package-name functor-name) *sml-functor-members*)
-        (normalize-sml-member-names member-names)))
+        (normalize-sml-member-names member-names))
+  (when param-name
+    (setf (gethash (sml-module-key package-name functor-name) *sml-functor-params*)
+          param-name)))
 
 (defun lookup-sml-functor-members (package-name functor-name)
   (copy-list (gethash (sml-module-key package-name functor-name) *sml-functor-members*)))
 
-(defun sml-symbol-in-package-name (name package-name)
-  (intern (string-upcase name) (ensure-sml-package package-name)))
+(defun lookup-sml-functor-param (package-name functor-name)
+  (gethash (sml-module-key package-name functor-name) *sml-functor-params*))
 
-(defun alias-sml-module-member (package-name target-module source-module member-name)
+(defun register-sml-constructor (symbol &optional canonical-symbol)
+  (setf (gethash symbol *sml-constructor-symbols*) (or canonical-symbol symbol))
+  symbol)
+
+(defun sml-constructor-symbol-p (symbol)
+  (gethash symbol *sml-constructor-symbols*))
+
+(defun sml-constructor-canonical-symbol (symbol)
+  (gethash symbol *sml-constructor-symbols*))
+
+(defun sml-symbol-in-package-name (name package-name)
+  (let* ((pkg (ensure-sml-package package-name))
+         (symbol-name (string-upcase name)))
+    (multiple-value-bind (symbol status) (find-symbol symbol-name pkg)
+      (cond
+        ((eq status :inherited)
+         (shadow symbol-name pkg)
+         (intern symbol-name pkg))
+        (symbol symbol)
+        (t (intern symbol-name pkg))))))
+
+(defun sml-symbol-value-or-unresolved (symbol)
+  (if (boundp symbol)
+      (symbol-value symbol)
+      (make-sml-unresolved-functor-member (symbol-name symbol))))
+
+(defun call-with-sml-functor-bindings (bindings thunk)
+  (if bindings
+      (progv (mapcar #'car bindings)
+          (mapcar (lambda (binding)
+                    (sml-symbol-value-or-unresolved (cdr binding)))
+                  bindings)
+        (funcall thunk))
+      (funcall thunk)))
+
+(defun wrap-sml-functor-application-value (value bindings)
+  (if (and bindings (functionp value))
+      (lambda (&rest args)
+        (call-with-sml-functor-bindings
+         bindings
+         (lambda ()
+           (let ((result (apply value args)))
+             (if (functionp result)
+                 (wrap-sml-functor-application-value result bindings)
+                 result)))))
+      value))
+
+(defun sml-functor-binding-symbols (package-name param-name argument value-bindings)
+  (let ((pairs nil))
+    (labels ((add-binding (member target-name)
+               (let ((param-symbol
+                       (sml-symbol-in-package-name (format nil "~A.~A" param-name member)
+                                                   package-name))
+                     (target-symbol
+                       (sml-symbol-in-package-name target-name package-name)))
+                 (proclaim `(special ,param-symbol))
+                 (push (cons param-symbol target-symbol) pairs))))
+      (dolist (binding value-bindings)
+        (add-binding (car binding) (cdr binding)))
+      (when argument
+        (let ((members (or (lookup-sml-structure-members package-name argument)
+                           (lookup-sml-functor-members package-name argument)
+                           '("compare"))))
+          (dolist (member members)
+            (add-binding member (format nil "~A.~A" argument member))))))
+    (nreverse pairs)))
+
+(defun alias-sml-module-member (package-name target-module source-module member-name
+                                &optional dynamic-bindings)
+  (alias-sml-module-member-to-name package-name
+                                   (format nil "~A.~A" target-module member-name)
+                                   source-module
+                                   member-name
+                                   dynamic-bindings))
+
+(defun alias-sml-module-member-to-name (package-name target-name source-module member-name
+                                        &optional dynamic-bindings)
   (let* ((source (sml-symbol-in-package-name (format nil "~A.~A" source-module member-name)
                                              package-name))
-         (target (sml-symbol-in-package-name (format nil "~A.~A" target-module member-name)
-                                             package-name)))
+         (target (sml-symbol-in-package-name target-name package-name)))
     (when (boundp source)
       (proclaim `(special ,target))
-      (setf (symbol-value target) (symbol-value source))
+      (setf (symbol-value target)
+            (wrap-sml-functor-application-value (symbol-value source)
+                                                dynamic-bindings))
       (let ((type (lookup-sml-binding-type source)))
         (when type
           (register-sml-binding-type target type)))
+      (when (sml-constructor-symbol-p source)
+        (register-sml-constructor target
+                                  (sml-constructor-canonical-symbol source)))
       (export (list target) (ensure-sml-package package-name)))))
 
-(defun alias-sml-functor-application (package-name target-structure functor-name)
-  (let ((members (lookup-sml-functor-members package-name functor-name)))
+(defun alias-sml-functor-application (package-name target-structure functor-name
+                                      &key argument value-bindings)
+  (let* ((members (lookup-sml-functor-members package-name functor-name))
+         (param-name (lookup-sml-functor-param package-name functor-name))
+         (dynamic-bindings (and param-name
+                                (sml-functor-binding-symbols package-name
+                                                             param-name
+                                                             argument
+                                                             value-bindings))))
     (dolist (member members)
-      (alias-sml-module-member package-name target-structure functor-name member))
+      (alias-sml-module-member package-name
+                               target-structure
+                               functor-name
+                               member
+                               dynamic-bindings))
     (register-sml-structure-members package-name target-structure members)
     target-structure))
 
@@ -392,10 +491,23 @@
       (error "Expected SML record, got ~S" record)))
 
 (defun sml-record-select (record label)
-  (let ((field (assoc label (sml-record-fields record) :test #'string=)))
-    (if field
-        (cdr field)
-        (error "Record does not contain field ~A: ~S" label record))))
+  (cond
+    ((sml-record-p record)
+     (let ((field (assoc label (sml-record-fields record) :test #'string=)))
+       (if field
+           (cdr field)
+           (error "Record does not contain field ~A: ~S" label record))))
+    ((and (consp record)
+          (eq (car record) :tuple)
+          (stringp label)
+          (plusp (length label))
+          (every #'digit-char-p label))
+     (let ((index (parse-integer label)))
+       (if (<= 1 index (length (cdr record)))
+           (nth index record)
+           (error "Tuple does not contain field ~A: ~S" label record))))
+    (t
+     (error "Expected SML record or tuple, got ~S" record))))
 
 (define-condition sml-raised-exception (error)
   ((value :initarg :value :reader sml-exception-value))
@@ -457,15 +569,51 @@
         (sml-real-infinity (minusp a))
         (/ a b))))
 
-(defun sml-< (a) (lambda (b) (< a b)))
-(defun sml-> (a) (lambda (b) (> a b)))
-(defun sml->= (a) (lambda (b) (>= a b)))
-(defun sml-<= (a) (lambda (b) (<= a b)))
+(defun sml-ordered-compare (a b)
+  (cond
+    ((and (numberp a) (numberp b))
+     (cond ((< a b) -1)
+           ((> a b) 1)
+           (t 0)))
+    ((and (characterp a) (characterp b))
+     (cond ((char< a b) -1)
+           ((char> a b) 1)
+           (t 0)))
+    ((and (stringp a) (stringp b))
+     (cond ((string< a b) -1)
+           ((string> a b) 1)
+           (t 0)))
+    (t
+     (error "Unsupported SML ordered comparison: ~S and ~S" a b))))
+
+(defun sml-< (a) (lambda (b) (minusp (sml-ordered-compare a b))))
+(defun sml-> (a) (lambda (b) (plusp (sml-ordered-compare a b))))
+(defun sml->= (a) (lambda (b) (not (minusp (sml-ordered-compare a b)))))
+(defun sml-<= (a) (lambda (b) (not (plusp (sml-ordered-compare a b)))))
 (defun sml-= (a) (lambda (b) (equal a b)))
 (defun sml-<> (a) (lambda (b) (not (equal a b))))
 
 (defun sml-^ (a) (lambda (b) (concatenate 'string a b)))
 (defun sml-@ (a) (lambda (b) (append a b)))
+
+(defun sml-apply-tuple-or-curried-binary (fn left right)
+  (let ((tuple-result
+          (handler-case
+              (funcall fn (list :tuple left right))
+            (error () :sml-tuple-call-failed))))
+    (if (or (eq tuple-result :sml-tuple-call-failed)
+            (functionp tuple-result))
+        (funcall (funcall fn left) right)
+        tuple-result)))
+
+(defun sml-tuple-or-curried-binary (fn)
+  (lambda (left)
+    (if (and (consp left)
+             (eq (first left) :tuple)
+             (= (length left) 3))
+        (sml-apply-tuple-or-curried-binary fn (second left) (third left))
+        (lambda (right)
+          (sml-apply-tuple-or-curried-binary fn left right)))))
 
 (defun sml-andalso (a) (lambda (b) (and a b)))
 (defun sml-orelse (a) (lambda (b) (or a b)))
@@ -532,6 +680,20 @@
 (defun sml-str (char)
   (string char))
 
+(defun sml-raise-named-exception (name)
+  (let ((symbol (sml-symbol name *sml-package*)))
+    (sml-raise
+     (if (boundp symbol)
+         (symbol-value symbol)
+         (make-sml-exception-constructor name)))))
+
+(defun sml-sequence-sub (sequence index)
+  (if (and (integerp index)
+           (<= 0 index)
+           (< index (length sequence)))
+      (elt sequence index)
+      (sml-raise-named-exception "Subscript")))
+
 (defun sml-o (f)
   (lambda (g)
     (lambda (x)
@@ -569,6 +731,11 @@
     (declare (ignore arg))
     (error "Unimplemented SML basis primitive: ~A" name)))
 
+(defun make-sml-unresolved-functor-member (name)
+  (lambda (&rest args)
+    (declare (ignore args))
+    (error "Unresolved SML functor member: ~A" name)))
+
 (defun sml-constant-primitive (value)
   (lambda (&optional unit)
     (declare (ignore unit))
@@ -604,7 +771,7 @@
                     ("String.maxSize" . ,(sml-constant-primitive most-positive-fixnum))
                     ("String.size" . ,#'sml-size)
                     ("String.sub" . ,(lambda (tuple)
-                                       (elt (second tuple) (third tuple))))
+                                       (sml-sequence-sub (second tuple) (third tuple))))
                     ("String.str" . ,#'sml-str)
                     ("String.^" . ,#'sml-^)
                     ("Char.ord" . ,#'sml-ord)
@@ -653,7 +820,8 @@
                     ("Vector.maxLen" . ,(sml-constant-primitive most-positive-fixnum))
                     ("Vector.length" . ,#'length)
                     ("Vector.sub" . ,(lambda (tuple)
-                                       (elt (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                                       (sml-sequence-sub (sml-tuple-first tuple)
+                                                         (sml-tuple-second tuple))))
                     ("Vector.fromList" . ,(lambda (list)
                                             (coerce list 'vector)))
                     ("CharVector.fromList" . ,(lambda (list)
@@ -661,6 +829,8 @@
                     ("TextIO.stdIn" . ,(sml-constant-primitive :text-io-stdin))
                     ("TextIO.stdOut" . ,(sml-constant-primitive :text-io-stdout))
                     ("TextIO.stdErr" . ,(sml-constant-primitive :text-io-stderr))
+                    ("OS.FileSys.getDir" . ,(sml-constant-primitive
+                                             (namestring *default-pathname-defaults*)))
                     ("Math.e" . ,(sml-constant-primitive (coerce (exp 1) 'double-float)))
                     ("Math.pi" . ,(sml-constant-primitive (coerce pi 'double-float)))
                     ("Math.sqrt" . ,#'sml-sqrt)

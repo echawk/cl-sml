@@ -23,7 +23,10 @@
   (is (char= #\a (parse 'cl-sml::sml-char "#\"a\"")))
   (is (equal "line
 tab	"
-             (parse 'cl-sml::sml-string "\"line\\ntab\\t\""))))
+             (parse 'cl-sml::sml-string "\"line\\ntab\\t\"")))
+  (is (equal "A" (parse 'cl-sml::sml-string "\"\\065\"")))
+  (is (equal "hello" (parse 'cl-sml::sml-string (format nil "\"\\~%\\hello\""))))
+  (is (equal "" (parse 'cl-sml::sml-string (format nil "\"\\~%\\\"")))))
 
 (test parse-identifiers
   (is (equal '(:var "x") (parse 'cl-sml::sml-var-or-ctor "x")))
@@ -51,19 +54,47 @@ tab	"
 
   (is (equal '(:app (:app (:var "+") (:var "a"))
                (:app (:app (:var "*") (:var "b")) (:var "c")))
-             (parse 'cl-sml::sml-expr "a + b * c"))))
+             (parse 'cl-sml::sml-expr "a + b * c")))
+  (is (equal '(:app (:app (:var "mod") (:var "n")) 26)
+             (parse 'cl-sml::sml-expr "n mod 26")))
+  (is (equal '(:app (:app (:var "div") (:var "n")) 26)
+             (parse 'cl-sml::sml-expr "n div 26"))))
 
 (test parse-append-and-assignment
   (is (equal '(:app (:app (:var "@") (:var "xs")) (:var "ys"))
              (parse 'cl-sml::sml-expr "xs @ ys")))
+  (is (equal '(:app (:app (:var "@@") (:var "x")) (:ctor "A"))
+             (parse 'cl-sml::sml-expr "x@@A")))
   (is (equal '(:app (:app (:var ":=") (:var "r")) 10)
              (parse 'cl-sml::sml-expr "r := 10")))
   (is (equal '(:deref (:var "r"))
              (parse 'cl-sml::sml-expr "! r"))))
 
+(test parse-symbolic-infix-does-not-split-relational-prefix
+  (is (equal '(:app (:app (:var ">>=") (:var "x")) (:var "f"))
+             (parse 'cl-sml::sml-expr "x >>= f"))))
+
+(test parse-bare-tilde-as-value
+  (is (equal '(:tuple (:var "~") (:var "Word.~") (:var "Word8.~") (:var "~"))
+             (parse 'cl-sml::sml-expr "(~, Word.~, Word8.~, ~)")))
+  (is (equal '(:app (:var "~") 5)
+             (parse 'cl-sml::sml-expr "~5")))
+  (is (equal '(:app (:var "~") (:var "x"))
+             (parse 'cl-sml::sml-expr "~ x"))))
+
 (test parse-sequencing
   (is (equal '(:seq (:app (:var "print") 1) 2)
              (parse 'cl-sml::sml-expr "print 1; 2"))))
+
+(test parse-raise-as-boolean-operand
+  (is (equal '(:orelse (:var "eq") (:raise (:ctor "Type")))
+             (parse 'cl-sml::sml-expr "eq orelse raise Type")))
+  (is (equal '(:andalso (:var "ok") (:raise (:ctor "Fail")))
+             (parse 'cl-sml::sml-expr "ok andalso raise Fail"))))
+
+(test parse-while-expression
+  (is (equal '(:while (:app (:var "not") (:var "done")) (:unit))
+             (parse 'cl-sml::sml-expr "while not done do ()"))))
 
 
 (test parse-case-statement
@@ -87,9 +118,29 @@ tab	"
   (is (equal '(:val (:pat-tuple (:pat-var "x") (:pat-var "y"))
                     (:tuple 1 2))
              (parse 'cl-sml::sml-val "val (x, y) = (1, 2);")))
+  (is (equal '(:vals (:val (:pat-var "s") (:app (:var "ref") ""))
+                     (:val (:pat-var "index") (:app (:var "ref") 0)))
+             (parse 'cl-sml::sml-val "val s = ref \"\" and index = ref 0")))
   (is (equal '(:fun "add" ((((:pat-var "a") (:pat-var "b"))
                             (:app (:app (:var "+") (:var "a")) (:var "b")))))
              (parse 'cl-sml::sml-fun "fun add a b = a + b;"))))
+
+(test parse-word-infix-fun-declarations
+  (is (equal '(:fun "plus" ((((:pat-ctor "E") (:pat-ctor "E'"))
+                             (:tuple (:ctor "E") (:ctor "E'")))))
+             (parse 'cl-sml::sml-fun "fun E plus E' = (E, E');")))
+  (is (equal '(:fun "TEplus" ((((:pat-ctor "TE'") (:pat-app (:pat-ctor "Env") (:pat-tuple (:pat-ctor "SE") (:pat-ctor "TE") (:pat-ctor "VE"))))
+                                (:ctor "TE"))))
+             (parse 'cl-sml::sml-fun "fun TE' TEplus (Env(SE, TE, VE)) = TE;"))))
+
+(test parse-nullary-constructor-function-parameter
+  (is (equal '(:fun "packVar"
+               ((((:pat-ctor "NONE") (:pat-var "var")) (:var "var"))
+                (((:pat-app (:pat-ctor "SOME") (:pat-var "expr"))
+                  (:pat-var "var"))
+                 (:var "expr"))))
+             (parse 'cl-sml::sml-fun
+                    "fun packVar NONE var = var | packVar (SOME expr) var = expr;"))))
 
 (test parse-local-declaration
   (is (equal '(:local
@@ -123,7 +174,10 @@ tab	"
                                        (:app (:app (:var "+") (:var "x")) (:var "y"))))))
                       ((:seq (:app (:var "add_x") 10)
                              (:app (:var "add_x") 20))))
-               (parse 'cl-sml::sml-expr prog)))))
+               (parse 'cl-sml::sml-expr prog))))
+  (is (equal '(:let ((:open "A"))
+                    ((:app (:var "f") (:var "x"))))
+             (parse 'cl-sml::sml-expr "let open A in f x end"))))
 
 (test parse-full-program
   (let ((prog "val x = 10; val rec fact = fn 0 => 1 | n => n * fact (n - 1); fun add a b = a + b;"))
@@ -158,6 +212,8 @@ tab	"
              (parse 'cl-sml::sml-pat "x :: xs")))
   (is (equal '(:pat-cons (:pat-typed (:pat-var "x") "int") (:pat-nil))
              (parse 'cl-sml::sml-pat "[x : int]")))
+  (is (equal '(:pat-app (:pat-ctor "SOME") (:pat-nil))
+             (parse 'cl-sml::sml-pat "SOME []")))
   (is (equal '(:pat-cons (:pat-tuple (:pat-var "x") (:pat-var "y"))
                          (:pat-var "rest"))
              (parse 'cl-sml::sml-pat "(x, y) :: rest")))
@@ -179,6 +235,20 @@ tab	"
              (parse 'cl-sml::sml-datatype "datatype 'a option = NONE | SOME of 'a")))
   (is (equal '(:datatype-replication "list" "list")
              (parse 'cl-sml::sml-datatype-replication "datatype list = datatype list"))))
+
+(test parse-symbolic-datatype-constructor
+  (is (equal '(:datatype "phrase" ((:ctor-def "@@" :has-args t :arg-type "'a * 'b annotation")))
+             (parse 'cl-sml::sml-datatype "datatype ('a, 'b) phrase = @@ of 'a * 'b annotation"))))
+
+(test parse-mutually-recursive-datatype-group
+  (is (equal '(:datatype "a" ((:ctor-def "A" :has-args nil :arg-type nil)
+                              (:ctor-def "B" :has-args t :arg-type "int")
+                              (:ctor-def "C" :has-args t :arg-type "string")))
+             (parse 'cl-sml::sml-datatype
+                    "datatype a = A
+                     and b = B of int
+                     and c = C of string
+                     withtype d = int"))))
 
 (test parse-hamlet-basis-declaration-forms
   (is (equal '(:program (:infix "infix" 7 "* / div mod")
@@ -203,7 +273,25 @@ tab	"
 (test parse-record-patterns
   (is (equal '(:pat-record ("x" (:pat-var "x"))
                            ("y" (:pat-var "value")))
-             (parse 'cl-sml::sml-pat "{x, y = value}"))))
+             (parse 'cl-sml::sml-pat "{x, y = value}")))
+  (is (equal '(:pat-record ("key" (:pat-var "key"))
+                           ("left" (:pat-var "left"))
+                           :record-rest)
+             (parse 'cl-sml::sml-pat "{key, left, ...}"))))
+
+(test parse-uppercase-as-pattern-alias
+  (is (equal '(:pat-as (:pat-var "B")
+                    (:pat-tuple (:pat-ctor "T") (:pat-ctor "F")))
+             (parse 'cl-sml::sml-pat "B as (T, F)"))))
+
+(test parse-symbolic-infix-pattern
+  (is (equal '(:pat-app (:pat-ctor "@@")
+                    (:pat-tuple (:pat-var "s") (:pat-var "A")))
+             (parse 'cl-sml::sml-pat "s@@A")))
+  (is (equal '(:pat-app (:pat-ctor "@@")
+                    (:pat-tuple (:pat-app (:pat-ctor "SCONAtExp") (:pat-var "scon"))
+                                :wild))
+             (parse 'cl-sml::sml-pat "SCONAtExp(scon)@@_"))))
 
 (test parse-exception-declarations-and-handling
   (is (equal '(:exception "E" :arg-type nil)
@@ -226,12 +314,14 @@ tab	"
   (is (equal '(:pat-app (:pat-ctor "SOME") (:pat-var "x"))
              (parse 'cl-sml::sml-pat "SOME x")))
   (is (equal '(:pat-app (:pat-ctor "IO.Io") :wild)
-             (parse 'cl-sml::sml-pat "IO.Io _"))))
+             (parse 'cl-sml::sml-pat "IO.Io _")))
+  (is (equal '(:pat-app (:pat-ctor "MlyValue.vid'") (:pat-var "vid'1"))
+             (parse 'cl-sml::sml-pat "MlyValue.vid' vid'1"))))
 
 (test parse-shallow-module-functors
   (is (equal '(:program
-               (:functor "F" ((:val (:pat-var "x") 1)))
-               (:structure-app "A" "F"))
+               (:functor "F" ((:val (:pat-var "x") 1)) :param "X")
+               (:structure-app "A" "F" "(structure X = Y)"))
              (parse 'cl-sml::sml-program
                     "functor F(X : S) :> T where type u = X.u = struct val x = 1 end
                      structure A = F(structure X = Y)"))))
@@ -254,11 +344,15 @@ tab	"
 
 (test compiler-constructor-consistency
   "Verify that constructors in expressions and patterns use the same package/symbol"
-  (let* ((ctor-expr (cl-sml::compile-expr '(:ctor "SML_NONE")))
-         (ctor-pat  (cl-sml::compile-pat  '(:pat-ctor "SML_NONE"))))
-    ;; These must be identical for trivia:match to work!
-    (fiveam:is (equal ctor-expr (second ctor-pat)))
-    (fiveam:is (symbolp ctor-expr))))
+  (let* ((ctor-expr (cl-sml::compile-expr '(:ctor "SML_NONE"))))
+    (setf (symbol-value ctor-expr) ctor-expr)
+    (cl-sml::register-sml-constructor ctor-expr)
+    (let ((ctor-pat (cl-sml::compile-pat '(:pat-ctor "SML_NONE"))))
+      (fiveam:is (eq :matched
+                     (eval `(trivia:match ',ctor-expr
+                              (,ctor-pat :matched)
+                              (_ :miss)))))
+      (fiveam:is (symbolp ctor-expr)))))
 
 (test anonymous-function-parsing
   "Test parsing of fn x => x + 1"

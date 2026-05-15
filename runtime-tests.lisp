@@ -50,7 +50,13 @@
   (is (= 21
          (funcall (funcall (cl-sml::sml-o (lambda (x) (+ x 1)))
                            (lambda (x) (* x 2)))
-                  10))))
+                  10)))
+  (let ((wrapped (cl-sml::sml-tuple-or-curried-binary
+                  (lambda (x)
+                    (lambda (y)
+                      (+ x y))))))
+    (is (= 5 (funcall wrapped (list :tuple 2 3))))
+    (is (= 5 (funcall (funcall wrapped 2) 3)))))
 
 (test runtime-string-and-char-functions
   (is (string= "abcd" (cl-sml::sml-concat '("ab" "cd"))))
@@ -59,7 +65,26 @@
   (is (string= "ab" (cl-sml::sml-implode '(#\a #\b))))
   (is (= 65 (cl-sml::sml-ord #\A)))
   (is (char= #\A (cl-sml::sml-chr 65)))
-  (is (string= "Z" (cl-sml::sml-str #\Z))))
+  (is (string= "Z" (cl-sml::sml-str #\Z)))
+  (is (eq t (funcall (funcall #'cl-sml::sml-< #\A) #\B)))
+  (is (eq t (funcall (funcall #'cl-sml::sml-< "ab") "ac")))
+  (is (= 7 (eval-sml-expr "#2 (\"\", 7)"))))
+
+(test runtime-sequence-subscript-raises-sml-exception
+  (let* ((package-name "SML.SUBSCRIPT-TEST")
+         (cl-sml::*sml-package* (cl-sml::ensure-sml-package package-name))
+         (subscript-symbol (cl-sml::sml-symbol "Subscript" package-name)))
+    (setf (symbol-value subscript-symbol)
+          (cl-sml::make-sml-exception-constructor "Subscript"))
+    (handler-case
+        (progn
+          (funcall (cl-sml::sml-basis-primitive "String.sub")
+                   (list :tuple "a" 1))
+          (fail "String.sub did not raise Subscript"))
+      (cl-sml::sml-raised-exception (condition)
+        (is (string= "Subscript"
+                     (cl-sml::sml-exception-name
+                      (cl-sml::sml-exception-value condition))))))))
 
 (test runtime-math-functions
   (is (= 12 (cl-sml::sml-abs -12)))
@@ -80,6 +105,28 @@
     (is (= 10 (cl-sml::sml-deref cell)))
     (is (equal '(:tuple) (funcall (cl-sml::sml-assign cell) 42)))
     (is (= 42 (cl-sml::sml-deref cell)))))
+
+(test integration-while-expression
+  (eval-sml-program
+   "val while_result =
+      let
+        val cell = ref 0;
+      in
+        while !cell < 3 do cell := !cell + 1;
+        !cell
+      end;")
+  (is (= 3 (sml-value "while_result"))))
+
+(test integration-let-preserves-outer-function-lexicals
+  (eval-sml-program
+   "fun captureOuter set =
+      let
+        fun read _ = set;
+      in
+        read 0
+      end;
+    val captured_outer = captureOuter 42;")
+  (is (= 42 (sml-value "captured_outer"))))
 
 (test runtime-record-and-exception-helpers
   (let* ((record (cl-sml::make-sml-record (list (cons "y" 2)
@@ -120,6 +167,9 @@
     val ceiled = ceil 3.2;
     val rounded = round 3.2;
     val realed = real 7;
+    val pairPlus = fn (x, y) => x + y;
+    val op%% = pairPlus;
+    val tupled_infix_alias = 2 %% 3;
     val ref_result =
       let
         val cell = ref 10;
@@ -149,11 +199,24 @@
   (is (= 4 (sml-value "ceiled")))
   (is (= 3 (sml-value "rounded")))
   (is (= 7.0d0 (sml-value "realed")))
+  (is (= 5 (sml-value "tupled_infix_alias")))
   (is (= 42 (sml-value "ref_result"))))
+
+(test integration-infix-fun-supports-prefix-tuple-call
+  (let ((*test-sml-package* "SML.INFIX-FUN-PREFIX-TUPLE-TEST"))
+    (eval-sml-program
+     "fun (a, b) plus (c, d) = (a + c, b + d);
+      fun pickUpper (T, F, G, E) = E;
+      val prefix_tuple_sum = plus((1, 2), (3, 4));
+      val uppercase_tuple_var = pickUpper (1, 2, 3, 4);")
+    (is (equal '(:tuple 4 6)
+               (sml-value "prefix_tuple_sum" *test-sml-package*)))
+    (is (= 4 (sml-value "uppercase_tuple_var" *test-sml-package*)))))
 
 (test integration-patterned-values-and-functions
   (eval-sml-program
    "val (x, y) = (10, 20);
+    datatype opt = NONE | SOME of int;
     val SOME z = SOME 9;
     fun swap (a, b) = (b, a);
     fun fact 0 = 1
@@ -179,6 +242,7 @@
    "val point = {y = 2, x = 1};
     val x_coord = #x point;
     val {x = rx, y = ry} = point;
+    val {x = rest_x, ...} = {x = 4, y = 5};
     fun swap {x, y} = {x = y, y = x};
     val swapped_point = swap point;
     val point_sum = case point of {x, y} => x + y;
@@ -197,6 +261,7 @@
   (is (= 1 (sml-value "x_coord")))
   (is (= 1 (sml-value "rx")))
   (is (= 2 (sml-value "ry")))
+  (is (= 4 (sml-value "rest_x")))
   (is (equal '(:record ("x" . 2) ("y" . 1))
              (sml-value "swapped_point")))
   (is (= 3 (sml-value "point_sum")))
@@ -219,33 +284,70 @@
 
 (test integration-local-declarations
   (let ((*test-sml-package* "SML.LOCAL-DECL-TEST"))
+    (is (= 3 (eval-sml-expr "let val x = 1 and y = 2 in x + y end")))
     (eval-sml-program
      "local
         fun helper x = x + 1;
+        fun T' (a, b) = a + b;
         datatype opt = NONE | SOME of int;
         exception Hidden;
       in
         val y = helper 2;
+        val upper_fun = T'(4, 5);
         val picked = case SOME 5 of SOME x => x | NONE => 0;
-        val caught = ((raise Hidden) handle Hidden => 1);
-      end;")
-    (is (= 3 (sml-value "y" *test-sml-package*)))
+	    val caught = ((raise Hidden) handle Hidden => 1);
+	      end;")
+	    (is (= 3 (sml-value "y" *test-sml-package*)))
+	    (is (= 9 (sml-value "upper_fun" *test-sml-package*)))
     (is (= 5 (sml-value "picked" *test-sml-package*)))
     (is (= 1 (sml-value "caught" *test-sml-package*)))
     (is (eq :external (sml-symbol-status "y" *test-sml-package*)))
     (is (eq :external (sml-symbol-status "picked" *test-sml-package*)))
     (is (eq :external (sml-symbol-status "caught" *test-sml-package*)))
-    (is (not (eq :external (sml-symbol-status "helper" *test-sml-package*))))
-    (is (not (eq :external (sml-symbol-status "Hidden" *test-sml-package*))))
-    (is (not (eq :external (sml-symbol-status "SOME" *test-sml-package*))))
-    (is (not (eq :external (sml-symbol-status "NONE" *test-sml-package*))))))
+	    (is (not (eq :external (sml-symbol-status "helper" *test-sml-package*))))
+	    (is (not (eq :external (sml-symbol-status "Hidden" *test-sml-package*))))
+	    (is (not (eq :external (sml-symbol-status "SOME" *test-sml-package*))))
+	    (is (not (eq :external (sml-symbol-status "NONE" *test-sml-package*))))))
+
+(test integration-local-structure-alias-namespace
+  (let ((*test-sml-package* "SML.LOCAL-STRUCTURE-ALIAS-TEST"))
+    (eval-sml-program
+     "structure AliasSource = struct
+        val empty = 37;
+      end;
+      structure AliasUser = struct
+        local
+          structure F = AliasSource
+        in
+          val got = F.empty;
+        end;
+      end;
+      val local_alias_result = AliasUser.got;")
+    (is (= 37 (sml-value "local_alias_result" *test-sml-package*)))))
+
+(test integration-opened-constructor-uses-canonical-tag
+  (let ((*test-sml-package* "SML.OPENED-CONSTRUCTOR-TEST"))
+    (eval-sml-program
+     "structure CtorSource = struct
+        datatype box = Box of int;
+      end;")
+    (eval-sml-program
+     "structure CtorUser = struct
+        open CtorSource;
+        fun get (Box n) = n;
+      end;
+      val opened_ctor_result = CtorUser.get (CtorSource.Box 12);")
+    (is (= 12 (sml-value "opened_ctor_result" *test-sml-package*)))))
 
 (test integration-val-rec-and-symbol-export
   (eval-sml-program
    "val rec fact = fn 0 => 1 | n => n * fact (n - 1);
-    val rec sumTo = fn 0 => 0 | n => n + sumTo (n - 1);")
+    val rec sumTo = fn 0 => 0 | n => n + sumTo (n - 1);
+    fun makeUpper O = O;
+    val upper_pattern_value = makeUpper 12;")
   (is (= 120 (funcall (sml-value "fact") 5)))
   (is (= 15 (funcall (sml-value "sumTo") 5)))
+  (is (= 12 (sml-value "upper_pattern_value")))
   (is (eq :external (sml-symbol-status "fact")))
   (is (eq :external (sml-symbol-status "sumTo"))))
 

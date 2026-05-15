@@ -9,9 +9,53 @@
 (defun sml-file-directory (pathname)
   (make-pathname :directory (pathname-directory (truename pathname))))
 
+(defun sml-declaration-start-line-p (line)
+  (some (lambda (keyword)
+          (let ((length (length keyword)))
+            (and (<= length (length line))
+                 (string= keyword line :end2 length)
+                 (or (= length (length line))
+                     (member (char line length)
+                             '(#\Space #\Tab #\; #\= #\: #\()
+                             :test #'char=)))))
+        '("abstype" "datatype" "end" "exception" "fun" "functor" "in"
+          "infix" "infixr" "local" "nonfix" "open" "signature"
+          "structure" "type" "val" "withtype")))
+
+(defun sml-type-declaration-start-line-p (line)
+  (let ((trimmed (string-left-trim '(#\Space #\Tab) line)))
+    (and (<= 4 (length trimmed))
+         (string= "type" trimmed :end2 4)
+         (or (= 4 (length trimmed))
+             (member (char trimmed 4) '(#\Space #\Tab #\()
+                     :test #'char=)))))
+
+(defun normalize-sml-type-declaration-continuations (source)
+  (with-output-to-string (out)
+    (let ((in-type-declaration nil)
+          (at-start t))
+      (dolist (line (uiop:split-string source :separator '(#\Newline)))
+        (let* ((trimmed-left (string-left-trim '(#\Space #\Tab) line))
+               (starts-declaration (sml-declaration-start-line-p trimmed-left)))
+          (cond
+            ((and in-type-declaration
+                  (not starts-declaration)
+                  (plusp (length trimmed-left)))
+             (write-char #\Space out)
+             (write-string trimmed-left out))
+            (t
+             (unless at-start
+               (write-char #\Newline out))
+             (write-string line out)
+             (setf in-type-declaration
+                   (sml-type-declaration-start-line-p line)))))
+        (setf at-start nil)))))
+
 (defun compile-sml-program-string (sml-text &key package)
   (let ((*sml-package* (ensure-sml-package (or package (current-sml-package)))))
-    (compile-program (esrap:parse 'sml-program sml-text))))
+    (compile-program
+     (esrap:parse 'sml-program
+                  (normalize-sml-type-declaration-continuations sml-text)))))
 
 (defun compile-sml-declarations-string (sml-text &key package)
   (compile-sml-program-string sml-text :package package))
