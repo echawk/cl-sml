@@ -98,6 +98,7 @@
 
 (defparameter *sml-builtin-type-env*
   '(("+" . (:fn "int" (:fn "int" "int")))
+    ("~" . (:fn "int" "int"))
     ("-" . (:fn "int" (:fn "int" "int")))
     ("*" . (:fn "int" (:fn "int" "int")))
     ("/" . (:fn "real" (:fn "real" "real")))
@@ -145,6 +146,7 @@
     ("real" . (:fn "int" "real"))
     ("o" . (:fn (:fn :unknown :unknown) (:fn (:fn :unknown :unknown) (:fn :unknown :unknown))))
     ("before" . (:fn :unknown (:fn :unknown :unknown)))
+    ("ignore" . (:fn :unknown "unit"))
     ("not" . (:fn "bool" "bool"))
     ("print" . (:fn :unknown "unit"))
     ("use" . (:fn "string" "unit"))
@@ -250,6 +252,8 @@
      (infer-sml-record-type (cdr ast) package))
     ((and (listp ast) (eq (car ast) :list))
      (infer-sml-list-type (cdr ast) package))
+    ((and (listp ast) (eq (car ast) :typed))
+     (third ast))
     ((and (listp ast) (member (car ast) '(:var :ctor) :test #'eq))
      (or (lookup-sml-binding-type (second ast) package) :unknown))
     ((and (listp ast) (eq (car ast) :selector))
@@ -378,11 +382,26 @@
 ;; SML functions are auto-curried. Lisp's standard functions are not.
 ;; We must wrap Lisp's binary operators into curried closures.
 (defun sml-+ (a) (lambda (b) (+ a b)))
+(defun sml-~ (a) (- a))
 (defun sml-- (a) (lambda (b) (- a b)))
 (defun sml-* (a) (lambda (b) (* a b)))
 (defun sml-div (a) (lambda (b) (truncate a b)))
 (defun sml-mod (a) (lambda (b) (mod a b)))
-(defun sml-/ (a) (lambda (b) (/ a b)))
+(defun sml-real-infinity (negativep)
+  #+sbcl
+  (if negativep
+      sb-ext:double-float-negative-infinity
+      sb-ext:double-float-positive-infinity)
+  #-sbcl
+  (if negativep
+      (- most-positive-double-float)
+      most-positive-double-float))
+
+(defun sml-/ (a)
+  (lambda (b)
+    (if (zerop b)
+        (sml-real-infinity (minusp a))
+        (/ a b))))
 
 (defun sml-< (a) (lambda (b) (< a b)))
 (defun sml-> (a) (lambda (b) (> a b)))
@@ -464,6 +483,10 @@
     (declare (ignore b))
     a))
 
+(defun sml-ignore (value)
+  (declare (ignore value))
+  (sml-unit))
+
 (defun sml-ref (value)
   (make-sml-ref value))
 
@@ -479,15 +502,132 @@
   (princ value)
   (sml-unit))
 
+(defun sml-exn-name-primitive (value)
+  (sml-exception-name value))
+
+(defun sml-primitive-stub (name)
+  (lambda (&optional arg)
+    (declare (ignore arg))
+    (error "Unimplemented SML basis primitive: ~A" name)))
+
+(defun sml-constant-primitive (value)
+  (lambda (&optional unit)
+    (declare (ignore unit))
+    value))
+
+(defun sml-none-value ()
+  (sml-symbol "NONE"))
+
+(defun sml-some-value (value)
+  (let ((some (sml-symbol "SOME")))
+    (if (and (boundp some) (functionp (symbol-value some)))
+        (funcall (symbol-value some) value)
+        (cons some value))))
+
+(defun sml-tuple-first (tuple)
+  (second tuple))
+
+(defun sml-tuple-second (tuple)
+  (third tuple))
+
+(defun sml-word-not (value)
+  (logand most-positive-fixnum (lognot value)))
+
+(defun sml-word-shift-left (tuple)
+  (ash (sml-tuple-first tuple) (sml-tuple-second tuple)))
+
+(defun sml-word-shift-right (tuple)
+  (ash (sml-tuple-first tuple) (- (sml-tuple-second tuple))))
+
+(defun sml-basis-primitive (name)
+  (or (cdr (assoc name
+                  `(("General.exnName" . ,#'sml-exn-name-primitive)
+                    ("String.maxSize" . ,(sml-constant-primitive most-positive-fixnum))
+                    ("String.size" . ,#'sml-size)
+                    ("String.sub" . ,(lambda (tuple)
+                                       (elt (second tuple) (third tuple))))
+                    ("String.str" . ,#'sml-str)
+                    ("String.^" . ,#'sml-^)
+                    ("Char.ord" . ,#'sml-ord)
+                    ("Char.chr" . ,#'sml-chr)
+                    ("Int.precision" . ,(sml-constant-primitive (sml-none-value)))
+                    ("Int.minInt" . ,(sml-constant-primitive (sml-some-value most-negative-fixnum)))
+                    ("Int.maxInt" . ,(sml-constant-primitive (sml-some-value most-positive-fixnum)))
+                    ("Int.quot" . ,(lambda (tuple)
+                                      (truncate (second tuple) (third tuple))))
+                    ("Int.rem" . ,(lambda (tuple)
+                                     (rem (second tuple) (third tuple))))
+                    ("Word.wordSize" . ,(sml-constant-primitive (integer-length most-positive-fixnum)))
+                    ("Word.toInt" . ,#'identity)
+                    ("Word.toIntX" . ,#'identity)
+                    ("Word.fromInt" . ,#'identity)
+                    ("Word.notb" . ,#'sml-word-not)
+                    ("Word.orb" . ,(lambda (tuple)
+                                     (logior (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                    ("Word.xorb" . ,(lambda (tuple)
+                                      (logxor (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                    ("Word.andb" . ,(lambda (tuple)
+                                      (logand (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                    ("Word.<<" . ,#'sml-word-shift-left)
+                    ("Word.>>" . ,#'sml-word-shift-right)
+                    ("Word.~>>" . ,#'sml-word-shift-right)
+                    ("Word8.toLarge" . ,#'identity)
+                    ("Word8.toLargeX" . ,#'identity)
+                    ("Word8.fromLarge" . ,(lambda (value) (logand value #xff)))
+                    ("Word8.toInt" . ,#'identity)
+                    ("Word8.toIntX" . ,#'identity)
+                    ("Word8.fromInt" . ,(lambda (value) (logand value #xff)))
+                    ("Word8.notb" . ,(lambda (value) (logand #xff (lognot value))))
+                    ("Word8.orb" . ,(lambda (tuple)
+                                      (logand #xff (logior (sml-tuple-first tuple)
+                                                           (sml-tuple-second tuple)))))
+                    ("Word8.xorb" . ,(lambda (tuple)
+                                       (logand #xff (logxor (sml-tuple-first tuple)
+                                                            (sml-tuple-second tuple)))))
+                    ("Word8.andb" . ,(lambda (tuple)
+                                       (logand #xff (logand (sml-tuple-first tuple)
+                                                            (sml-tuple-second tuple)))))
+                    ("Word8.<<" . ,(lambda (tuple)
+                                     (logand #xff (sml-word-shift-left tuple))))
+                    ("Word8.>>" . ,#'sml-word-shift-right)
+                    ("Word8.~>>" . ,#'sml-word-shift-right)
+                    ("Vector.maxLen" . ,(sml-constant-primitive most-positive-fixnum))
+                    ("Vector.length" . ,#'length)
+                    ("Vector.sub" . ,(lambda (tuple)
+                                       (elt (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                    ("Vector.fromList" . ,(lambda (list)
+                                            (coerce list 'vector)))
+                    ("CharVector.fromList" . ,(lambda (list)
+                                                (coerce list 'string)))
+                    ("TextIO.stdIn" . ,(sml-constant-primitive :text-io-stdin))
+                    ("TextIO.stdOut" . ,(sml-constant-primitive :text-io-stdout))
+                    ("TextIO.stdErr" . ,(sml-constant-primitive :text-io-stderr))
+                    ("Math.e" . ,(sml-constant-primitive (coerce (exp 1) 'double-float)))
+                    ("Math.pi" . ,(sml-constant-primitive (coerce pi 'double-float)))
+                    ("Math.sqrt" . ,#'sml-sqrt)
+                    ("Math.sin" . ,#'sml-sin)
+                    ("Math.cos" . ,#'sml-cos)
+                    ("Math.exp" . ,#'sml-exp)
+                    ("Math.ln" . ,#'sml-ln))
+                  :test #'string=))
+      (sml-primitive-stub name)))
+
 (defun sml-use (path)
-  (let ((pathname (merge-pathnames path
-                                   (or *sml-current-directory*
-                                       *default-pathname-defaults*))))
-    (load-sml-file pathname :package *sml-package*)
-    (sml-unit)))
+  (cond
+    ((stringp path)
+     (let ((pathname (merge-pathnames path
+                                      (or *sml-current-directory*
+                                          *default-pathname-defaults*))))
+       (load-sml-file pathname :package *sml-package*)
+       (sml-unit)))
+    ((sml-record-p path)
+     (sml-basis-primitive (sml-record-select path "b")))
+    (t
+     (error "Unsupported SML use argument: ~S" path))))
 
 (defparameter *sml-env*
   '(("+" . #'sml-+)
+    ("~" . #'sml-~)
     ("-" . #'sml--)
     ("*" . #'sml-*)
     ("/" . #'sml-/)
@@ -535,6 +675,7 @@
     ("real" . #'sml-real)
     ("o" . #'sml-o)
     ("before" . #'sml-before)
+    ("ignore" . #'sml-ignore)
     ("not" . #'sml-not)
     ("print" . #'sml-print)
     ("use" . #'sml-use)

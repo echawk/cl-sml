@@ -40,6 +40,58 @@
   (when symbols
     `(export ',symbols ,(target-sml-package-name))))
 
+(defun ensure-pattern-ast (pat)
+  (if (stringp pat)
+      `(:pat-var ,pat)
+      pat))
+
+(defun pattern-bound-names (pat)
+  (cond
+    ((or (numberp pat) (stringp pat) (characterp pat) (eq pat :wild))
+     nil)
+    ((and (listp pat) (member (car pat) '(:pat-var :var)))
+     (list (second pat)))
+    ((and (listp pat) (member (car pat) '(:pat-ctor :ctor :pat-unit :pat-nil)))
+     nil)
+    ((and (listp pat) (eq (car pat) :pat-app))
+     (pattern-bound-names (third pat)))
+    ((and (listp pat) (eq (car pat) :pat-cons))
+     (mapcan #'pattern-bound-names
+             (list (second pat) (third pat))))
+    ((and (listp pat) (eq (car pat) :pat-tuple))
+     (mapcan #'pattern-bound-names (cdr pat)))
+    ((and (listp pat) (eq (car pat) :pat-record))
+     (mapcan (lambda (field)
+               (pattern-bound-names (second field)))
+             (cdr pat)))
+    (t nil)))
+
+(defun declaration-bound-names (dec)
+  (case (car dec)
+    (:val (pattern-bound-names (second dec)))
+    (:val-rec (list (second dec)))
+    (:fun (list (second dec)))
+    (:funs (mapcan #'declaration-bound-names (cdr dec)))
+    (:datatype (mapcar #'second (third dec)))
+    (:exception (list (second dec)))
+    (:exception-alias (list (second dec)))
+    (:local (mapcan #'declaration-bound-names (third dec)))
+    (otherwise nil)))
+
+(defun declarations-bound-names (decs)
+  (remove-duplicates (mapcan #'declaration-bound-names decs) :test #'string=))
+
+(defun compile-structure-alias-form (structure-name member-name)
+  (let ((source (sml-symbol member-name))
+        (alias (sml-symbol (format nil "~A.~A" structure-name member-name))))
+    `(progn
+       (when (boundp ',source)
+         (defparameter ,alias (symbol-value ',source))
+         (let ((type (lookup-sml-binding-type ',source)))
+           (when type
+             (register-sml-binding-type ',alias type)))
+         ,(compile-export-form (list alias))))))
+
 (defun exception-alias-type (target)
   (or (lookup-sml-binding-type target *sml-package*) "exn"))
 
@@ -74,8 +126,8 @@
            (list-type (if (and (consp type) (eq (car type) :list))
                           type
                           '(:list :unknown))))
-       (list (cons (sml-symbol (second pat)) element-type)
-             (cons (sml-symbol (third pat)) list-type))))
+       (append (pattern-type-bindings (second pat) element-type)
+               (pattern-type-bindings (third pat) list-type))))
     ((and (listp pat) (eq (car pat) :pat-tuple))
      (loop for subpat in (cdr pat)
            for subtype in (if (and (consp type) (eq (car type) :tuple))
@@ -110,8 +162,8 @@
     ((and (listp pat) (member (car pat) '(:pat-unit :pat-nil)))
      nil)
     ((and (listp pat) (eq (car pat) :pat-cons))
-     (list (sml-symbol (second pat))
-           (sml-symbol (third pat))))
+     (mapcan #'pattern-bound-symbols
+             (list (second pat) (third pat))))
     ((and (listp pat) (eq (car pat) :pat-record))
      (mapcan (lambda (field)
                (pattern-bound-symbols (second field)))
@@ -226,6 +278,8 @@
        `(let ((,name nil))
           (setf ,name ,(compile-fn-clauses (third dec) local-exceptions))
           ,body)))
+    ((eq (car dec) :funs)
+     (compile-local-decls-into-body (cdr dec) body local-exceptions))
     ((eq (car dec) :val-rec)
      (let ((name (sml-symbol (second dec))))
        `(let ((,name nil))
@@ -233,8 +287,11 @@
           ,body)))
     ((eq (car dec) :datatype)
      (compile-local-datatype-bindings (third dec) body))
-    ((member (car dec) '(:type :infix :datatype-replication :expr))
+    ((member (car dec) '(:type :infix :datatype-replication :expr :signature :open
+                         :structure-alias))
      body)
+    ((eq (car dec) :structure)
+     (compile-local-decls-into-body (third dec) body local-exceptions))
     ((eq (car dec) :exception)
      (let* ((name (sml-symbol (second dec)))
             (arg-type (getf (cddr dec) :arg-type)))
@@ -263,8 +320,9 @@
     (t
      (error "Unknown decl in let: ~A" dec))))
 
-(defun compile-top-level-val (pat expr &optional local-exceptions)
-  (let* ((expr-type (infer-sml-ast-type expr :package *sml-package*))
+(defun compile-top-level-val (pat expr &optional local-exceptions declared-type)
+  (let* ((expr-type (or declared-type
+                        (infer-sml-ast-type expr :package *sml-package*)))
          (typed-bindings (pattern-type-bindings pat expr-type)))
     (cond
       ((and (listp pat) (member (car pat) '(:pat-var :var)))
@@ -309,6 +367,14 @@
                       (sml-exception-constructor-tag ,(sml-symbol name))))
              (cdr ,it) ,(compile-pat payload local-exceptions))))
 
+(defun compile-ref-pattern (payload local-exceptions)
+  (let ((it (gensym "REF")))
+    `(guard1 ,it
+             (and (vectorp ,it)
+                  (= (length ,it) 2)
+                  (eq (aref ,it 0) :ref))
+             (aref ,it 1) ,(compile-pat payload local-exceptions))))
+
 (defun compile-pat (pat &optional local-exceptions)
   (cond
     ((numberp pat) pat)
@@ -317,18 +383,25 @@
     ((eq pat :wild) '_)
 
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
-     (if (exception-constructor-info (second pat) local-exceptions)
-         (compile-exception-ctor-pattern (second pat))
-         `',(sml-symbol (second pat))))
+     (cond
+       ((string= (second pat) "true") t)
+       ((string= (second pat) "false") nil)
+       ((string= (second pat) "nil") nil)
+       ((exception-constructor-info (second pat) local-exceptions)
+        (compile-exception-ctor-pattern (second pat)))
+       (t
+        `',(sml-symbol (second pat)))))
 
     ((and (listp pat) (eq (car pat) :pat-app))
-     (if (exception-constructor-info (second (second pat)) local-exceptions)
+     (if (string= (second (second pat)) "ref")
+         (compile-ref-pattern (third pat) local-exceptions)
+         (if (exception-constructor-info (second (second pat)) local-exceptions)
          (compile-exception-app-pattern (second (second pat))
                                         (third pat)
                                         local-exceptions)
          (let ((ctor (sml-symbol (second (second pat))))
                (payload (compile-pat (third pat) local-exceptions)))
-           `(cons ',ctor ,payload))))
+           `(cons ',ctor ,payload)))))
 
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
      (sml-symbol (second pat)))
@@ -350,8 +423,8 @@
 
     ((and (listp pat) (eq (car pat) :pat-nil)) 'nil)
     ((and (listp pat) (eq (car pat) :pat-cons))
-     `(cons ,(sml-symbol (second pat))
-            ,(sml-symbol (third pat))))
+     `(cons ,(compile-pat (second pat) local-exceptions)
+            ,(compile-pat (third pat) local-exceptions)))
     (t (error "Unknown pattern ~A" pat))))
 
 (defun compile-expr (ast &optional local-exceptions)
@@ -369,7 +442,14 @@
            (sml-symbol name))))
 
     ((and (listp ast) (eq (car ast) :ctor))
-     (sml-symbol (second ast)))
+     (cond
+       ((string= (second ast) "true") t)
+       ((string= (second ast) "false") nil)
+       ((string= (second ast) "nil") nil)
+       (t (sml-symbol (second ast)))))
+
+    ((and (listp ast) (eq (car ast) :typed))
+     (compile-expr (second ast) local-exceptions))
 
     ((and (listp ast) (eq (car ast) :selector))
      `(lambda (record)
@@ -474,7 +554,8 @@
   "Compiles top level declarations."
   (cond
     ((eq (car ast) :val)
-     (compile-top-level-val (second ast) (third ast) local-exceptions))
+     (compile-top-level-val (second ast) (third ast) local-exceptions
+                            (getf (cdddr ast) :type)))
     ((eq (car ast) :val-rec)
      (let ((name (sml-symbol (second ast))))
        `(progn
@@ -493,6 +574,10 @@
           (defparameter ,name ,(compile-fn-clauses (third ast) local-exceptions))
           ,(compile-type-registration-form name fun-type)
           ,(compile-export-form (list name)))))
+    ((eq (car ast) :funs)
+     `(progn ,@(mapcar (lambda (fun-dec)
+                         (compile-decl fun-dec local-exceptions))
+                       (cdr ast))))
 
     ;; Replace the :datatype block in compile-decl
     ((eq (car ast) :datatype)
@@ -524,6 +609,14 @@
         ,(compile-type-alias-form (second ast) (third ast))))
     ((eq (car ast) :infix)
      `(progn))
+    ((member (car ast) '(:signature :open :structure-alias))
+     `(progn))
+    ((eq (car ast) :structure)
+     `(progn
+        ,@(compile-program-decls (third ast) local-exceptions)
+        ,@(mapcar (lambda (member-name)
+                    (compile-structure-alias-form (second ast) member-name))
+                  (declarations-bound-names (third ast)))))
     ((eq (car ast) :expr)
      (compile-expr (second ast) local-exceptions))
     ((eq (car ast) :exception)

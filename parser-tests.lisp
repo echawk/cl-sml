@@ -101,7 +101,7 @@ tab	"
 
 (test parse-multi-clause-fun
   (is (equal '(:fun "length" ((((:pat-nil)) 0)
-                              (((:pat-cons "x" "xs"))
+                              (((:pat-cons (:pat-var "x") (:pat-var "xs")))
                                (:app (:app (:var "+") 1)
                                 (:app (:var "length") (:var "xs"))))))
              (parse 'cl-sml::sml-fun
@@ -154,8 +154,11 @@ tab	"
              (parse 'cl-sml::sml-expr "()"))))
 
 (test parse-list-patterns
-  (is (equal '(:pat-cons "x" "xs")
+  (is (equal '(:pat-cons (:pat-var "x") (:pat-var "xs"))
              (parse 'cl-sml::sml-pat "x :: xs")))
+  (is (equal '(:pat-cons (:pat-tuple (:pat-var "x") (:pat-var "y"))
+                         (:pat-var "rest"))
+             (parse 'cl-sml::sml-pat "(x, y) :: rest")))
   (is (equal '(:pat-nil)
              (parse 'cl-sml::sml-pat "[]"))))
 
