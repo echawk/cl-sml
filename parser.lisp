@@ -206,7 +206,21 @@
   (:lambda (token)
     (decode-sml-char-literal token)))
 
-(defrule sml-pat-ctor-head sml-capitalized-id
+(defrule sml-long-capitalized-tail
+  (or (and sml-id-raw "." sml-long-capitalized-tail)
+      sml-capitalized-id)
+  (:lambda (value)
+    (if (stringp value)
+        value
+        (format nil "~A.~A" (first value) (third value)))))
+
+(defrule sml-long-capitalized-id
+  (and (! sml-keyword) sml-id-raw "." sml-long-capitalized-tail)
+  (:destructure (not-kw first dot rest)
+    (declare (ignore not-kw dot))
+    (format nil "~A.~A" first rest)))
+
+(defrule sml-pat-ctor-head (or sml-long-capitalized-id sml-capitalized-id)
   (:lambda (name)
     `(:pat-ctor ,name)))
 
@@ -274,12 +288,22 @@
 (defrule sml-op-list (or "::" "@") (:text t))
 
 ;; --- NEW DATATYPE RULES ---
-;; Parse everything after "of" until we hit a "|" or ";"
-;; We do this because Lisp doesn't need the static type info at runtime!
-(defrule sml-type-blob (and ws "of" ws (+ (and (! (or "|" ";" #\Newline)) character)))
+(defrule sml-type-brace-block
+  (and "{" (* (or sml-type-brace-block
+              sml-type-paren-block
+              (and (! (or "{" "}")) character)))
+       "}")
+  (:text t)
+  (:lambda (text)
+    (trim-and-collapse-sml-type-text text)))
+
+(defrule sml-type-blob (and ws "of" ws (or sml-type-brace-block
+                                           (+ (and (! (or "|" ";" #\Newline)) character))))
   (:destructure (w1 of w2 chars)
     (declare (ignore w1 of w2))
-    (trim-and-collapse-sml-type-text (text chars))))
+    (if (stringp chars)
+        chars
+        (trim-and-collapse-sml-type-text (text chars)))))
 
 (defrule sml-type-text-id (and (! sml-end-keyword) sml-id-raw))
 
@@ -322,6 +346,19 @@
     (declare (ignore w1 colon w2))
     type))
 
+(defrule sml-pattern-type-text-inline
+  (+ (or sml-type-paren-block
+         (and (! (or ";" #\Newline "," ")" "]" "}" "::" "=>" "=" sml-end-keyword))
+              character)))
+  (:text t)
+  (:lambda (text)
+    (trim-and-collapse-sml-type-text text)))
+
+(defrule sml-pattern-type-ascription (and ws ":" (! ":") ws sml-pattern-type-text-inline)
+  (:destructure (w1 colon not-colon w2 type)
+    (declare (ignore w1 colon not-colon w2))
+    type))
+
 (defrule sml-type-params
   (or sml-tyvar
       (and "(" ws sml-tyvar (* (and ws "," ws sml-tyvar)) ws ")")))
@@ -361,7 +398,9 @@
     (declare (ignore exn w1 w2 semi))
     `(:exception ,name :arg-type ,arg-type)))
 
-(defrule sml-type-decl (and "type" ws sml-tycon-name ws "=" ws sml-type-text-to-eol ws (? ";"))
+(defrule sml-type-decl-rhs (or sml-type-brace-block sml-type-text-to-eol))
+
+(defrule sml-type-decl (and "type" ws sml-tycon-name ws "=" ws sml-type-decl-rhs ws (? ";"))
   (:destructure (type-kw w1 name w2 eq w3 target w4 semi)
     (declare (ignore type-kw w1 w2 eq w3 w4 semi))
     `(:type ,name ,target)))
@@ -400,7 +439,32 @@
 
 (defrule sml-structure-equals-struct (and "=" ws sml-struct-keyword))
 
+(defrule sml-module-paren-block
+  (and "(" (* (or sml-module-paren-block
+              sml-sig-block
+              sml-ignored-struct-block
+              (and (! (or "(" ")")) character)))
+       ")")
+  (:constant nil))
+
+(defrule sml-module-post-ascription
+  (and ws ":" (? ">") ws (or sml-sig-block sml-type-text-to-eol))
+  (:constant nil))
+
 (defrule sml-structure-ascription-char (and (! sml-structure-equals-struct) character))
+
+(defrule sml-structure-equals-functor-app
+  (and "=" ws sml-id ws sml-module-paren-block))
+
+(defrule sml-structure-functor-app-char
+  (and (! "=") character))
+
+(defrule sml-structure-functor-app
+  (and "structure" ws sml-id ws (* sml-structure-functor-app-char)
+       "=" ws sml-id ws sml-module-paren-block (? sml-module-post-ascription) ws (? ";"))
+  (:destructure (structure-kw w1 name w2 ascription eq w3 functor-name w4 args post w5 semi)
+    (declare (ignore structure-kw w1 w2 ascription eq w3 w4 args post w5 semi))
+    `(:structure-app ,name ,functor-name)))
 
 (defrule sml-structure-alias
   (and "structure" ws sml-id ws (* (and (! (or "where" "=")) character)) "=" ws sml-id ws (? ";"))
@@ -415,7 +479,15 @@
     (declare (ignore structure-kw w1 w2 ascription eq w3 struct-kw w4 w5 end-kw w6 semi))
     `(:structure ,name ,decs)))
 
-(defrule sml-decs (* (and ws (or sml-signature sml-structure-alias sml-structure sml-open
+(defrule sml-functor
+  (and "functor" ws sml-id ws (* sml-structure-ascription-char)
+       "=" ws sml-struct-keyword ws sml-decs ws sml-end-keyword ws (? ";"))
+  (:destructure (functor-kw w1 name w2 ascription eq w3 struct-kw w4 decs w5 end-kw w6 semi)
+    (declare (ignore functor-kw w1 w2 ascription eq w3 struct-kw w4 w5 end-kw w6 semi))
+    `(:functor ,name ,decs)))
+
+(defrule sml-decs (* (and ws (or sml-signature sml-functor sml-structure-functor-app
+                                 sml-structure-alias sml-structure sml-open
                                  sml-local sml-infix-decl sml-type-decl
                                  sml-datatype-replication sml-datatype
                                  sml-exception-alias sml-exception sml-val-rec
@@ -586,6 +658,10 @@
         ;; If it wasn't capitalized, it's not a valid pattern app in SML
         (error "Pattern application head must be a Constructor (Capitalized)"))))
 
+(defrule sml-pat-record-app (and sml-pat-app-head ws sml-pat-record)
+  (:destructure (ctor w pat) (declare (ignore w))
+    `(:pat-app ,ctor ,pat)))
+
 (defrule sml-pat-parens (and "(" ws sml-pat ws ")")
   (:destructure (lp w1 pat w2 rp) (declare (ignore lp w1 w2 rp)) pat))
 
@@ -655,11 +731,23 @@
 
 (defrule sml-pat-non-cons
   (or sml-pat-list
+      sml-pat-record-app
       sml-pat-app
       sml-pat-primary))
 
+(defrule sml-pat-ascribed (and sml-pat-non-cons (? sml-pattern-type-ascription))
+  (:destructure (pat type)
+    (if type
+        `(:pat-typed ,pat ,type)
+        pat)))
+
+(defrule sml-pat-as (and sml-pat-ascribed ws "as" ws sml-pat)
+  (:destructure (alias w1 as-kw w2 pat)
+    (declare (ignore w1 as-kw w2))
+    `(:pat-as ,alias ,pat)))
+
 ;; Parse the right-associative cons pattern: h :: t.
-(defrule sml-pat-cons (and sml-pat-non-cons ws "::" ws sml-pat)
+(defrule sml-pat-cons (and (or sml-pat-as sml-pat-ascribed) ws "::" ws sml-pat)
   (:destructure (h w1 op w2 t-pat) (declare (ignore w1 op w2))
     `(:pat-cons ,h ,t-pat)))
 
@@ -667,7 +755,8 @@
 ;; Order is critical! Complex patterns (cons, app) must come before simple vars
 
 (defrule sml-pat (or sml-pat-cons
-                     sml-pat-non-cons))
+                     sml-pat-as
+                     sml-pat-ascribed))
 
 ;; Case statement
 (defrule sml-match-branch (and ws "|" ws sml-pat ws "=>" ws sml-expr)
@@ -745,11 +834,14 @@
   (:destructure (v w1 pat type w2 eq w3 expr expr-type w4 semi)
     (declare (ignore v w1 w2 eq w3 w4 semi))
     (let* ((inline-type (and (consp expr) (eq (car expr) :typed) (third expr)))
+           (pat-type (and (consp pat) (eq (car pat) :pat-typed) (third pat)))
+           (value-pat (if pat-type (second pat) pat))
            (value-expr (if inline-type (second expr) expr)))
       (cond
-        (type `(:val ,pat ,value-expr :type ,type))
-        (expr-type `(:val ,pat ,value-expr :type ,expr-type))
-        (inline-type `(:val ,pat ,value-expr :type ,inline-type))
+        (type `(:val ,value-pat ,value-expr :type ,type))
+        (pat-type `(:val ,value-pat ,value-expr :type ,pat-type))
+        (expr-type `(:val ,value-pat ,value-expr :type ,expr-type))
+        (inline-type `(:val ,value-pat ,value-expr :type ,inline-type))
         (t `(:val ,pat ,expr))))))
 
 (defrule sml-val-rec (and "val" ws "rec" ws sml-id ws "=" ws sml-expr ws (? ";"))

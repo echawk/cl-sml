@@ -56,7 +56,61 @@
 
 (defparameter *sml-type-aliases* (make-hash-table :test #'equal))
 
+(defparameter *sml-structure-members* (make-hash-table :test #'equal))
+
+(defparameter *sml-functor-members* (make-hash-table :test #'equal))
+
 (defparameter *sml-exception-function-tags* (make-hash-table :test #'eq))
+
+(defun sml-module-key (package-name module-name)
+  (list (string-upcase (string package-name)) module-name))
+
+(defun normalize-sml-member-names (member-names)
+  (remove-duplicates (remove nil member-names) :test #'string=))
+
+(defun register-sml-structure-members (package-name structure-name member-names)
+  (setf (gethash (sml-module-key package-name structure-name) *sml-structure-members*)
+        (normalize-sml-member-names member-names)))
+
+(defun lookup-sml-structure-members (package-name structure-name)
+  (copy-list (gethash (sml-module-key package-name structure-name) *sml-structure-members*)))
+
+(defun register-sml-functor-members (package-name functor-name member-names)
+  (setf (gethash (sml-module-key package-name functor-name) *sml-functor-members*)
+        (normalize-sml-member-names member-names)))
+
+(defun lookup-sml-functor-members (package-name functor-name)
+  (copy-list (gethash (sml-module-key package-name functor-name) *sml-functor-members*)))
+
+(defun sml-symbol-in-package-name (name package-name)
+  (intern (string-upcase name) (ensure-sml-package package-name)))
+
+(defun alias-sml-module-member (package-name target-module source-module member-name)
+  (let* ((source (sml-symbol-in-package-name (format nil "~A.~A" source-module member-name)
+                                             package-name))
+         (target (sml-symbol-in-package-name (format nil "~A.~A" target-module member-name)
+                                             package-name)))
+    (when (boundp source)
+      (proclaim `(special ,target))
+      (setf (symbol-value target) (symbol-value source))
+      (let ((type (lookup-sml-binding-type source)))
+        (when type
+          (register-sml-binding-type target type)))
+      (export (list target) (ensure-sml-package package-name)))))
+
+(defun alias-sml-functor-application (package-name target-structure functor-name)
+  (let ((members (lookup-sml-functor-members package-name functor-name)))
+    (dolist (member members)
+      (alias-sml-module-member package-name target-structure functor-name member))
+    (register-sml-structure-members package-name target-structure members)
+    target-structure))
+
+(defun alias-sml-structure-alias (package-name target-structure source-structure)
+  (let ((members (lookup-sml-structure-members package-name source-structure)))
+    (dolist (member members)
+      (alias-sml-module-member package-name target-structure source-structure member))
+    (register-sml-structure-members package-name target-structure members)
+    target-structure))
 
 (defstruct (sml-exception-tag
             (:constructor %make-sml-exception-tag (name)))
@@ -429,6 +483,11 @@
 (defun sml-ln (v) (coerce (log v) 'double-float))
 (defun sml-real (v) (coerce v 'double-float))
 
+(defun sml-int-to-string (value)
+  (if (minusp value)
+      (format nil "~~~A" (- value))
+      (princ-to-string value)))
+
 (defun sml-cons (a) (lambda (b) (cons a b)))
 (defun sml-hd (l) (sml-list-hd l))
 (defun sml-tl (l) (sml-list-tl l))
@@ -679,6 +738,7 @@
     ("not" . #'sml-not)
     ("print" . #'sml-print)
     ("use" . #'sml-use)
+    ("Int.toString" . #'sml-int-to-string)
     ("Math.pi" . pi)
     ("true" . t)
     ("false" . nil)

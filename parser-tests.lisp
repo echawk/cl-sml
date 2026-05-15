@@ -156,6 +156,8 @@ tab	"
 (test parse-list-patterns
   (is (equal '(:pat-cons (:pat-var "x") (:pat-var "xs"))
              (parse 'cl-sml::sml-pat "x :: xs")))
+  (is (equal '(:pat-cons (:pat-typed (:pat-var "x") "int") (:pat-nil))
+             (parse 'cl-sml::sml-pat "[x : int]")))
   (is (equal '(:pat-cons (:pat-tuple (:pat-var "x") (:pat-var "y"))
                          (:pat-var "rest"))
              (parse 'cl-sml::sml-pat "(x, y) :: rest")))
@@ -222,7 +224,17 @@ tab	"
 
 (test parse-constructor-app-pattern
   (is (equal '(:pat-app (:pat-ctor "SOME") (:pat-var "x"))
-             (parse 'cl-sml::sml-pat "SOME x"))))
+             (parse 'cl-sml::sml-pat "SOME x")))
+  (is (equal '(:pat-app (:pat-ctor "IO.Io") :wild)
+             (parse 'cl-sml::sml-pat "IO.Io _"))))
+
+(test parse-shallow-module-functors
+  (is (equal '(:program
+               (:functor "F" ((:val (:pat-var "x") 1)))
+               (:structure-app "A" "F"))
+             (parse 'cl-sml::sml-program
+                    "functor F(X : S) :> T where type u = X.u = struct val x = 1 end
+                     structure A = F(structure X = Y)"))))
 
 (test parse-standalone-ctor-branch
       (is (equal '((:pat-ctor "NONE") 0)
