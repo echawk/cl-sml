@@ -324,7 +324,20 @@ tab	"
                (:structure-app "A" "F" "(structure X = Y)"))
              (parse 'cl-sml::sml-program
                     "functor F(X : S) :> T where type u = X.u = struct val x = 1 end
-                     structure A = F(structure X = Y)"))))
+                     structure A = F(structure X = Y)")))
+  (is (equal '(:program
+               (:functor "Anonymous"
+                         ((:fun "apply"
+                                ((((:pat-var "x")) (:app (:var "transform")
+                                                        (:var "x"))))))
+                         :param nil))
+             (parse 'cl-sml::sml-program
+                    "functor Anonymous(
+                       type item;
+                       val transform : item -> item
+                     ) = struct
+                       fun apply x = transform x
+                     end"))))
 
 (test parse-standalone-ctor-branch
       (is (equal '((:pat-ctor "NONE") 0)

@@ -15,6 +15,31 @@
 
 (defvar *sml-constructor-symbol-env* nil)
 
+(defvar *sml-hoisted-forms* nil)
+
+(defvar *sml-hoisting-enabled* nil)
+
+(defvar *sml-hoisted-name-prefix* nil)
+
+(defvar *sml-hoisted-form-counter* 0)
+
+(defun compile-with-hoisted-sml-forms (compiler-thunk &key identity)
+  (let ((*sml-hoisted-forms* nil)
+        (*sml-hoisting-enabled* t)
+        (*sml-hoisted-name-prefix*
+          (format nil "%CL-SML-CASE-ACTION-~36R-"
+                  (sxhash (or identity (gensym "SML-COMPILATION-")))))
+        (*sml-hoisted-form-counter* 0))
+    (let ((form (funcall compiler-thunk)))
+      (if *sml-hoisted-forms*
+          `(progn ,@(nreverse *sml-hoisted-forms*) ,form)
+          form))))
+
+(defun next-hoisted-sml-function-name ()
+  (intern (format nil "~A~D" *sml-hoisted-name-prefix*
+                  (incf *sml-hoisted-form-counter*))
+          (ensure-sml-package *sml-package*)))
+
 (defparameter *sml-binary-infix-value-names*
   '("+" "-" "*" "/" "div" "mod" "^" "@" "::" ":=" "=" "<>" "<" "<=" ">" ">="
     "o" "before" "-->" "|->" "@@" "$$" "plus" "plusVE" "plusTE" "plusSE"
@@ -166,6 +191,16 @@
                        (setf search-start (or eq-pos after-val)))
                      (setf search-start after-val)))))
     (nreverse bindings)))
+
+(defun functor-argument-declarations (args-text)
+  (let ((inner (trim-sml-functor-arg-text args-text)))
+    (unless (simple-sml-id-text-p inner)
+      (esrap:parse 'sml-decs inner))))
+
+(defun functor-argument-module-name (target-name args-text)
+  (format nil "~A.%ARG-~36R"
+          target-name
+          (sxhash args-text)))
 
 (defun module-local-structure-prefixes (decs module-name)
   (let ((prefixes nil))
@@ -343,6 +378,11 @@
           (or (lookup-sml-structure-members (target-sml-package-name) resolved-name)
               (lookup-sml-functor-members (target-sml-package-name) resolved-name))))))
 
+(defun qualify-structure-member-names (structure-name members)
+  (mapcar (lambda (member)
+            (qualify-sml-name structure-name member))
+          members))
+
 (defun declarations-bound-names (decs &optional local-structures)
   (let ((members nil)
         (structures local-structures))
@@ -355,11 +395,28 @@
                          members))))
         (:structure
          (let ((structure-members (declarations-bound-names (third dec) structures)))
-           (push (cons (second dec) structure-members) structures)))
+           (push (cons (second dec) structure-members) structures)
+           (setf members
+                 (append (qualify-structure-member-names
+                          (second dec) structure-members)
+                         members))))
         (:structure-app
          (let ((structure-members
                  (lookup-sml-functor-members (target-sml-package-name) (third dec))))
-           (push (cons (second dec) structure-members) structures)))
+           (push (cons (second dec) structure-members) structures)
+           (setf members
+                 (append (qualify-structure-member-names
+                          (second dec) structure-members)
+                         members))))
+        (:structure-alias
+         (let ((structure-members
+                 (lookup-sml-module-members-for-compiler
+                  (third dec) structures)))
+           (push (cons (second dec) structure-members) structures)
+           (setf members
+                 (append (qualify-structure-member-names
+                          (second dec) structure-members)
+                         members))))
         (otherwise
          (setf members (append (declaration-direct-bound-names dec) members)))))
     (remove-duplicates (nreverse members) :test #'string=)))
@@ -499,6 +556,146 @@
   (if (= (length params) 1)
       (first params)
       `(:pat-tuple ,@params)))
+
+(defun literal-case-pattern-value (pat)
+  "Return PAT's EQL-comparable value and whether PAT is a literal case key."
+  (cond
+    ((or (integerp pat) (characterp pat))
+     (values pat t))
+    ((and (listp pat) (eq (car pat) :pat-typed))
+     (literal-case-pattern-value (second pat)))
+    ((and (listp pat) (member (car pat) '(:pat-ctor :ctor) :test #'eq))
+     (cond
+       ((string= (second pat) "true") (values t t))
+       ((string= (second pat) "false") (values nil t))
+       (t (values nil nil))))
+    (t
+     (values nil nil))))
+
+(defun literal-case-branches-p (branches)
+  (every (lambda (branch)
+           (or (eq (first branch) :wild)
+               (nth-value 1 (literal-case-pattern-value (first branch)))))
+         branches))
+
+(defun compile-case-action-thunk (form)
+  `(invoke-sml-case-action (lambda () ,form)))
+
+(defun compile-literal-case (test branches local-exceptions lexical-env)
+  (let ((clauses nil)
+        (has-default nil))
+    (dolist (branch branches)
+      (if (eq (first branch) :wild)
+          (progn
+            (push `(otherwise
+                     ,(compile-case-action-thunk
+                       (compile-expr (second branch) local-exceptions lexical-env)))
+                  clauses)
+            (setf has-default t)
+            (return))
+          (multiple-value-bind (value literalp)
+              (literal-case-pattern-value (first branch))
+            (declare (ignore literalp))
+            (push `((,value)
+                    ,(compile-case-action-thunk
+                      (compile-expr (second branch) local-exceptions lexical-env)))
+                  clauses))))
+    `(case ,(compile-expr test local-exceptions lexical-env)
+       ,@(nreverse clauses)
+       ,@(unless has-default
+           `((otherwise (sml-raise-named-exception "Match")))))))
+
+(defun tuple-literal-discriminant (pat)
+  (when (and (listp pat) (eq (car pat) :pat-typed))
+    (setf pat (second pat)))
+  (when (and (listp pat)
+             (eq (car pat) :pat-tuple)
+             (integerp (second pat)))
+    (values (second pat) t)))
+
+(defun tuple-dispatch-case-branches-p (branches)
+  (and (>= (length branches) 12)
+       (eq (first (car (last branches))) :wild)
+       (every (lambda (branch)
+                (nth-value 1 (tuple-literal-discriminant (first branch))))
+              (butlast branches))))
+
+(defun group-tuple-dispatch-branches (branches)
+  (let ((groups nil))
+    (dolist (branch branches groups)
+      (multiple-value-bind (key presentp)
+          (tuple-literal-discriminant (first branch))
+        (declare (ignore presentp))
+        (let ((group (assoc key groups)))
+          (if group
+              (setf (cdr group) (append (cdr group) (list branch)))
+              (setf groups (append groups (list (list key branch))))))))))
+
+(defun lexical-environment-symbols (lexical-env)
+  (remove-duplicates
+   (remove-if-not #'symbolp (mapcar #'cdr lexical-env))
+   :test #'eq))
+
+(defun compile-hoisted-case-action (ast local-exceptions branch-env)
+  (let ((body (compile-expr ast local-exceptions branch-env)))
+    (if *sml-hoisting-enabled*
+        (let ((name (next-hoisted-sml-function-name))
+              (parameters (lexical-environment-symbols branch-env)))
+          (push `(defun ,name ,parameters ,body) *sml-hoisted-forms*)
+          `(,name ,@parameters))
+        body)))
+
+(defun compile-trivia-case-clause (branch local-exceptions lexical-env
+                                   &key hoist-action)
+  (let* ((var-map (pattern-variable-map (first branch) local-exceptions))
+         (branch-env (append var-map lexical-env)))
+    `(,(compile-pat (first branch) local-exceptions branch-env)
+      ,(if hoist-action
+           (compile-hoisted-case-action (second branch)
+                                        local-exceptions branch-env)
+           (compile-expr (second branch) local-exceptions branch-env)))))
+
+(defun compile-tuple-dispatch-group (group value fallback
+                                     local-exceptions lexical-env)
+  (let ((clauses
+          (mapcar (lambda (branch)
+                    (compile-trivia-case-clause
+                     branch local-exceptions lexical-env
+                     :hoist-action *sml-hoisting-enabled*))
+                  (rest group))))
+    (if *sml-hoisting-enabled*
+        (let ((name (next-hoisted-sml-function-name))
+              (dispatch-argument (gensym "DISPATCH-VALUE"))
+              (fallback-argument (gensym "DISPATCH-FALLBACK"))
+              (parameters (lexical-environment-symbols lexical-env)))
+          (push `(defun ,name (,dispatch-argument ,fallback-argument ,@parameters)
+                   (trivia:match ,dispatch-argument
+                     ,@clauses
+                     (_ (funcall ,fallback-argument))))
+                *sml-hoisted-forms*)
+          `(,name ,value ,fallback ,@parameters))
+        `(trivia:match ,value
+           ,@clauses
+           (_ (funcall ,fallback))))))
+
+(defun compile-tuple-dispatch-case (test branches local-exceptions lexical-env)
+  (let* ((value (gensym "CASE-VALUE"))
+         (fallback (gensym "CASE-FALLBACK"))
+         (default-branch (car (last branches)))
+         (groups (group-tuple-dispatch-branches (butlast branches))))
+    `(let ((,value ,(compile-expr test local-exceptions lexical-env))
+           (,fallback
+             (lambda ()
+               ,(compile-expr (second default-branch)
+                              local-exceptions lexical-env))))
+       (case (second ,value)
+         ,@(mapcar
+            (lambda (group)
+              `((,(first group))
+                ,(compile-tuple-dispatch-group
+                  group value fallback local-exceptions lexical-env)))
+            groups)
+         (otherwise (funcall ,fallback))))))
 
 (defun compile-fn-clauses (clauses &optional local-exceptions function-name outer-lexical-env)
   (let* ((arity (length (first (first clauses))))
@@ -914,14 +1111,19 @@
                      ,(compile-expr arg local-exceptions lexical-env)))))
 
     ((and (listp ast) (eq (car ast) :case))
-     `(trivia:match ,(compile-expr (second ast) local-exceptions lexical-env)
-        ,@(mapcar (lambda (branch)
-	                    (let* ((var-map (pattern-variable-map (first branch)
-	                                                          local-exceptions))
-                           (branch-env (append var-map lexical-env)))
-                      `(,(compile-pat (first branch) local-exceptions branch-env)
-                        ,(compile-expr (second branch) local-exceptions branch-env))))
-                  (cddr ast))))
+     (let ((branches (cddr ast)))
+       (cond
+         ((literal-case-branches-p branches)
+          (compile-literal-case (second ast) branches local-exceptions lexical-env))
+         ((tuple-dispatch-case-branches-p branches)
+          (compile-tuple-dispatch-case (second ast) branches
+                                       local-exceptions lexical-env))
+         (t
+          `(trivia:match ,(compile-expr (second ast) local-exceptions lexical-env)
+             ,@(mapcar (lambda (branch)
+                         (compile-trivia-case-clause
+                          branch local-exceptions lexical-env))
+                       branches))))))
 
     ((and (listp ast) (eq (car ast) :handle))
      (let ((branches (third ast))
@@ -1096,15 +1298,46 @@
        ,(current-qualified-sml-name (second ast))
        ,(resolve-structure-prefix (third ast))))
 	    ((eq (car ast) :structure-app)
-	     (let ((argument (functor-argument-structure-name (fourth ast)))
-	           (value-bindings (functor-argument-value-bindings (fourth ast))))
-	       `(alias-sml-functor-application
-	         ,(target-sml-package-name)
-	         ,(current-qualified-sml-name (second ast))
-	         ,(resolve-structure-prefix (third ast))
-	         :argument ,(and argument
-	                         (resolve-structure-prefix argument))
-	         :value-bindings ',value-bindings)))
+	     (let* ((args-text (fourth ast))
+	            (target-name (current-qualified-sml-name (second ast)))
+	            (argument (functor-argument-structure-name args-text))
+	            (argument-decs (functor-argument-declarations args-text))
+	            (argument-module
+	              (and argument-decs
+	                   (functor-argument-module-name target-name args-text)))
+	            (argument-members
+	              (and argument-decs
+	                   (declarations-bound-names argument-decs)))
+	            (argument-prefixes
+	              (and argument-decs
+	                   (module-local-structure-prefixes argument-decs
+	                                                    argument-module)))
+	            (argument-forms
+	              (and argument-decs
+	                   (let ((*sml-module-prefix* argument-module)
+	                         (*sml-local-structure-prefixes*
+	                           (append argument-prefixes
+	                                   *sml-local-structure-prefixes*)))
+	                     (compile-program-decls argument-decs
+	                                            local-exceptions))))
+	            (value-bindings
+	              (unless argument-decs
+	                (functor-argument-value-bindings args-text))))
+	       `(progn
+	          ,@argument-forms
+	          ,@(when argument-module
+	              `((register-sml-structure-members
+	                 ,(target-sml-package-name)
+	                 ,argument-module
+	                 ',argument-members)))
+	          (alias-sml-functor-application
+	           ,(target-sml-package-name)
+	           ,target-name
+	           ,(resolve-structure-prefix (third ast))
+	           :argument ,(or argument-module
+	                          (and argument
+	                               (resolve-structure-prefix argument)))
+	           :value-bindings ',value-bindings))))
 	    ((eq (car ast) :functor)
 	     (let* ((module-name (current-qualified-sml-name (second ast)))
 	            (param-name (getf (cdddr ast) :param))
@@ -1116,12 +1349,15 @@
                                                                  *sml-local-structure-prefixes*)))
 	                     (compile-program-decls (third ast) local-exceptions))))
 	       `(progn
-	          ,@forms
 	          (register-sml-functor-members
 	           ,(target-sml-package-name)
 	           ,module-name
 	           ',members
-	           ,param-name))))
+	           ,param-name)
+	          (register-sml-functor-instantiator
+	           ,(target-sml-package-name)
+	           ,module-name
+	           (lambda () ,@forms)))))
     ((eq (car ast) :structure)
      (let* ((module-name (current-qualified-sml-name (second ast)))
             (members (declarations-bound-names (third ast)))

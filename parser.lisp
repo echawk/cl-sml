@@ -194,7 +194,14 @@
                             chars
                             :start start)
                            (length chars))))
-              (subseq chars start end))))))))
+              (let ((colon
+                      (position-if-not
+                       (lambda (ch)
+                         (member ch '(#\Space #\Tab #\Newline #\Return)))
+                       chars
+                       :start end)))
+                (when (and colon (char= (char chars colon) #\:))
+                  (subseq chars start end))))))))))
 
 (defrule sml-comment-char
   (and (! "(*") (! "*)") character))

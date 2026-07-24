@@ -1,5 +1,6 @@
 (defpackage #:cl-sml-runtime-tests
   (:use #:cl #:fiveam #:cl-sml)
+  (:shadow #:sml-value)
   (:import-from #:esrap #:parse))
 
 (in-package #:cl-sml-runtime-tests)
@@ -105,6 +106,29 @@
     (is (= 10 (cl-sml::sml-deref cell)))
     (is (equal '(:tuple) (funcall (cl-sml::sml-assign cell) 42)))
     (is (= 42 (cl-sml::sml-deref cell)))))
+
+(test runtime-text-io-output-primitives
+  (let ((stdout (make-string-output-stream))
+        (stderr (make-string-output-stream))
+        (output-result nil)
+        (output1-result nil)
+        (flush-result nil))
+    (let ((*standard-output* stdout)
+          (*error-output* stderr))
+      (setf output-result
+            (funcall (cl-sml::sml-basis-primitive "TextIO.output")
+                     (list :tuple :text-io-stdout "hello"))
+            output1-result
+            (funcall (cl-sml::sml-basis-primitive "TextIO.output1")
+                     (list :tuple :text-io-stderr #\!))
+            flush-result
+            (funcall (cl-sml::sml-basis-primitive "TextIO.flushOut")
+                     :text-io-stdout)))
+    (is (equal '(:tuple) output-result))
+    (is (equal '(:tuple) output1-result))
+    (is (equal '(:tuple) flush-result))
+    (is (string= "hello" (get-output-stream-string stdout)))
+    (is (string= "!" (get-output-stream-string stderr)))))
 
 (test integration-while-expression
   (eval-sml-program
@@ -339,6 +363,49 @@
       val opened_ctor_result = CtorUser.get (CtorSource.Box 12);")
     (is (= 12 (sml-value "opened_ctor_result" *test-sml-package*)))))
 
+(test integration-anonymous-functor-argument-declarations
+  (let ((*test-sml-package* "SML.ANONYMOUS-FUNCTOR-ARGUMENT-TEST"))
+    (eval-sml-program
+     "functor ApplyFn(
+        type item;
+        val transform : item -> item
+      ) =
+      struct
+        val apply = transform;
+      end;
+      structure Increment = ApplyFn(
+        type item = int;
+        fun transform x = x + 1
+      );
+      val anonymous_functor_result = Increment.apply 41;")
+    (is (= 42
+           (sml-value "anonymous_functor_result" *test-sml-package*)))
+    (eval-sml-program
+     "functor NestedApplyFn(
+        structure Operations : sig
+          val transform : int -> int
+        end
+      ) =
+      struct
+        structure Exposed = Operations;
+        open Exposed;
+        val apply = transform;
+      end;
+      structure Operations =
+      struct
+        fun transform x = x + 2;
+      end;
+      structure NestedIncrement = NestedApplyFn(
+        structure Operations = Operations
+      );
+      val nested_functor_result = NestedIncrement.apply 40;")
+    (is (= 42
+           (sml-value "nested_functor_result" *test-sml-package*)))
+    (is (= 42
+           (funcall (sml-value "NestedIncrement.Exposed.transform"
+                               *test-sml-package*)
+                    40)))))
+
 (test integration-val-rec-and-symbol-export
   (eval-sml-program
    "val rec fact = fn 0 => 1 | n => n * fact (n - 1);
@@ -412,5 +479,39 @@
     (is (equal '(:fn "string" "exn")
                (cl-sml:lookup-sml-binding-type "Fail" package-name)))
     (is (string= "int" (cl-sml::lookup-sml-type-alias "int" package-name)))))
+
+(test common-lisp-sml-interop-api
+  (eval-sml-program "val interop_answer = 42; fun interop_add x y = x + y;")
+  (setf (cl-sml:sml-value "interop_mutable" *test-sml-package*) 9)
+  (is (= 42 (cl-sml:sml-value "interop_answer" *test-sml-package*)))
+  (is (functionp (cl-sml:sml-function "interop_add" *test-sml-package*)))
+  (is (= 7 (cl-sml:with-sml-package (*test-sml-package*)
+             (cl-sml:call-sml "interop_add" 3 4))))
+  (is (= 9 (cl-sml:sml-value "interop_mutable" *test-sml-package*))))
+
+(test integration-large-literal-case
+  (let ((branches
+          (with-output-to-string (stream)
+            (loop for i below 180
+                  do (format stream "~:[~; | ~]~D => ~D"
+                             (plusp i) i (* i i)))
+            (write-string " | _ => ~1" stream))))
+    (eval-sml-program
+     (format nil "fun dispatch n = case n of ~A; val dispatched = dispatch 173;"
+             branches))
+    (is (= (* 173 173) (sml-value "dispatched")))))
+
+(test integration-large-tuple-dispatch-case
+  (let ((branches
+          (with-output-to-string (stream)
+            (loop for i below 24
+                  do (format stream "~:[~; | ~](~D, x) => x + ~D"
+                             (plusp i) i i))
+            (write-string " | _ => ~1" stream))))
+    (eval-sml-program
+     (format nil "fun tupleDispatch pair = case pair of ~A;~%~
+                  val tupleDispatched = tupleDispatch(17, 25);"
+             branches))
+    (is (= 42 (sml-value "tupleDispatched")))))
 
 (fiveam:run! 'cl-sml-runtime-suite)

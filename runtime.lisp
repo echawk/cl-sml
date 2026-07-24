@@ -52,6 +52,8 @@
 
 (defparameter *sml-current-directory* nil)
 
+(defparameter *hamlet-image-package* "SML.HAMLET-IMAGE")
+
 (defparameter *sml-binding-types* (make-hash-table :test #'eq))
 
 (defparameter *sml-constructor-symbols* (make-hash-table :test #'eq))
@@ -63,6 +65,8 @@
 (defparameter *sml-functor-members* (make-hash-table :test #'equal))
 
 (defparameter *sml-functor-params* (make-hash-table :test #'equal))
+
+(defparameter *sml-functor-instantiators* (make-hash-table :test #'equal))
 
 (defparameter *sml-exception-function-tags* (make-hash-table :test #'eq))
 
@@ -81,17 +85,43 @@
 
 (defun register-sml-functor-members (package-name functor-name member-names
                                       &optional param-name)
-  (setf (gethash (sml-module-key package-name functor-name) *sml-functor-members*)
-        (normalize-sml-member-names member-names))
-  (when param-name
-    (setf (gethash (sml-module-key package-name functor-name) *sml-functor-params*)
-          param-name)))
+  (let ((key (sml-module-key package-name functor-name)))
+    (setf (gethash key *sml-functor-members*)
+          (normalize-sml-member-names member-names))
+    (if param-name
+        (setf (gethash key *sml-functor-params*) param-name)
+        (remhash key *sml-functor-params*))))
 
 (defun lookup-sml-functor-members (package-name functor-name)
   (copy-list (gethash (sml-module-key package-name functor-name) *sml-functor-members*)))
 
 (defun lookup-sml-functor-param (package-name functor-name)
   (gethash (sml-module-key package-name functor-name) *sml-functor-params*))
+
+(defun register-sml-functor-instantiator (package-name functor-name instantiator)
+  (setf (gethash (sml-module-key package-name functor-name)
+                 *sml-functor-instantiators*)
+        instantiator))
+
+(defun lookup-sml-functor-instantiator (package-name functor-name)
+  (gethash (sml-module-key package-name functor-name)
+           *sml-functor-instantiators*))
+
+(defun sml-module-descendant-member-names (package-name module-name)
+  (let ((package (string-upcase (string package-name)))
+        (prefix (format nil "~A." module-name))
+        (members nil))
+    (maphash
+     (lambda (key child-members)
+       (let ((child-package (first key))
+             (child-name (second key)))
+         (when (and (string= package child-package)
+                    (string-prefix-p prefix child-name))
+           (let ((relative-name (subseq child-name (length prefix))))
+             (dolist (member child-members)
+               (push (format nil "~A.~A" relative-name member) members))))))
+     *sml-structure-members*)
+    (normalize-sml-member-names members)))
 
 (defun register-sml-constructor (symbol &optional canonical-symbol)
   (setf (gethash symbol *sml-constructor-symbols*) (or canonical-symbol symbol))
@@ -144,12 +174,24 @@
   (let ((pairs nil))
     (labels ((add-binding (member target-name)
                (let ((param-symbol
-                       (sml-symbol-in-package-name (format nil "~A.~A" param-name member)
+                       (sml-symbol-in-package-name (if param-name
+                                                       (format nil "~A.~A"
+                                                               param-name member)
+                                                       member)
                                                    package-name))
                      (target-symbol
                        (sml-symbol-in-package-name target-name package-name)))
                  (proclaim `(special ,param-symbol))
-                 (push (cons param-symbol target-symbol) pairs))))
+                 (unless (assoc param-symbol pairs)
+                   (push (cons param-symbol target-symbol) pairs))))
+             (add-argument-member (member)
+               (let ((target-name (format nil "~A.~A" argument member)))
+                 (add-binding member target-name)
+                 (unless param-name
+                   (let ((separator (position #\. member :from-end t)))
+                     (when separator
+                       (add-binding (subseq member (1+ separator))
+                                    target-name)))))))
       (dolist (binding value-bindings)
         (add-binding (car binding) (cdr binding)))
       (when argument
@@ -157,8 +199,45 @@
                            (lookup-sml-functor-members package-name argument)
                            '("compare"))))
           (dolist (member members)
-            (add-binding member (format nil "~A.~A" argument member))))))
-    (nreverse pairs)))
+            (add-argument-member member))))
+    (nreverse pairs))))
+
+(defun sml-functor-structure-bindings (package-name param-name argument)
+  (let ((bindings nil))
+    (when argument
+      (dolist (member (lookup-sml-structure-members package-name argument))
+        (loop for separator = (position #\. member)
+              then (position #\. member :start (1+ separator))
+              while separator
+              for prefix = (subseq member 0 separator)
+              for remainder = (subseq member (1+ separator))
+              for formal = (if param-name
+                               (format nil "~A.~A" param-name prefix)
+                               prefix)
+              for binding = (assoc formal bindings :test #'string=)
+              do (if binding
+                     (pushnew remainder (cdr binding) :test #'string=)
+                     (push (list formal remainder) bindings)))))
+    bindings))
+
+(defun call-with-sml-functor-structure-bindings (package-name bindings thunk)
+  (let ((saved nil))
+    (unwind-protect
+         (progn
+           (dolist (binding bindings)
+             (let ((key (sml-module-key package-name (first binding))))
+               (multiple-value-bind (members presentp)
+                   (gethash key *sml-structure-members*)
+                 (push (list key members presentp) saved))
+               (register-sml-structure-members package-name
+                                               (first binding)
+                                               (rest binding))))
+           (funcall thunk))
+      (dolist (entry saved)
+        (if (third entry)
+            (setf (gethash (first entry) *sml-structure-members*)
+                  (second entry))
+            (remhash (first entry) *sml-structure-members*))))))
 
 (defun alias-sml-module-member (package-name target-module source-module member-name
                                 &optional dynamic-bindings)
@@ -190,11 +269,26 @@
                                       &key argument value-bindings)
   (let* ((members (lookup-sml-functor-members package-name functor-name))
          (param-name (lookup-sml-functor-param package-name functor-name))
-         (dynamic-bindings (and param-name
+         (instantiator (lookup-sml-functor-instantiator package-name functor-name))
+         (dynamic-bindings (and (or argument value-bindings)
                                 (sml-functor-binding-symbols package-name
                                                              param-name
                                                              argument
-                                                             value-bindings))))
+                                                             value-bindings)))
+         (structure-bindings
+           (sml-functor-structure-bindings package-name param-name argument)))
+    (when instantiator
+      (call-with-sml-functor-bindings
+       dynamic-bindings
+       (lambda ()
+         (call-with-sml-functor-structure-bindings
+          package-name structure-bindings instantiator)))
+      (setf members
+            (normalize-sml-member-names
+             (append members
+                     (sml-module-descendant-member-names
+                      package-name functor-name))))
+      (register-sml-functor-members package-name functor-name members param-name))
     (dolist (member members)
       (alias-sml-module-member package-name
                                target-structure
@@ -318,6 +412,47 @@
          (intern symbol-name pkg))
         (symbol symbol)
         (t (intern symbol-name pkg))))))
+
+(defun sml-value (name &optional (package *sml-package*))
+  "Return the SML value named NAME in PACKAGE, or signal an unbound error."
+  (let ((symbol (sml-symbol name package)))
+    (if (boundp symbol)
+        (symbol-value symbol)
+        (error "Unbound SML value ~A in package ~A"
+               name (package-name (ensure-sml-package package))))))
+
+(defun (setf sml-value) (value name &optional (package *sml-package*))
+  (setf (symbol-value (sml-symbol name package)) value))
+
+(defun sml-function (name &optional (package *sml-package*))
+  "Return the unary function stored in the SML value namespace."
+  (let ((value (sml-value name package)))
+    (if (functionp value)
+        value
+        (error "SML value ~A in package ~A is not a function"
+               name (package-name (ensure-sml-package package))))))
+
+(defmacro with-sml-package ((package) &body body)
+  `(let ((*sml-package* (ensure-sml-package ,package)))
+     ,@body))
+
+(defun call-sml (name &rest arguments)
+  "Apply curried SML function NAME to ARGUMENTS in the current SML package."
+  (reduce (lambda (function argument)
+            (funcall function argument))
+          arguments
+          :initial-value (sml-function name *sml-package*)))
+
+(defun hamlet-image-entry-point ()
+  (with-sml-package (*hamlet-image-package*)
+    (let ((arguments (uiop:command-line-arguments)))
+      (if arguments
+          (call-sml "Sml.execFiles" arguments)
+          (call-sml "Sml.execSession" (sml-unit))))))
+
+(declaim (notinline invoke-sml-case-action))
+(defun invoke-sml-case-action (thunk)
+  (funcall thunk))
 
 (defun export-sml-symbols (symbols &optional (package *sml-package*))
   (when symbols
@@ -765,6 +900,30 @@
 (defun sml-word-shift-right (tuple)
   (ash (sml-tuple-first tuple) (- (sml-tuple-second tuple))))
 
+(defun sml-text-io-stream (stream)
+  (case stream
+    (:text-io-stdin *standard-input*)
+    (:text-io-stdout *standard-output*)
+    (:text-io-stderr *error-output*)
+    (otherwise
+     (if (streamp stream)
+         stream
+         (error "Invalid SML TextIO stream: ~S" stream)))))
+
+(defun sml-text-io-output (tuple)
+  (write-string (sml-tuple-second tuple)
+                (sml-text-io-stream (sml-tuple-first tuple)))
+  (sml-unit))
+
+(defun sml-text-io-output1 (tuple)
+  (write-char (sml-tuple-second tuple)
+              (sml-text-io-stream (sml-tuple-first tuple)))
+  (sml-unit))
+
+(defun sml-text-io-flush-out (stream)
+  (finish-output (sml-text-io-stream stream))
+  (sml-unit))
+
 (defun sml-basis-primitive (name)
   (or (cdr (assoc name
                   `(("General.exnName" . ,#'sml-exn-name-primitive)
@@ -829,6 +988,9 @@
                     ("TextIO.stdIn" . ,(sml-constant-primitive :text-io-stdin))
                     ("TextIO.stdOut" . ,(sml-constant-primitive :text-io-stdout))
                     ("TextIO.stdErr" . ,(sml-constant-primitive :text-io-stderr))
+                    ("TextIO.output" . ,#'sml-text-io-output)
+                    ("TextIO.output1" . ,#'sml-text-io-output1)
+                    ("TextIO.flushOut" . ,#'sml-text-io-flush-out)
                     ("OS.FileSys.getDir" . ,(sml-constant-primitive
                                              (namestring *default-pathname-defaults*)))
                     ("Math.e" . ,(sml-constant-primitive (coerce (exp 1) 'double-float)))

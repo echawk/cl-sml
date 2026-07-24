@@ -7,7 +7,12 @@
            #:compile-sml-declarations-string
            #:compile-sml-program-string
            #:compile-sml-file
+           #:emit-sml-file
            #:load-sml-file
+           #:sml-value
+           #:sml-function
+           #:with-sml-package
+           #:call-sml
            #:lookup-sml-binding-type
            #:sml-type->string
            #:repl))
