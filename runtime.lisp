@@ -23,9 +23,12 @@
                  (package (package-name designator))
                  (string (string-upcase designator))
                  (symbol (string-upcase (symbol-name designator)))))
-         (existing (find-package name)))
-    (or existing
-        (make-package name :use '("COMMON-LISP")))))
+         (existing (find-package name))
+         (package (or existing
+                      (make-package name :use '("COMMON-LISP")))))
+    (when (and (null existing) (fboundp 'initialize-sml-package))
+      (initialize-sml-package package))
+    package))
 
 (defun current-sml-package-name (&optional (package *package*))
   (let ((name (package-name (find-package package))))
@@ -54,6 +57,35 @@
 
 (defparameter *hamlet-image-package* "SML.HAMLET-IMAGE")
 
+(defvar *sml-type-checker* nil)
+
+(define-condition sml-static-type-error (error)
+  ((source :initarg :source :reader sml-static-type-error-source)
+   (filename :initarg :filename :initform nil
+             :reader sml-static-type-error-filename)
+   (cause :initarg :cause :reader sml-static-type-error-cause))
+  (:report (lambda (condition stream)
+             (format stream "SML static elaboration failed~@[ for ~A~]: ~A"
+                     (sml-static-type-error-filename condition)
+                     (sml-static-type-error-cause condition)))))
+
+(defgeneric type-check-sml-string-using (checker source &key filename))
+
+(defmethod type-check-sml-string-using ((checker t) source &key filename)
+  (declare (ignore source filename))
+  (error "Unsupported SML type checker: ~S" checker))
+
+(defun type-check-sml-string (source &key (checker *sml-type-checker*) filename)
+  "Run CHECKER on SOURCE, preserving checker-specific session state."
+  (when checker
+    (if (functionp checker)
+        (funcall checker source filename)
+        (type-check-sml-string-using checker source :filename filename))))
+
+(defmacro with-sml-type-checker ((checker) &body body)
+  `(let ((*sml-type-checker* ,checker))
+     ,@body))
+
 (defparameter *sml-binding-types* (make-hash-table :test #'eq))
 
 (defparameter *sml-constructor-symbols* (make-hash-table :test #'eq))
@@ -80,8 +112,30 @@
   (setf (gethash (sml-module-key package-name structure-name) *sml-structure-members*)
         (normalize-sml-member-names member-names)))
 
+(defun projected-sml-structure-members (package-name structure-name)
+  (loop for separator = (position #\. structure-name :from-end t)
+          then (and separator
+                    (position #\. structure-name :from-end t
+                              :end separator))
+        while separator
+        for ancestor = (subseq structure-name 0 separator)
+        for nested-prefix = (format nil "~A." (subseq structure-name
+                                                       (1+ separator)))
+        for ancestor-members =
+          (gethash (sml-module-key package-name ancestor)
+                   *sml-structure-members*)
+        for projected =
+          (loop for member in ancestor-members
+                when (string-prefix-p nested-prefix member)
+                  collect (subseq member (length nested-prefix)))
+        when projected
+          return (normalize-sml-member-names projected)))
+
 (defun lookup-sml-structure-members (package-name structure-name)
-  (copy-list (gethash (sml-module-key package-name structure-name) *sml-structure-members*)))
+  (copy-list
+   (or (gethash (sml-module-key package-name structure-name)
+                *sml-structure-members*)
+       (projected-sml-structure-members package-name structure-name))))
 
 (defun register-sml-functor-members (package-name functor-name member-names
                                       &optional param-name)
@@ -135,7 +189,7 @@
 
 (defun sml-symbol-in-package-name (name package-name)
   (let* ((pkg (ensure-sml-package package-name))
-         (symbol-name (string-upcase name)))
+         (symbol-name (string name)))
     (multiple-value-bind (symbol status) (find-symbol symbol-name pkg)
       (cond
         ((eq status :inherited)
@@ -404,7 +458,7 @@
 
 (defun sml-symbol (name &optional (package *sml-package*))
   (let* ((pkg (ensure-sml-package package))
-         (symbol-name (string-upcase name)))
+         (symbol-name (string name)))
     (multiple-value-bind (symbol status) (find-symbol symbol-name pkg)
       (cond
         ((eq status :inherited)
@@ -475,7 +529,7 @@
   (etypecase symbol-or-name
     (symbol (gethash symbol-or-name *sml-binding-types*))
     (string (or (cdr (assoc symbol-or-name *sml-builtin-type-env* :test #'string=))
-                (let ((symbol (find-symbol (string-upcase symbol-or-name)
+                (let ((symbol (find-symbol symbol-or-name
                                            (package-name (ensure-sml-package package)))))
                   (and symbol (gethash symbol *sml-binding-types*)))))))
 
@@ -662,11 +716,20 @@
 (defun make-sml-ref (value)
   (vector :ref value))
 
+(defun sml-value-binding-names (value &optional (package *sml-package*))
+  (let ((names nil))
+    (do-symbols (symbol (ensure-sml-package package) (nreverse names))
+      (when (and (boundp symbol)
+                 (eq (symbol-value symbol) value))
+        (push (symbol-name symbol) names)))))
+
 (defun ensure-sml-ref (cell)
   (unless (and (vectorp cell)
                (= (length cell) 2)
                (eq (aref cell 0) :ref))
-    (error "Expected SML ref cell, got ~S" cell))
+    (error "Expected SML ref cell, got ~S~@[ (bound as ~{~A~^, ~})~]"
+           cell
+           (sml-value-binding-names cell)))
   cell)
 
 (defun sml-list-hd (list)
@@ -750,6 +813,13 @@
         (lambda (right)
           (sml-apply-tuple-or-curried-binary fn left right)))))
 
+(defun sml-debug-funcall (function argument source-head)
+  (unless (or (functionp function)
+              (and (symbolp function) (fboundp function)))
+    (error "SML application head ~S evaluated to non-function ~S"
+           source-head function))
+  (funcall function argument))
+
 (defun sml-andalso (a) (lambda (b) (and a b)))
 (defun sml-orelse (a) (lambda (b) (or a b)))
 (defun sml-not (v) (not v))
@@ -787,13 +857,13 @@
     (lambda (list)
       (let ((acc init))
         (dolist (item list acc)
-          (setf acc (funcall (funcall fn acc) item)))))))
+          (setf acc (sml-apply-tuple-or-curried-binary fn item acc)))))))
 (defun sml-foldr (fn)
   (lambda (init)
     (lambda (list)
       (let ((acc init))
         (dolist (item (reverse list) acc)
-          (setf acc (funcall (funcall fn item) acc)))))))
+          (setf acc (sml-apply-tuple-or-curried-binary fn item acc)))))))
 (defun sml-concat (strings)
   (apply #'concatenate 'string strings))
 
@@ -829,15 +899,14 @@
       (elt sequence index)
       (sml-raise-named-exception "Subscript")))
 
-(defun sml-o (f)
-  (lambda (g)
+(defun sml-o (tuple)
+  (let ((f (sml-tuple-first tuple))
+        (g (sml-tuple-second tuple)))
     (lambda (x)
       (funcall f (funcall g x)))))
 
-(defun sml-before (a)
-  (lambda (b)
-    (declare (ignore b))
-    a))
+(defun sml-before (tuple)
+  (sml-tuple-first tuple))
 
 (defun sml-ignore (value)
   (declare (ignore value))
@@ -866,10 +935,14 @@
     (declare (ignore arg))
     (error "Unimplemented SML basis primitive: ~A" name)))
 
-(defun make-sml-unresolved-functor-member (name)
+(defun make-sml-unresolved-functor-member (name &optional cause)
+  (when cause
+    (warn "Deferring unresolved SML functor member ~A: ~A" name cause))
   (lambda (&rest args)
     (declare (ignore args))
-    (error "Unresolved SML functor member: ~A" name)))
+    (if cause
+        (error "Unresolved SML functor member ~A: ~A" name cause)
+        (error "Unresolved SML functor member: ~A" name))))
 
 (defun sml-constant-primitive (value)
   (lambda (&optional unit)
@@ -910,6 +983,69 @@
          stream
          (error "Invalid SML TextIO stream: ~S" stream)))))
 
+(defun sml-text-io-open-in (path)
+  (open path :direction :input :element-type 'character))
+
+(defun sml-text-io-open-out (path)
+  (open path :direction :output :element-type 'character
+             :if-exists :supersede :if-does-not-exist :create))
+
+(defun sml-text-io-open-append (path)
+  (open path :direction :output :element-type 'character
+             :if-exists :append :if-does-not-exist :create))
+
+(defun sml-text-io-close-in (stream)
+  (close (sml-text-io-stream stream))
+  (sml-unit))
+
+(defun sml-text-io-close-out (stream)
+  (close (sml-text-io-stream stream))
+  (sml-unit))
+
+(defun sml-text-io-read-n (stream count)
+  (when (minusp count)
+    (error "TextIO.inputN called with a negative count: ~D" count))
+  (let ((input (sml-text-io-stream stream)))
+    (with-output-to-string (output)
+      (loop repeat count
+            for char = (read-char input nil nil)
+            while char
+            do (write-char char output)))))
+
+(defun sml-text-io-input (stream)
+  (sml-text-io-read-n stream 4096))
+
+(defun sml-text-io-input1 (stream)
+  (let ((char (read-char (sml-text-io-stream stream) nil nil)))
+    (if char
+        (sml-some-value char)
+        (sml-none-value))))
+
+(defun sml-text-io-input-n (tuple)
+  (sml-text-io-read-n (sml-tuple-first tuple) (sml-tuple-second tuple)))
+
+(defun sml-text-io-input-all (stream)
+  (let ((input (sml-text-io-stream stream)))
+    (with-output-to-string (output)
+      (loop for char = (read-char input nil nil)
+            while char
+            do (write-char char output)))))
+
+(defun sml-text-io-input-line (stream)
+  (let ((input (sml-text-io-stream stream)))
+    (if (null (peek-char nil input nil nil))
+        (sml-none-value)
+        (sml-some-value
+         (with-output-to-string (output)
+           (loop for char = (read-char input nil nil)
+                 while char
+                 do (write-char char output)
+                 when (char= char #\Newline)
+                   do (return)))))))
+
+(defun sml-text-io-end-of-stream (stream)
+  (null (peek-char nil (sml-text-io-stream stream) nil nil)))
+
 (defun sml-text-io-output (tuple)
   (write-string (sml-tuple-second tuple)
                 (sml-text-io-stream (sml-tuple-first tuple)))
@@ -922,6 +1058,15 @@
 
 (defun sml-text-io-flush-out (stream)
   (finish-output (sml-text-io-stream stream))
+  (sml-unit))
+
+(defun sml-os-file-sys-get-dir (unit)
+  (declare (ignore unit))
+  (namestring (truename *default-pathname-defaults*)))
+
+(defun sml-os-file-sys-ch-dir (path)
+  (setf *default-pathname-defaults*
+        (uiop:ensure-directory-pathname (truename path)))
   (sml-unit))
 
 (defun sml-basis-primitive (name)
@@ -985,14 +1130,25 @@
                                             (coerce list 'vector)))
                     ("CharVector.fromList" . ,(lambda (list)
                                                 (coerce list 'string)))
-                    ("TextIO.stdIn" . ,(sml-constant-primitive :text-io-stdin))
-                    ("TextIO.stdOut" . ,(sml-constant-primitive :text-io-stdout))
-                    ("TextIO.stdErr" . ,(sml-constant-primitive :text-io-stderr))
-                    ("TextIO.output" . ,#'sml-text-io-output)
+	                    ("TextIO.stdIn" . ,(sml-constant-primitive :text-io-stdin))
+	                    ("TextIO.stdOut" . ,(sml-constant-primitive :text-io-stdout))
+	                    ("TextIO.stdErr" . ,(sml-constant-primitive :text-io-stderr))
+	                    ("TextIO.openIn" . ,#'sml-text-io-open-in)
+	                    ("TextIO.openOut" . ,#'sml-text-io-open-out)
+	                    ("TextIO.openAppend" . ,#'sml-text-io-open-append)
+	                    ("TextIO.closeIn" . ,#'sml-text-io-close-in)
+	                    ("TextIO.closeOut" . ,#'sml-text-io-close-out)
+	                    ("TextIO.input" . ,#'sml-text-io-input)
+	                    ("TextIO.input1" . ,#'sml-text-io-input1)
+	                    ("TextIO.inputN" . ,#'sml-text-io-input-n)
+	                    ("TextIO.inputAll" . ,#'sml-text-io-input-all)
+	                    ("TextIO.inputLine" . ,#'sml-text-io-input-line)
+	                    ("TextIO.endOfStream" . ,#'sml-text-io-end-of-stream)
+	                    ("TextIO.output" . ,#'sml-text-io-output)
                     ("TextIO.output1" . ,#'sml-text-io-output1)
                     ("TextIO.flushOut" . ,#'sml-text-io-flush-out)
-                    ("OS.FileSys.getDir" . ,(sml-constant-primitive
-                                             (namestring *default-pathname-defaults*)))
+	                    ("OS.FileSys.getDir" . ,#'sml-os-file-sys-get-dir)
+	                    ("OS.FileSys.chDir" . ,#'sml-os-file-sys-ch-dir)
                     ("Math.e" . ,(sml-constant-primitive (coerce (exp 1) 'double-float)))
                     ("Math.pi" . ,(sml-constant-primitive (coerce pi 'double-float)))
                     ("Math.sqrt" . ,#'sml-sqrt)
@@ -1075,3 +1231,21 @@
     ("true" . t)
     ("false" . nil)
     ("nil" . nil)))
+
+(defun initialize-sml-package (package)
+  (let* ((none (sml-symbol-in-package-name "NONE" package))
+         (some (sml-symbol-in-package-name "SOME" package)))
+    (unless (boundp none)
+      (setf (symbol-value none) none)
+      (register-sml-constructor none)
+      (register-sml-binding-type none '(:option :unknown)))
+    (unless (boundp some)
+      (setf (symbol-value some)
+            (lambda (value) (cons some value)))
+      (register-sml-constructor some)
+      (register-sml-binding-type some
+                                 '(:fn :unknown (:option :unknown))))
+    (export (list none some) package)
+    package))
+
+(initialize-sml-package *sml-package*)

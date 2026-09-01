@@ -7,4 +7,5 @@
                (:file "parser")
                (:file "compiler")
                (:file "reader")
+               (:file "type-checker")
                (:file "repl")))

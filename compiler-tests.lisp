@@ -27,9 +27,9 @@
          (printed (write-to-string form :pretty nil)))
     (is (eq 'progn (car form)))
     (is (search "LET" printed))
-    (is (search "HELPER" printed))
+    (is (search "|helper|" printed))
     (is (search "DEFPARAMETER" printed))
-    (is (search "Y" printed))))
+    (is (search "|y|" printed))))
 
 (test compile-file-emits-form-and-package-without-evaluation
   (multiple-value-bind (form package)
@@ -37,7 +37,33 @@
     (let ((printed (write-to-string form :pretty nil)))
       (is (eq 'progn (car form)))
       (is (string= "SML.FILE.TESTDATA.SAMPLE-PROGRAM" (package-name package)))
-      (is (search "FILE_RESULT" printed)))))
+      (is (search "|file_result|" printed)))))
+
+(test compile-program-runs-static-checker-before-lowering
+  (let ((observed-source nil)
+        (observed-filename nil))
+    (cl-sml:with-sml-type-checker
+        ((lambda (source filename)
+           (setf observed-source source
+                 observed-filename filename)))
+      (cl-sml:compile-sml-program-string
+       "val checked = 42;"
+       :package "SML.STATIC-CHECK-PHASE-TEST"
+       :source-name "checked.sml"))
+    (is (string= "val checked = 42;" observed-source))
+    (is (string= "checked.sml" observed-filename))))
+
+(test compile-program-stops-when-static-checker-rejects-source
+  (signals cl-sml:sml-static-type-error
+    (cl-sml:compile-sml-program-string
+     "val invalid = 1 + true;"
+     :package "SML.STATIC-CHECK-REJECTION-TEST"
+     :type-checker
+     (lambda (source filename)
+       (error 'cl-sml:sml-static-type-error
+              :source source
+              :filename filename
+              :cause "rejected by test checker")))))
 
 (test compile-functor-argument-value-bindings-tolerate-whitespace
   (is (equal '(("compare" . "TyName.compare"))
@@ -49,7 +75,7 @@
                "case code of 1 => \"one\" | 2 => \"two\" | _ => \"other\""
                :package "SML.COMPILER-TEST")))
     (is (eq 'case (first form)))
-    (is (string= "CODE" (symbol-name (second form))))
+    (is (string= "code" (symbol-name (second form))))
     (is (equal '(1) (first (third form))))
     (is (equal '(2) (first (fourth form))))
     (is (eq 'otherwise (first (fifth form))))

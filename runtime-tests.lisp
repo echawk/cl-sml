@@ -20,13 +20,13 @@
     (eval (cl-sml::compile-expr (parse 'cl-sml::sml-expr source)))))
 
 (defun sml-symbol (name &optional (package *test-sml-package*))
-  (find-symbol (string-upcase name) package))
+  (find-symbol name package))
 
 (defun sml-value (name &optional (package *test-sml-package*))
   (symbol-value (sml-symbol name package)))
 
 (defun sml-symbol-status (name &optional (package *test-sml-package*))
-  (nth-value 1 (find-symbol (string-upcase name) package)))
+  (nth-value 1 (find-symbol name package)))
 
 (test runtime-list-and-equality-functions
   (is (equal '(1 2 3 4)
@@ -39,6 +39,17 @@
   (is (eq t (funcall (funcall #'cl-sml::sml-= '(1 2)) '(1 2))))
   (is (eq t (funcall (funcall #'cl-sml::sml-<> '(1 2)) '(2 1)))))
 
+(test runtime-pervasive-option-constructors
+  (let* ((package (cl-sml::ensure-sml-package "SML.OPTION-BASIS-TEST"))
+         (none (sml-value "NONE" package))
+         (some (cl-sml:sml-function "SOME" package))
+         (value (funcall some 42)))
+    (is (eq none (cl-sml::sml-symbol "NONE" package)))
+    (is (eq (car value) (cl-sml::sml-symbol "SOME" package)))
+    (is (= 42 (cdr value)))
+    (is (eq :external
+            (nth-value 1 (find-symbol "SOME" package))))))
+
 (test runtime-higher-order-functions
   (is (equal '(2 3 4)
              (funcall (cl-sml::sml-map (lambda (x) (+ x 1))) '(1 2 3))))
@@ -46,11 +57,20 @@
          (funcall (funcall (cl-sml::sml-foldl #'cl-sml::sml-+) 0) '(1 2 3))))
   (is (= 6
          (funcall (funcall (cl-sml::sml-foldr #'cl-sml::sml-+) 0) '(1 2 3))))
+  (let ((tuple-step
+          (lambda (pair)
+            (+ (second pair) (* 10 (third pair))))))
+    (is (= 123
+           (funcall (funcall (cl-sml::sml-foldl tuple-step) 0) '(1 2 3))))
+    (is (= 321
+           (funcall (funcall (cl-sml::sml-foldr tuple-step) 0) '(1 2 3)))))
   (is (= 21
-         (funcall (cl-sml::sml-before 21) 99)))
+         (cl-sml::sml-before (list :tuple 21 99))))
   (is (= 21
-         (funcall (funcall (cl-sml::sml-o (lambda (x) (+ x 1)))
-                           (lambda (x) (* x 2)))
+         (funcall (cl-sml::sml-o
+                   (list :tuple
+                         (lambda (x) (+ x 1))
+                         (lambda (x) (* x 2))))
                   10)))
   (let ((wrapped (cl-sml::sml-tuple-or-curried-binary
                   (lambda (x)
@@ -130,6 +150,57 @@
     (is (string= "hello" (get-output-stream-string stdout)))
     (is (string= "!" (get-output-stream-string stderr)))))
 
+(test runtime-text-io-file-and-input-primitives
+  (let* ((open-in (cl-sml::sml-basis-primitive "TextIO.openIn"))
+         (close-in (cl-sml::sml-basis-primitive "TextIO.closeIn"))
+         (input-n (cl-sml::sml-basis-primitive "TextIO.inputN"))
+         (input-line (cl-sml::sml-basis-primitive "TextIO.inputLine"))
+         (input-all (cl-sml::sml-basis-primitive "TextIO.inputAll"))
+         (end-of-stream (cl-sml::sml-basis-primitive "TextIO.endOfStream"))
+         (stream (funcall open-in #P"testdata/text-io-input.txt")))
+    (unwind-protect
+         (progn
+           (is (string= "alpha" (funcall input-n (list :tuple stream 5))))
+           (is (string= (string #\Newline) (cdr (funcall input-line stream))))
+           (is-false (funcall end-of-stream stream))
+           (is (string= (format nil "beta~%last~%")
+                        (funcall input-all stream)))
+           (is-true (funcall end-of-stream stream))
+           (is (eq (cl-sml::sml-none-value) (funcall input-line stream))))
+      (when (open-stream-p stream)
+        (funcall close-in stream))))
+  (let* ((pathname (merge-pathnames "cl-sml-text-io-test.txt"
+                                    (uiop:temporary-directory)))
+         (open-out (cl-sml::sml-basis-primitive "TextIO.openOut"))
+         (open-append (cl-sml::sml-basis-primitive "TextIO.openAppend"))
+         (close-out (cl-sml::sml-basis-primitive "TextIO.closeOut"))
+         (output (cl-sml::sml-basis-primitive "TextIO.output")))
+    (unwind-protect
+         (progn
+           (let ((stream (funcall open-out pathname)))
+             (funcall output (list :tuple stream "first"))
+             (funcall close-out stream))
+           (let ((stream (funcall open-append pathname)))
+             (funcall output (list :tuple stream "+second"))
+             (funcall close-out stream))
+           (with-open-file (stream pathname :direction :input)
+             (is (string= "first+second" (cl-sml::read-sml-source stream)))))
+      (when (probe-file pathname)
+        (delete-file pathname)))))
+
+(test runtime-os-file-sys-current-directory-primitives
+  (let ((original *default-pathname-defaults*)
+        (get-dir (cl-sml::sml-basis-primitive "OS.FileSys.getDir"))
+        (ch-dir (cl-sml::sml-basis-primitive "OS.FileSys.chDir")))
+    (unwind-protect
+         (progn
+           (funcall ch-dir "testdata")
+           (is (uiop:string-suffix-p (funcall get-dir (cl-sml::sml-unit))
+                                     "/testdata/"))
+           (with-open-file (stream "text-io-input.txt" :direction :input)
+             (is (string= "alpha" (read-line stream)))))
+      (setf *default-pathname-defaults* original))))
+
 (test integration-while-expression
   (eval-sml-program
    "val while_result =
@@ -151,6 +222,23 @@
       end;
     val captured_outer = captureOuter 42;")
   (is (= 42 (sml-value "captured_outer"))))
+
+(test integration-local-identifiers-are-case-sensitive
+  (eval-sml-program
+   "val typed_local_result = let val use : int = 3 in use end;
+    val local_recursive_result =
+      let fun loop 0 = 0 | loop n = 1 + loop (n - 1) in loop 4 end;
+    val local_case_result =
+      let
+        val yybegin = ref 1;
+        val YYBEGIN = fn x => yybegin := x;
+      in
+        YYBEGIN 7;
+        !yybegin
+      end;")
+  (is (= 3 (sml-value "typed_local_result")))
+  (is (= 4 (sml-value "local_recursive_result")))
+  (is (= 7 (sml-value "local_case_result"))))
 
 (test runtime-record-and-exception-helpers
   (let* ((record (cl-sml::make-sml-record (list (cons "y" 2)
@@ -176,8 +264,8 @@
     val folded_right = foldr (fn x => fn acc => x + acc) 0 [1, 2, 3, 4];
     val reversed = rev [1, 2, 3];
     val mapped = map (fn x => x + 1) [1, 2, 3];
-    val composed = (o (fn x => x + 1) (fn x => x * 2)) 10;
-    val before_value = before 7 99;
+    val composed = (op o (fn x => x + 1, fn x => x * 2)) 10;
+    val before_value = op before (7, 99);
     val joined = concat [\"ab\", \"cd\", str #\"e\"];
     val chars = explode \"hi\";
     val rebuilt = implode [#\"h\", #\"i\"];
@@ -236,6 +324,33 @@
     (is (equal '(:tuple 4 6)
                (sml-value "prefix_tuple_sum" *test-sml-package*)))
     (is (= 4 (sml-value "uppercase_tuple_var" *test-sml-package*)))))
+
+(test integration-parenthesized-infix-fun-with-trailing-parameter
+  (eval-sml-program
+   "infix 5 >-;
+    fun (left >- right) scale = (left + right) * scale;
+    val parenthesized_infix_result = (2 >- 3) 4;")
+  (is (= 20
+         (sml-value "parenthesized_infix_result" *test-sml-package*))))
+
+(test integration-open-array-style-sub-infix
+  (eval-sml-program
+   "structure Arrayish = struct
+      fun sub (value, index) = value + index
+    end;
+    structure SubProbe = struct
+      open Arrayish
+      infix 9 sub
+      val selected = 19 sub 1
+    end;")
+  (is (= 20 (sml-value "SubProbe.selected" *test-sml-package*))))
+
+(test integration-unspaced-symbolic-infix-function
+  (eval-sml-program
+   "infix 6 @@;
+    fun left@@right = left + right;
+    val symbolic_result = 19@@23;")
+  (is (= 42 (sml-value "symbolic_result" *test-sml-package*))))
 
 (test integration-patterned-values-and-functions
   (eval-sml-program
@@ -309,6 +424,9 @@
 (test integration-local-declarations
   (let ((*test-sml-package* "SML.LOCAL-DECL-TEST"))
     (is (= 3 (eval-sml-expr "let val x = 1 and y = 2 in x + y end")))
+    (is (= 8
+           (eval-sml-expr
+            "let local val memo = 7 in val f = fn n => memo + n; end in f 1 end")))
     (eval-sml-program
      "local
         fun helper x = x + 1;
@@ -317,11 +435,13 @@
         exception Hidden;
       in
         val y = helper 2;
+        val captured = fn n => helper n;
         val upper_fun = T'(4, 5);
         val picked = case SOME 5 of SOME x => x | NONE => 0;
 	    val caught = ((raise Hidden) handle Hidden => 1);
 	      end;")
 	    (is (= 3 (sml-value "y" *test-sml-package*)))
+	    (is (= 5 (funcall (sml-value "captured" *test-sml-package*) 4)))
 	    (is (= 9 (sml-value "upper_fun" *test-sml-package*)))
     (is (= 5 (sml-value "picked" *test-sml-package*)))
     (is (= 1 (sml-value "caught" *test-sml-package*)))
@@ -330,8 +450,8 @@
     (is (eq :external (sml-symbol-status "caught" *test-sml-package*)))
 	    (is (not (eq :external (sml-symbol-status "helper" *test-sml-package*))))
 	    (is (not (eq :external (sml-symbol-status "Hidden" *test-sml-package*))))
-	    (is (not (eq :external (sml-symbol-status "SOME" *test-sml-package*))))
-	    (is (not (eq :external (sml-symbol-status "NONE" *test-sml-package*))))))
+	    (is (eq :external (sml-symbol-status "SOME" *test-sml-package*)))
+	    (is (eq :external (sml-symbol-status "NONE" *test-sml-package*)))))
 
 (test integration-local-structure-alias-namespace
   (let ((*test-sml-package* "SML.LOCAL-STRUCTURE-ALIAS-TEST"))
@@ -362,6 +482,38 @@
       end;
       val opened_ctor_result = CtorUser.get (CtorSource.Box 12);")
     (is (= 12 (sml-value "opened_ctor_result" *test-sml-package*)))))
+
+(test integration-local-open-propagates-constructor-patterns
+  (let ((*test-sml-package* "SML.LOCAL-OPEN-CONSTRUCTOR-TEST"))
+    (eval-sml-program
+     "structure TokenSource = struct
+        datatype token = TOKEN of int * (int * int * int);
+      end;
+      val local_open_left =
+        let
+          open TokenSource
+          val token = TOKEN (19, (11, 0, 5));
+          val TOKEN (_, (_, left, _)) = token;
+        in
+          left
+        end;")
+    (is (= 0 (sml-value "local_open_left" *test-sml-package*)))))
+
+(test integration-sml-identifiers-remain-case-sensitive
+  (let ((*test-sml-package* "SML.CASE-SENSITIVE-SYMBOL-TEST"))
+    (eval-sml-program
+     "structure Names = struct
+        val empty = 17;
+        exception Empty;
+      end;
+      val lower_empty = Names.empty;")
+    (let ((lower (sml-symbol "Names.empty"))
+          (upper (sml-symbol "Names.Empty")))
+      (is (not (null lower)))
+      (is (not (null upper)))
+      (is (not (eq lower upper)))
+      (is (= 17 (symbol-value lower)))
+      (is (cl-sml::sml-exception-tag-p (symbol-value upper))))))
 
 (test integration-anonymous-functor-argument-declarations
   (let ((*test-sml-package* "SML.ANONYMOUS-FUNCTOR-ARGUMENT-TEST"))
@@ -405,6 +557,94 @@
            (funcall (sml-value "NestedIncrement.Exposed.transform"
                                *test-sml-package*)
                     40)))))
+
+(test integration-functor-and-result-structure-may-share-a-name
+  (let ((*test-sml-package* "SML.SAME-NAME-FUNCTOR-TEST"))
+    (eval-sml-program
+     "functor Wrapper(
+        val transform : int -> int
+      ) =
+      struct
+        val apply = transform;
+      end;
+      structure Outer =
+      struct
+        structure Wrapper = Wrapper(
+          fun transform x = x + 1
+        );
+        val result = Wrapper.apply 41;
+      end;
+      val same_name_functor_result = Outer.result;")
+    (is (= 42
+           (sml-value "same_name_functor_result" *test-sml-package*)))
+    (is (= 42
+           (funcall (sml-value "Outer.Wrapper.apply" *test-sml-package*) 41)))))
+
+(test integration-functor-retains-deep-anonymous-structure-members
+  (let ((*test-sml-package* "SML.DEEP-FUNCTOR-BINDING-TEST"))
+    (eval-sml-program
+     "functor ReadFn(
+        structure ParserData : sig
+          structure EC : sig
+            val value : int
+          end
+        end
+      ) =
+      struct
+        fun read () = ParserData.EC.value;
+      end;
+      structure Source =
+      struct
+        structure EC =
+        struct
+          val value = 42;
+        end;
+      end;
+      structure Holder =
+      struct
+        structure Source = Source;
+      end;
+      structure Reader = ReadFn(
+        structure ParserData = Holder.Source
+      );
+      val deep_functor_result = Reader.read ();")
+    (is (= 42
+           (sml-value "deep_functor_result" *test-sml-package*)))))
+
+(test integration-functor-local-infix-shadows-opened-constructor
+  (let ((*test-sml-package* "SML.FUNCTOR-INFIX-SHADOW-TEST"))
+    (eval-sml-program
+     "structure Annotation =
+      struct
+        datatype phrase = @@ of string * string;
+      end;
+      functor Make(val dummy : int) =
+      struct
+        structure Header =
+        struct
+          open Annotation;
+          infix 6 @@;
+          fun left@@right = Annotation.@@(left, right);
+          val made = \"use\"@@\"location\";
+        end;
+      end;
+      structure Built = Make(val dummy = 0);"
+    )
+    (is (functionp (sml-value "Built.Header.@@" *test-sml-package*)))
+    (is (equal '(:tuple "use" "location")
+               (cdr (sml-value "Built.Header.made" *test-sml-package*))))))
+
+(test runtime-projects-nested-structure-members-from-functor-results
+  (let* ((package "SML.RUNTIME-NESTED-MODULE-PROJECTION-TEST")
+         (source (cl-sml::sml-symbol-in-package-name
+                  "Root.Child.value" package)))
+    (setf (symbol-value source) 42)
+    (cl-sml::register-sml-structure-members package "Root"
+                                             '("Child.value"))
+    (is (equal '("value")
+               (cl-sml::lookup-sml-structure-members package "Root.Child")))
+    (cl-sml::alias-sml-structure-alias package "Alias" "Root.Child")
+    (is (= 42 (cl-sml:sml-value "Alias.value" package)))))
 
 (test integration-val-rec-and-symbol-export
   (eval-sml-program

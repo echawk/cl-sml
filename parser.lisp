@@ -13,6 +13,11 @@
                     `(:app (:app (:var ,op) ,left) ,right)))
                 rest
                 :initial-value first)))
+  (defun build-tupled-infix-ast (first rest)
+    (reduce (lambda (left group)
+              `(:infix-app ,(second group) ,left ,(fourth group)))
+            rest
+            :initial-value first))
   (defun sml-string-format-char-p (ch)
     (member ch '(#\Space #\Tab #\Newline #\Return #\Page) :test #'char=))
   (defun decode-sml-decimal-escape (token start content-end)
@@ -420,6 +425,9 @@
 ;; Operators
 (defrule sml-op-mult (or "*" "div" "mod" "/") (:text t))
 (defrule sml-op-add  (or "+" "-" "^") (:text t))
+(defrule sml-op-precedence-nine
+  (and "sub" (! (or (alphanumericp character) #\_ #\')))
+  (:text t))
 (defrule sml-op-rel
   (or "<=" ">=" "<>"
       (and "<" (! sml-symbolic-char))
@@ -742,6 +750,10 @@
   (:destructure (first rest)
     (cons first (mapcar #'fourth rest))))
 
+(defrule sml-paren-sequence (and sml-expr (+ (and ws ";" ws sml-expr)))
+  (:destructure (first rest)
+    `(:seq ,first ,@(mapcar #'fourth rest))))
+
 ;; Base Expressions
 (defrule sml-selector (and "#" sml-label)
   (:destructure (hash label)
@@ -761,15 +773,17 @@
 
 (defrule sml-prefix (or sml-deref sml-negate sml-atomic))
 
-(defrule sml-parens (and "(" ws (? sml-paren-elements) ws ")")
+(defrule sml-parens (and "(" ws (? (or sml-paren-sequence sml-paren-elements)) ws ")")
   (:destructure (lp w1 elems w2 rp) (declare (ignore lp w1 w2 rp))
     (cond
       ((null elems) '(:unit))
+      ((and (consp elems) (eq (first elems) :seq)) elems)
       ((null (rest elems)) (first elems))
       (t `(:tuple ,@elems)))))
 
 ;; Application: f x y
 (defrule sml-app-arg (and ws
+                          (! sml-op-precedence-nine)
                           (! sml-op-mult) (! sml-op-add) (! sml-op-rel)
                           (! sml-op-list) (! ":=")
                           (! sml-generic-word-infix-op) (! sml-generic-symbolic-infix-op)
@@ -780,14 +794,22 @@
     (if (null rest)
         first
         (reduce (lambda (left group)
-                  `(:app ,left ,(ninth group)))
+                  `(:app ,left ,(car (last group))))
                 rest
                 :initial-value first))))
 
 ;; --- INFIX PRECEDENCE CLIMBING ---
 
+;; HaMLet and the SML/NJ parser libraries conventionally give Array.sub the
+;; highest fixity. Full dynamically scoped fixity resolution is still pending.
+(defrule sml-precedence-nine-expr
+  (and sml-app (* (and ws sml-op-precedence-nine ws sml-app)))
+  (:destructure (first rest) (build-tupled-infix-ast first rest)))
+
 ;; 1. Multiplication level (*, div, mod, /)
-(defrule sml-mult-expr (and sml-app (* (and ws sml-op-mult ws sml-app)))
+(defrule sml-mult-expr
+  (and sml-precedence-nine-expr
+       (* (and ws sml-op-mult ws sml-precedence-nine-expr)))
   (:destructure (first rest) (build-infix-ast first rest)))
 
 ;; 2. Addition level (+, -, ^)
@@ -807,7 +829,27 @@
     op))
 
 (defrule sml-generic-word-infix-op
-  (or (and "before" (! (or (alphanumericp character) #\_ #\')))
+  (or (and "oplusVEandTE" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusVEandTE" (! (or (alphanumericp character) #\_ #\')))
+      (and "oplusTE" (! (or (alphanumericp character) #\_ #\')))
+      (and "oplusSE" (! (or (alphanumericp character) #\_ #\')))
+      (and "oplusG" (! (or (alphanumericp character) #\_ #\')))
+      (and "oplusF" (! (or (alphanumericp character) #\_ #\')))
+      (and "oplusE" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusVE" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusTE" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusSE" (! (or (alphanumericp character) #\_ #\')))
+      (and "IBplusI" (! (or (alphanumericp character) #\_ #\')))
+      (and "TEplus" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusT" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusU" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusG" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusF" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusE" (! (or (alphanumericp character) #\_ #\')))
+      (and "plusI" (! (or (alphanumericp character) #\_ #\')))
+      (and "before" (! (or (alphanumericp character) #\_ #\')))
+      (and "oplus" (! (or (alphanumericp character) #\_ #\')))
+      (and "plus" (! (or (alphanumericp character) #\_ #\')))
       (and "o" (! (or (alphanumericp character) #\_ #\'))))
   (:text t))
 
@@ -815,7 +857,7 @@
   (or sml-generic-symbolic-infix-op sml-generic-word-infix-op))
 
 (defrule sml-generic-infix-expr (and sml-rel-expr (* (and ws sml-generic-infix-op ws sml-rel-expr)))
-  (:destructure (first rest) (build-infix-ast first rest)))
+  (:destructure (first rest) (build-tupled-infix-ast first rest)))
 
 (defrule sml-andalso-expr (and sml-generic-infix-expr (* (and ws "andalso" ws sml-raise-expr)))
   (:destructure (first rest)
@@ -1065,7 +1107,7 @@
         first
         `(:seq ,first ,@(mapcar #'fourth rest)))))
 
-(defrule sml-expr sml-seq-expr)
+(defrule sml-expr sml-ascribed-expr)
 
 (defrule sml-val-binding (and sml-pat (? sml-type-constraint) ws "=" ws sml-expr
                               (? sml-expression-type-constraint))
@@ -1094,7 +1136,7 @@
            "oplusSE" "oplusG" "oplusF" "oplusE"
            "plusVEandTE" "plusVE" "plusTE" "plusSE"
            "plusG" "plusF" "plusE" "plusT" "plusU" "plusI"
-           "plus" "before" "o")
+           "oplus" "plus" "sub" "before" "o")
        (! (or (alphanumericp character) #\_ #\')))
   (:text t))
 
@@ -1110,7 +1152,7 @@
     `(,name ,(mapcar #'second params) ,expr)))
 
 (defrule sml-fun-paren-infix-clause
-  (and "(" ws sml-pat ws1 sml-paren-infix-fun-name ws1 sml-pat ws ")" (* (and ws sml-pat)) ws "=" ws sml-expr)
+  (and "(" ws sml-pat-primary ws1 sml-paren-infix-fun-name ws1 sml-pat ws ")" (* (and ws sml-pat)) ws "=" ws sml-expr)
   (:destructure (lp w1 left w2 name w3 right w4 rp rest w5 eq w6 expr)
     (declare (ignore lp w1 w2 w3 w4 rp w5 eq w6))
     `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
@@ -1121,6 +1163,14 @@
     (declare (ignore w1 w2 w3 eq w4))
     `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
 
+(defrule sml-fun-symbolic-infix-clause
+  (and sml-pat-primary ws (! sml-char-start) (! sml-selector-start)
+       sml-symbolic-id ws sml-pat
+       (* (and ws sml-pat)) ws "=" ws sml-expr)
+  (:destructure (left w1 not-char not-selector name w2 right rest w3 eq w4 expr)
+    (declare (ignore w1 not-char not-selector w2 w3 eq w4))
+    `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
+
 (defrule sml-fun-bare-infix-clause
   (and sml-pat-primary ws1 sml-infix-fun-name ws1 sml-pat (* (and ws sml-pat)) ws "=" ws sml-expr)
   (:destructure (left w1 name w2 right rest w3 eq w4 expr)
@@ -1129,6 +1179,7 @@
 
 (defrule sml-fun-clause (or sml-fun-paren-infix-clause
                             sml-fun-bare-id-infix-clause
+                            sml-fun-symbolic-infix-clause
                             sml-fun-bare-infix-clause
                             sml-fun-prefix-clause))
 

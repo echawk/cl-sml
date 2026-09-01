@@ -3,7 +3,7 @@
 (named-readtables:in-readtable cl-sml:sml-readtable)
 
 (defun sml-user-symbol (name)
-  (find-symbol (string-upcase name) "SML-USER"))
+  (find-symbol name "SML-USER"))
 
 (defun sml-user-value (name)
   (symbol-value (sml-user-symbol name)))
@@ -162,4 +162,3 @@
 ;;   fun fib n = #1 (fastfib n)
 ;; }#
 ;; )
-

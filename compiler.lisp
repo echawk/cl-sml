@@ -12,6 +12,7 @@
 (defvar *sml-local-structure-members* nil)
 
 (defvar *sml-compiling-functor* nil)
+(defvar *sml-debug-applications* nil)
 
 (defvar *sml-constructor-symbol-env* nil)
 
@@ -42,7 +43,7 @@
 
 (defparameter *sml-binary-infix-value-names*
   '("+" "-" "*" "/" "div" "mod" "^" "@" "::" ":=" "=" "<>" "<" "<=" ">" ">="
-    "o" "before" "-->" "|->" "@@" "$$" "plus" "plusVE" "plusTE" "plusSE"
+    "o" "before" "-->" "|->" "@@" "$$" "oplus" "plus" "plusVE" "plusTE" "plusSE"
     "plusVEandTE" "plusG" "plusF" "plusE" "plusT" "plusU" "plusI"
     "IBplusI" "TEplus" "oplusVEandTE" "oplusTE" "oplusSE" "oplusG"
     "oplusF" "oplusE"))
@@ -68,12 +69,28 @@
   (qualify-sml-name *sml-module-prefix* name))
 
 (defun target-sml-symbol (name)
-  (or (cdr (assoc name *sml-binding-symbol-env* :test #'string=))
-      (sml-symbol (current-qualified-sml-name name))))
+  ;; Declarations shadow opened names; only reference resolution consults the
+  ;; binding environment.
+  (sml-symbol (current-qualified-sml-name name)))
+
+(defun sml-lexical-symbol (name)
+  (intern name *sml-package*))
 
 (defun resolve-structure-prefix (name)
   (or (cdr (assoc name *sml-local-structure-prefixes* :test #'string=))
+      (let ((dot (and (stringp name) (position #\. name))))
+        (when dot
+          (let* ((head (subseq name 0 dot))
+                 (resolved-head
+                   (cdr (assoc head *sml-local-structure-prefixes*
+                               :test #'string=))))
+            (when resolved-head
+              (qualify-sml-name resolved-head (subseq name (1+ dot)))))))
       name))
+
+(defun resolve-functor-name (name)
+  "Resolve NAME in the functor namespace, independently of structures."
+  name)
 
 (defun sml-long-name-p (name)
   (and (stringp name)
@@ -217,7 +234,20 @@
 
 (defun lookup-local-structure-members (name local-structures)
   (or (cdr (assoc name local-structures :test #'string=))
-      (cdr (assoc name *sml-local-structure-members* :test #'string=))))
+      (cdr (assoc name *sml-local-structure-members* :test #'string=))
+      (let ((dot (and (stringp name) (position #\. name))))
+        (when dot
+          (let* ((root (subseq name 0 dot))
+                 (nested-prefix (format nil "~A." (subseq name (1+ dot))))
+                 (root-members
+                   (or (cdr (assoc root local-structures :test #'string=))
+                       (cdr (assoc root *sml-local-structure-members*
+                                   :test #'string=)))))
+            (remove-duplicates
+             (loop for member in root-members
+                   when (string-prefix-p nested-prefix member)
+                     collect (subseq member (length nested-prefix)))
+             :test #'string=))))))
 
 (defun remove-sml-binding-symbols (names env)
   (remove-if (lambda (entry)
@@ -289,10 +319,10 @@
 (defun compile-functor-member-initializer (name form)
   (if *sml-compiling-functor*
       `(handler-case ,form
-         (unbound-variable ()
-           (make-sml-unresolved-functor-member ,name))
-         (undefined-function ()
-           (make-sml-unresolved-functor-member ,name)))
+         (unbound-variable (condition)
+           (make-sml-unresolved-functor-member ,name condition))
+         (undefined-function (condition)
+           (make-sml-unresolved-functor-member ,name condition)))
       form))
 
 (defun ensure-pattern-ast (pat)
@@ -718,14 +748,17 @@
                                               local-exceptions
                                              branch-env))))
                          clauses)
-               (_ (error ,(if function-name
-                              (format nil "Match failure in function ~A" function-name)
-                              "Match failure in function")))))))
+               (_ (error "Match failure in function ~A ~S on value ~S"
+                         ,(or function-name "<anonymous>")
+                         ',clauses
+                         ,(if (= arity 1)
+                              (first tmp-args)
+                              `(list :tuple ,@tmp-args))))))))
 
 (defun compile-local-val-binding (pat expr body &optional local-exceptions lexical-env)
   (cond
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
-     `(let ((,(sml-symbol (second pat))
+     `(let ((,(sml-lexical-symbol (second pat))
               ,(maybe-wrap-infix-value-initializer (second pat) expr)))
         ,body))
     ((eq pat :wild)
@@ -734,18 +767,25 @@
           (declare (ignore ,tmp))
           ,body)))
     (t
-     (let ((tmp (gensym "MATCHED")))
+     (let ((tmp (gensym "MATCHED"))
+           (binding-env
+             (append
+              (mapcar (lambda (name)
+                        (cons name (sml-lexical-symbol name)))
+                      (pattern-bound-names pat local-exceptions lexical-env))
+              lexical-env)))
        `(let ((,tmp ,expr))
           (trivia:match ,tmp
             (,(let ((*sml-module-prefix* nil))
-                (compile-pat pat local-exceptions lexical-env))
+                (compile-pat pat local-exceptions binding-env))
              ,body)
-            (_ (error "Pattern match failure in val binding"))))))))
+            (_ (error "Pattern match failure for local val pattern ~S on value ~S"
+                      ',pat ,tmp))))))))
 
 (defun compile-local-datatype-bindings (ctors body)
   (let ((bindings
           (mapcar (lambda (ctor)
-                    (let ((name (sml-symbol (second ctor))))
+                    (let ((name (sml-lexical-symbol (second ctor))))
                       (list name
                             (if (fourth ctor)
                                 `(lambda (payload)
@@ -780,27 +820,42 @@
 (defun local-declaration-lexical-bindings (dec)
   (case (and (consp dec) (car dec))
     (:val
-     (mapcar (lambda (name) (cons name (sml-symbol name)))
+     (mapcar (lambda (name) (cons name (sml-lexical-symbol name)))
              (pattern-bound-names (second dec))))
     (:vals
      (mapcan #'local-declaration-lexical-bindings (cdr dec)))
     (:val-rec
-     (list (cons (second dec) (sml-symbol (second dec)))))
+     (list (cons (second dec) (sml-lexical-symbol (second dec)))))
     (:fun
-     (list (cons (second dec) (sml-symbol (second dec)))))
+     (list (cons (second dec) (sml-lexical-symbol (second dec)))))
     (:funs
      (mapcan #'local-declaration-lexical-bindings (cdr dec)))
     (:datatype
-     (mapcar (lambda (ctor) (cons (second ctor) (sml-symbol (second ctor))))
+     (mapcar (lambda (ctor)
+               (cons (second ctor) (sml-lexical-symbol (second ctor))))
              (third dec)))
     (:exception
-     (list (cons (second dec) (sml-symbol (second dec)))))
+     (list (cons (second dec) (sml-lexical-symbol (second dec)))))
     (:exception-alias
-     (list (cons (second dec) (sml-symbol (second dec)))))
+     (list (cons (second dec) (sml-lexical-symbol (second dec)))))
     (:local
      (mapcan #'local-declaration-lexical-bindings (third dec)))
     (otherwise
      nil)))
+
+(defun local-open-symbol-bindings (dec)
+  (when (eq (car dec) :open)
+    (declaration-binding-symbol-bindings dec)))
+
+(defun local-open-constructor-bindings (dec)
+  (when (eq (car dec) :open)
+    (declaration-constructor-symbol-bindings dec)))
+
+(defun declarations-local-open-symbol-bindings (decs)
+  (mapcan #'local-open-symbol-bindings decs))
+
+(defun declarations-local-open-constructor-bindings (decs)
+  (mapcan #'local-open-constructor-bindings decs))
 
 (defun compile-local-decls-into-body (decs body &optional (local-exceptions nil) lexical-env)
   (if (null decs)
@@ -808,11 +863,18 @@
       (let* ((dec (first decs))
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
              (dec-bindings (local-declaration-lexical-bindings dec))
-             (wrapped-body (compile-local-decls-into-body
-                            (rest decs)
-                            body
-                            extended-exceptions
-                            (append dec-bindings lexical-env))))
+             (open-symbol-bindings (local-open-symbol-bindings dec))
+             (open-constructor-bindings (local-open-constructor-bindings dec))
+             (wrapped-body
+               (let ((*sml-binding-symbol-env*
+                       (append open-symbol-bindings *sml-binding-symbol-env*))
+                     (*sml-constructor-symbol-env*
+                       (append open-constructor-bindings *sml-constructor-symbol-env*)))
+                 (compile-local-decls-into-body
+                  (rest decs)
+                  body
+                  extended-exceptions
+                  (append dec-bindings lexical-env)))))
         (compile-local-decl dec wrapped-body local-exceptions lexical-env))))
 
 (defun compile-local-decls (decs body-asts &optional (local-exceptions nil) lexical-env)
@@ -823,21 +885,27 @@
          (body-env (append (mapcan #'local-declaration-lexical-bindings decs)
                            lexical-env))
          (body-exceptions (append (declarations-exposed-exceptions decs)
-                                  local-exceptions)))
+                                  local-exceptions))
+         (open-symbol-bindings (declarations-local-open-symbol-bindings decs))
+         (open-constructor-bindings
+           (declarations-local-open-constructor-bindings decs)))
     (let ((*sml-local-structure-members* (append module-bindings
                                                  *sml-local-structure-members*))
           (*sml-local-structure-prefixes* (append structure-prefixes
                                                  *sml-local-structure-prefixes*)))
-      (compile-local-decls-into-body
-       decs
-       `(progn ,@(mapcar (lambda (expr)
-                           (compile-expr expr body-exceptions body-env))
-                         body-asts))
-       local-exceptions
-       lexical-env))))
+      (let ((compiled-body
+              (let ((*sml-binding-symbol-env*
+                      (append open-symbol-bindings *sml-binding-symbol-env*))
+                    (*sml-constructor-symbol-env*
+                      (append open-constructor-bindings *sml-constructor-symbol-env*)))
+                `(progn ,@(mapcar (lambda (expr)
+                                    (compile-expr expr body-exceptions body-env))
+                                  body-asts)))))
+        (compile-local-decls-into-body
+         decs compiled-body local-exceptions lexical-env)))))
 
-(defun compile-program-decls-body (decs &optional (local-exceptions nil))
-  `(progn ,@(compile-program-decls decs local-exceptions)))
+(defun compile-program-decls-body (decs &optional (local-exceptions nil) lexical-env)
+  `(progn ,@(compile-program-decls decs local-exceptions lexical-env)))
 
 (defun compile-local-decl (dec body &optional local-exceptions lexical-env)
   (cond
@@ -850,19 +918,21 @@
     ((eq (car dec) :vals)
      (compile-local-decls-into-body (cdr dec) body local-exceptions lexical-env))
 	    ((eq (car dec) :fun)
-	     (let ((name (sml-symbol (second dec))))
+	     (let ((name (sml-lexical-symbol (second dec))))
 	       `(let ((,name nil))
 	          (setf ,name ,(maybe-wrap-infix-value-initializer
 	                        (second dec)
 	                        (compile-fn-clauses (third dec)
 	                                            local-exceptions
 	                                            (second dec)
-	                                            lexical-env)))
+	                                            (acons (second dec)
+	                                                   name
+	                                                   lexical-env))))
 	          ,body)))
     ((eq (car dec) :funs)
      (compile-local-decls-into-body (cdr dec) body local-exceptions lexical-env))
     ((eq (car dec) :val-rec)
-     (let ((name (sml-symbol (second dec))))
+     (let ((name (sml-lexical-symbol (second dec))))
        `(let ((,name nil))
           (setf ,name ,(compile-expr (third dec)
                                      local-exceptions
@@ -876,7 +946,7 @@
     ((eq (car dec) :structure)
      (compile-local-decls-into-body (third dec) body local-exceptions lexical-env))
     ((eq (car dec) :exception)
-     (let* ((name (sml-symbol (second dec)))
+     (let* ((name (sml-lexical-symbol (second dec)))
             (arg-type (getf (cddr dec) :arg-type)))
        (if arg-type
            `(let ((,name (make-sml-exception-function ,(second dec))))
@@ -886,7 +956,7 @@
               (declare (ignorable ,name))
               ,body))))
     ((eq (car dec) :exception-alias)
-     (let ((name (sml-symbol (second dec)))
+     (let ((name (sml-lexical-symbol (second dec)))
            (target (resolved-sml-symbol (third dec))))
        `(let ((,name (if (boundp ',target)
                          (symbol-value ',target)
@@ -902,17 +972,28 @@
             (structure-prefixes (module-local-structure-prefixes
                                  local-decs
                                  (or *sml-module-prefix* "")))
+            (local-bindings (mapcan #'local-declaration-lexical-bindings
+                                    local-decs))
             (body-bindings (mapcan #'local-declaration-lexical-bindings body-decs))
+            (open-symbol-bindings
+              (declarations-local-open-symbol-bindings local-decs))
+            (open-constructor-bindings
+              (declarations-local-open-constructor-bindings local-decs))
             (inner-body
               (let ((*sml-local-structure-members* (append module-bindings
                                                            *sml-local-structure-members*))
                     (*sml-local-structure-prefixes* (append structure-prefixes
-                                                           *sml-local-structure-prefixes*)))
+                                                           *sml-local-structure-prefixes*))
+                    (*sml-binding-symbol-env*
+                      (append open-symbol-bindings *sml-binding-symbol-env*))
+                    (*sml-constructor-symbol-env*
+                      (append open-constructor-bindings
+                              *sml-constructor-symbol-env*)))
                 (compile-local-decls-into-body
                  body-decs
                  body
                  inner-exceptions
-                 (append body-bindings lexical-env)))))
+                 (append local-bindings body-bindings lexical-env)))))
        (let ((*sml-local-structure-members* (append module-bindings
                                                     *sml-local-structure-members*))
              (*sml-local-structure-prefixes* (append structure-prefixes
@@ -921,7 +1002,7 @@
     (t
      (error "Unknown decl in let: ~A" dec))))
 
-(defun compile-top-level-val (pat expr &optional local-exceptions declared-type)
+(defun compile-top-level-val (pat expr &optional local-exceptions declared-type lexical-env)
   (let* ((expr-type (or declared-type
                         (infer-sml-ast-type expr :package *sml-package*)))
          (typed-bindings (pattern-type-bindings pat expr-type)))
@@ -933,22 +1014,22 @@
                               (second pat)
                               (maybe-wrap-infix-value-initializer
                                (second pat)
-                               (compile-expr expr local-exceptions)))))
+                               (compile-expr expr local-exceptions lexical-env)))))
          `(progn
             ,@(when declaim-form (list declaim-form))
             (defparameter ,sym ,compiled-expr)
             ,(compile-type-registration-form sym expr-type)
             ,(compile-export-form (list sym)))))
       ((eq pat :wild)
-       (compile-expr expr local-exceptions))
+       (compile-expr expr local-exceptions lexical-env))
       (t
        (let ((tmp (gensym "MATCHED"))
              (bound-symbols (remove-duplicates (pattern-bound-symbols pat) :test #'eq)))
          `(let ((,tmp ,(compile-functor-member-initializer
                         (format nil "~{~A~^,~}" (pattern-bound-names pat))
-                        (compile-expr expr local-exceptions))))
+                        (compile-expr expr local-exceptions lexical-env))))
             (trivia:match ,tmp
-              (,(compile-pat pat local-exceptions)
+              (,(compile-pat pat local-exceptions lexical-env)
                (progn
                  ,@(mapcar (lambda (sym) `(defparameter ,sym ,sym)) bound-symbols)
                  ,@(mapcar (lambda (binding)
@@ -958,12 +1039,13 @@
                  ,tmp))
               (_ (error "Pattern match failure in top-level val")))))))))
 
-(defun compile-exception-ctor-pattern (name)
+(defun compile-exception-ctor-pattern (name &optional lexical-env)
   (let ((it (gensym "EXN")))
     `(guard1 ,it
              (and (sml-exception-tag-p ,it)
                   (eq (sml-exception-constructor-tag ,it)
-                      (sml-exception-constructor-tag ,(resolved-sml-symbol name)))))))
+                      (sml-exception-constructor-tag
+                       ,(resolved-sml-symbol name lexical-env)))))))
 
 (defun compile-exception-app-pattern (name payload local-exceptions &optional lexical-env)
   (let ((it (gensym "EXN")))
@@ -971,7 +1053,8 @@
              (and (consp ,it)
                   (sml-exception-tag-p (car ,it))
                   (eq (sml-exception-constructor-tag ,it)
-                      (sml-exception-constructor-tag ,(resolved-sml-symbol name))))
+                      (sml-exception-constructor-tag
+                       ,(resolved-sml-symbol name lexical-env))))
              (cdr ,it) ,(compile-pat payload local-exceptions lexical-env))))
 
 (defun compile-ref-pattern (payload local-exceptions &optional lexical-env)
@@ -995,7 +1078,7 @@
        ((string= (second pat) "false") nil)
        ((string= (second pat) "nil") nil)
        ((exception-constructor-info (second pat) local-exceptions)
-        (compile-exception-ctor-pattern (second pat)))
+        (compile-exception-ctor-pattern (second pat) lexical-env))
        (t
         (let* ((name (second pat))
                (it (gensym "CTOR"))
@@ -1097,6 +1180,12 @@
     ((and (listp ast) (eq (car ast) :deref))
      `(funcall #'sml-deref ,(compile-expr (second ast) local-exceptions lexical-env)))
 
+    ((and (listp ast) (eq (car ast) :infix-app))
+     `(funcall ,(compile-expr `(:var ,(second ast)) local-exceptions lexical-env)
+               (list :tuple
+                     ,(compile-expr (third ast) local-exceptions lexical-env)
+                     ,(compile-expr (fourth ast) local-exceptions lexical-env))))
+
     ;; Replace the :app block in compile-expr
     ((and (listp ast) (eq (car ast) :app))
      (let ((head (second ast))
@@ -1107,8 +1196,13 @@
 	                (known-data-constructor-application-p (second head) lexical-env))
 	           `(cons ',(constructor-symbol-for-name (second head) lexical-env)
 	                  ,(compile-expr arg local-exceptions lexical-env))
-           `(funcall ,(compile-expr head local-exceptions lexical-env)
-                     ,(compile-expr arg local-exceptions lexical-env)))))
+           (let ((compiled-head
+                   (compile-expr head local-exceptions lexical-env))
+                 (compiled-arg
+                   (compile-expr arg local-exceptions lexical-env)))
+             (if *sml-debug-applications*
+                 `(sml-debug-funcall ,compiled-head ,compiled-arg ',head)
+                 `(funcall ,compiled-head ,compiled-arg))))))
 
     ((and (listp ast) (eq (car ast) :case))
      (let ((branches (cddr ast)))
@@ -1205,19 +1299,20 @@
                           `(,(compile-pat (first branch) local-exceptions branch-env)
                             ,(compile-expr (second branch) local-exceptions branch-env))))
                       clauses)
-            (_ (error "Match failure in anonymous function"))))))
+            (_ (error "Match failure in anonymous function ~S on value ~S"
+                      ',clauses ,tmp-arg))))))
 
     (t (error "Unknown AST: ~A" ast))))
 
-(defun compile-decl (ast &optional local-exceptions)
+(defun compile-decl (ast &optional local-exceptions lexical-env)
   "Compiles top level declarations."
   (cond
     ((eq (car ast) :val)
      (compile-top-level-val (second ast) (third ast) local-exceptions
-                            (getf (cdddr ast) :type)))
+                            (getf (cdddr ast) :type) lexical-env))
     ((eq (car ast) :vals)
      `(progn ,@(mapcar (lambda (val-dec)
-                         (compile-decl val-dec local-exceptions))
+                         (compile-decl val-dec local-exceptions lexical-env))
                        (cdr ast))))
     ((eq (car ast) :val-rec)
      (let ((name (target-sml-symbol (second ast))))
@@ -1226,7 +1321,9 @@
           (defparameter ,name nil)
           (setf ,name ,(let ((*sml-binding-symbol-env*
                                (acons (second ast) name *sml-binding-symbol-env*)))
-                          (compile-expr (third ast) local-exceptions)))
+                          (compile-expr (third ast)
+                                        local-exceptions
+                                        (acons (second ast) name lexical-env))))
           ,(compile-type-registration-form name (infer-sml-ast-type (third ast) :package *sml-package*))
           ,(compile-export-form (list name)))))
     ((eq (car ast) :fun)
@@ -1242,7 +1339,10 @@
 	                                   (second ast)
 	                                   (compile-fn-clauses (third ast)
 	                                                       local-exceptions
-	                                                       (second ast)))))
+	                                                       (second ast)
+	                                                       (acons (second ast)
+	                                                              name
+	                                                              lexical-env)))))
 	          ,(compile-type-registration-form name fun-type)
 	          ,(compile-export-form (list name)))))
     ((eq (car ast) :funs)
@@ -1253,7 +1353,7 @@
                              (cdr ast))
                      *sml-binding-symbol-env*)))
        `(progn ,@(mapcar (lambda (fun-dec)
-                           (compile-decl fun-dec local-exceptions))
+                           (compile-decl fun-dec local-exceptions lexical-env))
                          (cdr ast)))))
 
     ;; Replace the :datatype block in compile-decl
@@ -1319,7 +1419,8 @@
 	                           (append argument-prefixes
 	                                   *sml-local-structure-prefixes*)))
 	                     (compile-program-decls argument-decs
-	                                            local-exceptions))))
+	                                            local-exceptions
+	                                            lexical-env))))
 	            (value-bindings
 	              (unless argument-decs
 	                (functor-argument-value-bindings args-text))))
@@ -1333,7 +1434,7 @@
 	          (alias-sml-functor-application
 	           ,(target-sml-package-name)
 	           ,target-name
-	           ,(resolve-structure-prefix (third ast))
+	           ,(resolve-functor-name (third ast))
 	           :argument ,(or argument-module
 	                          (and argument
 	                               (resolve-structure-prefix argument)))
@@ -1347,7 +1448,9 @@
                          (*sml-compiling-functor* t)
                          (*sml-local-structure-prefixes* (append structure-prefixes
                                                                  *sml-local-structure-prefixes*)))
-	                     (compile-program-decls (third ast) local-exceptions))))
+	                     (compile-program-decls (third ast)
+	                                            local-exceptions
+	                                            lexical-env))))
 	       `(progn
 	          (register-sml-functor-members
 	           ,(target-sml-package-name)
@@ -1365,7 +1468,9 @@
             (forms (let ((*sml-module-prefix* module-name)
                          (*sml-local-structure-prefixes* (append structure-prefixes
                                                                  *sml-local-structure-prefixes*)))
-                     (compile-program-decls (third ast) local-exceptions))))
+                     (compile-program-decls (third ast)
+                                            local-exceptions
+                                            lexical-env))))
        `(progn
           ,@forms
           (register-sml-structure-members ,(target-sml-package-name) ,module-name ',members))))
@@ -1391,6 +1496,12 @@
             (inner-exceptions (append (declarations-exposed-exceptions local-decs)
                                       local-exceptions))
             (module-bindings (declarations-local-module-member-bindings local-decs))
+            (local-symbol-bindings
+              (mapcan #'local-declaration-lexical-bindings local-decs))
+            (open-symbol-bindings
+              (declarations-local-open-symbol-bindings local-decs))
+            (open-constructor-bindings
+              (declarations-local-open-constructor-bindings local-decs))
             (structure-prefixes (module-local-structure-prefixes
                                  local-decs
                                  (or *sml-module-prefix* ""))))
@@ -1398,10 +1509,22 @@
                                                     *sml-local-structure-members*))
              (*sml-local-structure-prefixes* (append structure-prefixes
                                                     *sml-local-structure-prefixes*)))
-         (compile-local-decls-into-body
-          local-decs
-          (compile-program-decls-body body-decs inner-exceptions)
-          local-exceptions))))
+         (let ((compiled-body
+                 (let ((*sml-binding-symbol-env*
+                         (append local-symbol-bindings open-symbol-bindings
+                                 *sml-binding-symbol-env*))
+                       (*sml-constructor-symbol-env*
+                         (append open-constructor-bindings
+                                 *sml-constructor-symbol-env*)))
+                   (compile-program-decls-body
+                    body-decs
+                    inner-exceptions
+                    (append local-symbol-bindings lexical-env)))))
+           (compile-local-decls-into-body
+            local-decs
+            compiled-body
+            local-exceptions
+            lexical-env)))))
 
     (t (error "Unknown Declaration: ~A" ast))))
 
@@ -1415,7 +1538,7 @@
                (cons full-name members))))
       (:structure-app
        (let* ((full-name (current-qualified-sml-name name))
-              (source-name (resolve-structure-prefix (third dec)))
+              (source-name (resolve-functor-name (third dec)))
               (members (lookup-sml-functor-members (target-sml-package-name)
                                                    source-name)))
          (list (cons name members)
@@ -1453,10 +1576,13 @@
     (:open
      (let ((bindings nil))
        (dolist (name (split-sml-module-names (second dec)))
-         (dolist (member (lookup-sml-module-members-for-compiler
-                          name
-                          *sml-local-structure-members*))
-           (push (cons member (target-sml-symbol member)) bindings)))
+         (let ((source (resolve-structure-prefix name)))
+           (dolist (member (lookup-sml-module-members-for-compiler
+                            name
+                            *sml-local-structure-members*))
+             (push (cons member
+                         (sml-symbol (qualify-sml-name source member)))
+                   bindings))))
        (nreverse bindings)))
     (:local
      (mapcar (lambda (name)
@@ -1490,11 +1616,11 @@
     (otherwise
      nil)))
 
-(defun compile-program-decls (decs &optional (local-exceptions nil))
+(defun compile-program-decls (decs &optional (local-exceptions nil) lexical-env)
   (if (null decs)
       nil
       (let* ((dec (first decs))
-             (form (compile-decl dec local-exceptions))
+             (form (compile-decl dec local-exceptions lexical-env))
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
              (module-bindings (declaration-local-module-member-bindings dec))
              (symbol-bindings (declaration-binding-symbol-bindings dec))
@@ -1506,7 +1632,9 @@
                                                      *sml-binding-symbol-env*))
                     (*sml-constructor-symbol-env* (append constructor-bindings
                                                           *sml-constructor-symbol-env*)))
-                (compile-program-decls (rest decs) extended-exceptions))))))
+                (compile-program-decls (rest decs)
+                                       extended-exceptions
+                                       lexical-env))))))
 
 (defun compile-program (ast)
   (if (eq (car ast) :program)

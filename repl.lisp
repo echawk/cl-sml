@@ -156,6 +156,18 @@
                   (sml-value->string value)
                   (repl-type-suffix (repl-it-symbol))))))
 
+(defun type-check-repl-input (kind source)
+  (let ((trimmed (trim-repl-input source)))
+    (type-check-sml-string
+     (if (eq kind :expr)
+         (let ((expression
+                 (if (and (plusp (length trimmed))
+                          (char= (char trimmed (1- (length trimmed))) #\;))
+                     (subseq trimmed 0 (1- (length trimmed)))
+                     trimmed)))
+           (format nil "val it = (~A);" expression))
+         trimmed))))
+
 (defun prompt-string (continuation-p)
   (if continuation-p "= " "- "))
 
@@ -187,10 +199,12 @@
             (cond
               (kind
                (handler-case
-                   (dolist (line (ecase kind
-                                   (:program (eval-repl-program ast))
-                                   (:expr (eval-repl-expression ast))))
-                     (format output "~A~%" line))
+                   (progn
+                     (type-check-repl-input kind buffer)
+                     (dolist (line (ecase kind
+                                     (:program (eval-repl-program ast))
+                                     (:expr (eval-repl-expression ast))))
+                       (format output "~A~%" line)))
                  (error (condition)
                    (format error-output "Error: ~A~%" condition)))
                (reset-buffer))

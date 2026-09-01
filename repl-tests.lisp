@@ -9,7 +9,7 @@
 (in-suite cl-sml-repl-suite)
 
 (defun sml-user-symbol-status (name)
-  (nth-value 1 (find-symbol (string-upcase name) "SML-USER")))
+  (nth-value 1 (find-symbol name "SML-USER")))
 
 (defun run-repl-session (input)
   (let ((out (make-string-output-stream))
@@ -60,6 +60,37 @@
     (is (eq :quit result))
     (is (search "Error:" error-output))
     (is (search "val it = 3" output))))
+
+(test repl-runs-static-checker-for-declarations-and-expressions
+  (let ((checked nil))
+    (cl-sml:with-sml-type-checker
+        ((lambda (source filename)
+           (declare (ignore filename))
+           (push source checked)))
+      (multiple-value-bind (result output error-output)
+          (run-repl-session (format nil "val checked = 7;~%checked + 1~%:quit~%"))
+        (is (eq :quit result))
+        (is (search "val it = 8" output))
+        (is (string= "" error-output))))
+    (is (find "val checked = 7;" checked :test #'string=))
+    (is (find "val it = (checked + 1);" checked :test #'string=))))
+
+(test repl-does-not-evaluate-statically-rejected-phrase
+  (let ((package "SML.REPL-STATIC-REJECTION-TEST"))
+    (cl-sml:with-sml-type-checker
+        ((lambda (source filename)
+           (declare (ignore filename))
+           (error 'cl-sml:sml-static-type-error
+                  :source source
+                  :cause "rejected by test checker")))
+      (multiple-value-bind (result output error-output)
+          (run-repl-session-in-package
+           (format nil "val should_not_exist = 9;~%:quit~%") package)
+        (is (eq :quit result))
+        (is (not (search "should_not_exist = 9" output)))
+        (is (search "static elaboration failed" error-output))))
+    (let ((symbol (find-symbol "SHOULD_NOT_EXIST" package)))
+      (is (or (null symbol) (not (boundp symbol)))))))
 
 (test repl-sees-file-loaded-definitions
   (cl-sml:load-sml-file #P"testdata/sample-program.sml")

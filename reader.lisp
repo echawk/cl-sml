@@ -51,13 +51,17 @@
                    (sml-type-declaration-start-line-p line)))))
         (setf at-start nil)))))
 
-(defun compile-sml-program-string (sml-text &key package)
-  (let ((*sml-package* (ensure-sml-package (or package (current-sml-package)))))
+(defun compile-sml-program-string (sml-text &key package source-name
+                                                    (type-checker *sml-type-checker*))
+  (let* ((*sml-package* (ensure-sml-package (or package (current-sml-package))))
+         (normalized
+           (normalize-sml-type-declaration-continuations sml-text))
+         (ast (esrap:parse 'sml-program normalized)))
+    (type-check-sml-string normalized
+                           :checker type-checker
+                           :filename source-name)
     (compile-with-hoisted-sml-forms
-     (lambda ()
-       (compile-program
-        (esrap:parse 'sml-program
-                     (normalize-sml-type-declaration-continuations sml-text))))
+     (lambda () (compile-program ast))
      :identity sml-text)))
 
 (defun compile-sml-declarations-string (sml-text &key package)
@@ -73,7 +77,10 @@
 (defun compile-sml-file (pathname &key package)
   (with-open-file (stream pathname :direction :input)
     (let* ((target-package (ensure-sml-package (or package (pathname->sml-package-name pathname))))
-           (form (compile-sml-program-string (read-sml-source stream) :package target-package)))
+           (form (compile-sml-program-string
+                  (read-sml-source stream)
+                  :package target-package
+                  :source-name (namestring pathname))))
       (values form target-package))))
 
 (defun hoisted-sml-function-definition-p (form)

@@ -63,7 +63,7 @@ tab	"
 (test parse-append-and-assignment
   (is (equal '(:app (:app (:var "@") (:var "xs")) (:var "ys"))
              (parse 'cl-sml::sml-expr "xs @ ys")))
-  (is (equal '(:app (:app (:var "@@") (:var "x")) (:ctor "A"))
+  (is (equal '(:infix-app "@@" (:var "x") (:ctor "A"))
              (parse 'cl-sml::sml-expr "x@@A")))
   (is (equal '(:app (:app (:var ":=") (:var "r")) 10)
              (parse 'cl-sml::sml-expr "r := 10")))
@@ -71,8 +71,14 @@ tab	"
              (parse 'cl-sml::sml-expr "! r"))))
 
 (test parse-symbolic-infix-does-not-split-relational-prefix
-  (is (equal '(:app (:app (:var ">>=") (:var "x")) (:var "f"))
+  (is (equal '(:infix-app ">>=" (:var "x") (:var "f"))
              (parse 'cl-sml::sml-expr "x >>= f"))))
+
+(test parse-hamlet-named-infix-operators
+  (is (equal '(:infix-app "sub" (:var "action") (:var "state"))
+             (parse 'cl-sml::sml-expr "action sub state")))
+  (is (equal '(:infix-app "plus" (:var "left") (:var "right"))
+             (parse 'cl-sml::sml-expr "left plus right"))))
 
 (test parse-bare-tilde-as-value
   (is (equal '(:tuple (:var "~") (:var "Word.~") (:var "Word8.~") (:var "~"))
@@ -84,7 +90,16 @@ tab	"
 
 (test parse-sequencing
   (is (equal '(:seq (:app (:var "print") 1) 2)
-             (parse 'cl-sml::sml-expr "print 1; 2"))))
+             (parse 'cl-sml::sml-expr "(print 1; 2)")))
+  (is (equal '(:seq
+               (:if (:app (:app (:var "=") (:var "i")) 0)
+                    (:app (:app (:var ":=") (:var "buffer")) (:var "newchars"))
+                    (:app (:app (:var ":=") (:var "buffer")) (:var "oldchars")))
+               (:app (:app (:var ":=") (:var "length"))
+                     (:app (:var "size") (:deref (:var "buffer"))))
+               (:app (:var "scan") 0))
+             (parse 'cl-sml::sml-expr
+                    "(if i = 0 then buffer := newchars else buffer := oldchars; length := size (!buffer); scan 0)"))))
 
 (test parse-raise-as-boolean-operand
   (is (equal '(:orelse (:var "eq") (:raise (:ctor "Type")))
@@ -133,6 +148,25 @@ tab	"
                                 (:ctor "TE"))))
              (parse 'cl-sml::sml-fun "fun TE' TEplus (Env(SE, TE, VE)) = TE;"))))
 
+(test parse-parenthesized-symbolic-infix-fun-declaration
+  (is (equal '(:fun ">-"
+               ((((:pat-var "m1") (:pat-var "f") (:pat-var "env0"))
+                 (:var "m1"))))
+             (parse 'cl-sml::sml-fun
+                    "fun (m1 >- f) env0 = m1;"))))
+
+(test parse-unspaced-symbolic-infix-fun-declaration
+  (is (equal '(:fun "@@" ((((:pat-var "x") (:pat-var "loc"))
+                             (:app (:var "annotate")
+                                   (:tuple (:var "x") (:var "loc"))))))
+             (parse 'cl-sml::sml-fun
+                    "fun x@@loc = annotate(x, loc);")))
+  (is (equal '(:fun "charCase"
+               (((#\a) 1)
+                (((:pat-var "c")) 2)))
+             (parse 'cl-sml::sml-fun
+                    "fun charCase #\"a\" = 1 | charCase c = 2;"))))
+
 (test parse-nullary-constructor-function-parameter
   (is (equal '(:fun "packVar"
                ((((:pat-ctor "NONE") (:pat-var "var")) (:var "var"))
@@ -172,8 +206,8 @@ tab	"
     (is (equal '(:let ((:val (:pat-var "x") 1)
                        (:fun "add_x" ((((:pat-var "y"))
                                        (:app (:app (:var "+") (:var "x")) (:var "y"))))))
-                      ((:seq (:app (:var "add_x") 10)
-                             (:app (:var "add_x") 20))))
+                      ((:app (:var "add_x") 10)
+                       (:app (:var "add_x") 20)))
                (parse 'cl-sml::sml-expr prog))))
   (is (equal '(:let ((:open "A"))
                     ((:app (:var "f") (:var "x"))))
@@ -261,7 +295,8 @@ tab	"
              (parse 'cl-sml::sml-exception-alias "exception Bind = Bind")))
   (is (equal '(:val (:pat-var "use") (:var "use") :type "string -> unit")
              (parse 'cl-sml::sml-val "val use : string -> unit = use")))
-  (is (equal '(:program (:expr (:seq 1 (:app (:app (:var "+") 2) 3))))
+  (is (equal '(:program (:expr 1)
+                       (:expr (:app (:app (:var "+") 2) 3)))
              (parse 'cl-sml::sml-program "1; 2 + 3;"))))
 
 (test parse-records-and-selectors

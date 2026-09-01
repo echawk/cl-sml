@@ -15,4 +15,10 @@
            #:call-sml
            #:lookup-sml-binding-type
            #:sml-type->string
+           #:*sml-type-checker*
+           #:type-check-sml-string
+           #:with-sml-type-checker
+           #:sml-static-type-error
+           #:make-hamlet-type-checker
+           #:hamlet-type-check-string
            #:repl))
