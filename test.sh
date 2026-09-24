@@ -1,7 +1,7 @@
 #!/bin/sh -ex
 export XDG_CACHE_HOME="$PWD/.cache"
 
-abcl \
+sbcl \
     --eval '(load "~/.sbclrc")' \
     --eval "(ql:quickload '(:cl-sml :fiveam))" \
      --load parser-tests.lisp \
