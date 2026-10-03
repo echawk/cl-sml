@@ -55,6 +55,39 @@
                  name)
            (not (string= name "~")))))
 
+(defvar *sml-signature-texts* (make-hash-table :test #'equal)
+  "Source text of the signatures compiled so far, by name.")
+
+(defun sml-word-in-text-p (word text)
+  (flet ((identifier-char-p (ch)
+           (or (alphanumericp ch) (char= ch #\_) (char= ch #\'))))
+    (loop for start = (search word text) then (search word text :start2 (1+ start))
+          while start
+          thereis (let ((end (+ start (length word))))
+                    (and (or (zerop start)
+                             (not (identifier-char-p (char text (1- start)))))
+                         (or (= end (length text))
+                             (not (identifier-char-p (char text end)))))))))
+
+(defun declarations-constructor-names (decs)
+  (loop for dec in decs
+        append (case (and (consp dec) (car dec))
+                 (:datatype (mapcar #'second (third dec)))
+                 (:exception (list (second dec)))
+                 (:exception-alias (list (second dec))))))
+
+(defun restrict-sealed-structure-members (members decs signature-name)
+  "Drop the datatype and exception constructors that SIGNATURE-NAME does not
+mention, so that `open` of a sealed structure does not leak hidden constructors
+into the scope of ordinary variable patterns."
+  (let ((text (and signature-name
+                   (gethash signature-name *sml-signature-texts*))))
+    (if (or (null text) (sml-word-in-text-p "include" text))
+        members
+        (let ((hidden (remove-if (lambda (name) (sml-word-in-text-p name text))
+                                 (declarations-constructor-names decs))))
+          (set-difference members hidden :test #'string=)))))
+
 (defun maybe-wrap-infix-value-initializer (name form)
   (if (sml-binary-infix-value-name-p name)
       `(sml-tuple-or-curried-binary ,form)
@@ -727,12 +760,21 @@
             groups)
          (otherwise (funcall ,fallback))))))
 
+(defun sml-lambda-form (name arg body)
+  "A one-argument lambda; named on SBCL so that backtraces show SML names."
+  #+sbcl
+  (if name
+      `(sb-int:named-lambda ,(format nil "sml:~A" name) (,arg) ,body)
+      `(lambda (,arg) ,body))
+  #-sbcl
+  (progn name `(lambda (,arg) ,body)))
+
 (defun compile-fn-clauses (clauses &optional local-exceptions function-name outer-lexical-env)
   (let* ((arity (length (first (first clauses))))
          (tmp-args (loop repeat arity collect (gensym "ARG"))))
     (unless (every (lambda (clause) (= (length (first clause)) arity)) clauses)
       (error "All fun clauses must have the same arity: ~A" clauses))
-    (reduce (lambda (arg body) `(lambda (,arg) ,body))
+    (reduce (lambda (arg body) (sml-lambda-form function-name arg body))
             tmp-args
             :from-end t
             :initial-value
@@ -930,7 +972,25 @@
 	                                                   lexical-env))))
 	          ,body)))
     ((eq (car dec) :funs)
-     (compile-local-decls-into-body (cdr dec) body local-exceptions lexical-env))
+     ;; `fun f ... and g ...` is mutually recursive: bind every name before
+     ;; any of the closures is created.
+     (let* ((funs (cdr dec))
+            (bindings (mapcar (lambda (fun-dec)
+                                (cons (second fun-dec)
+                                      (sml-lexical-symbol (second fun-dec))))
+                              funs))
+            (extended-env (append bindings lexical-env)))
+       `(let ,(mapcar (lambda (binding) `(,(cdr binding) nil)) bindings)
+          ,@(mapcar (lambda (fun-dec)
+                      `(setf ,(cdr (assoc (second fun-dec) bindings :test #'equal))
+                             ,(maybe-wrap-infix-value-initializer
+                               (second fun-dec)
+                               (compile-fn-clauses (third fun-dec)
+                                                   local-exceptions
+                                                   (second fun-dec)
+                                                   extended-env))))
+                    funs)
+          ,body)))
     ((eq (car dec) :val-rec)
      (let ((name (sml-lexical-symbol (second dec))))
        `(let ((,name nil))
@@ -1163,6 +1223,13 @@
     ((and (listp ast) (eq (car ast) :var))
      (resolved-sml-symbol (second ast) lexical-env))
 
+    ((and (listp ast) (eq (car ast) :word))
+     (second ast))
+
+    ((and (listp ast) (eq (car ast) :op-var))
+     `(sml-tuple-or-curried-binary
+       ,(compile-expr `(:var ,(second ast)) local-exceptions lexical-env)))
+
     ((and (listp ast) (eq (car ast) :ctor))
      (cond
        ((string= (second ast) "true") t)
@@ -1185,6 +1252,13 @@
                (list :tuple
                      ,(compile-expr (third ast) local-exceptions lexical-env)
                      ,(compile-expr (fourth ast) local-exceptions lexical-env))))
+
+    ;; `~` applied to a word literal is modular negation.
+    ((and (listp ast) (eq (car ast) :app)
+          (equal (second ast) '(:var "~"))
+          (consp (third ast))
+          (eq (car (third ast)) :word))
+     (logand most-positive-fixnum (- (second (third ast)))))
 
     ;; Replace the :app block in compile-expr
     ((and (listp ast) (eq (car ast) :app))
@@ -1389,6 +1463,9 @@
     ((eq (car ast) :infix)
      `(progn))
     ((eq (car ast) :signature)
+     (let ((text (getf (cddr ast) :text)))
+       (when text
+         (setf (gethash (second ast) *sml-signature-texts*) text)))
      `(progn))
     ((eq (car ast) :open)
      (compile-open-form (second ast)))
@@ -1463,7 +1540,10 @@
 	           (lambda () ,@forms)))))
     ((eq (car ast) :structure)
      (let* ((module-name (current-qualified-sml-name (second ast)))
-            (members (declarations-bound-names (third ast)))
+            (members (restrict-sealed-structure-members
+                      (declarations-bound-names (third ast))
+                      (third ast)
+                      (getf (cdddr ast) :sig)))
             (structure-prefixes (module-local-structure-prefixes (third ast) module-name))
             (forms (let ((*sml-module-prefix* module-name)
                          (*sml-local-structure-prefixes* (append structure-prefixes

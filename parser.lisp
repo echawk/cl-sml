@@ -148,6 +148,37 @@
             elements
             :from-end t
             :initial-value '(:pat-nil)))
+  (defun sml-structure-ascription-signature-name (ascription)
+    "The signature identifier of an ascription such as `:> PRETTY_PRINT`, if any."
+    (let* ((text (string-trim '(#\Space #\Tab #\Newline #\Return)
+                              (sml-parser-fragment-string ascription)))
+           (start (cond ((and (> (length text) 1) (string= text ":>" :end1 2)) 2)
+                        ((and (> (length text) 0) (char= (char text 0) #\:)) 1))))
+      (when start
+        (let ((name (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                 (subseq text start))))
+          (and (plusp (length name))
+               (every (lambda (ch) (or (alphanumericp ch) (find ch "_'.")))
+                      name)
+               name)))))
+  (defun sml-low-precedence-pattern-op-p (op)
+    "Approximates fixity: user-declared symbolic constructors such as @@ bind
+looser than ::, while the standard arithmetic/list operators do not."
+    (not (member op '("::" "@" "^" "+" "-" "*" "/" "div" "mod")
+                 :test #'string=)))
+  (defun build-cons-pattern-ast (head tail)
+    "Build HEAD :: TAIL, re-associating `h :: l OP r` as `(h :: l) OP r`."
+    (if (and (consp tail)
+             (eq (car tail) :pat-app)
+             (equal (first (second tail)) :pat-ctor)
+             (sml-low-precedence-pattern-op-p (second (second tail)))
+             (consp (third tail))
+             (eq (car (third tail)) :pat-tuple)
+             (= (length (third tail)) 3))
+        `(:pat-app ,(second tail)
+                   (:pat-tuple ,(build-cons-pattern-ast head (second (third tail)))
+                               ,(third (third tail))))
+        `(:pat-cons ,head ,tail)))
   (defun normalize-sml-infix-pattern-operand (op pat)
     (if (and (string= op "@@")
              (consp pat)
@@ -311,6 +342,11 @@
 
 (defrule sml-word (or sml-word-hex sml-word-dec))
 
+;; In expressions a word literal keeps its identity so that `~(0w1)` can be
+;; compiled as modular negation: words are plain integers at run time.
+(defrule sml-word-expr sml-word
+  (:lambda (n) `(:word ,n)))
+
 (defrule sml-real
   (and (? "~") (+ (character-ranges (#\0 #\9))) "." (+ (character-ranges (#\0 #\9))))
   (:destructure (neg whole dot frac)
@@ -376,7 +412,14 @@
 
 (defrule sml-op-var sml-op-id
   (:lambda (name)
-    `(:var ,name)))
+    ;; `op +` denotes the function taking a pair, unlike infix application.
+    ;; Only the curried builtin primitives need this; user-defined operators
+    ;; are already wrapped where they are defined.
+    (if (member name '("+" "-" "*" "/" "div" "mod" "^" "@" "::" ":=" "=" "<>"
+                       "<" "<=" ">" ">=")
+                :test #'string=)
+        `(:op-var ,name)
+        `(:var ,name))))
 
 (defrule sml-bare-bar-symbol (and "|" (! sml-symbolic-char)))
 
@@ -423,8 +466,13 @@
         `(:var ,name))))
 
 ;; Operators
-(defrule sml-op-mult (or "*" "div" "mod" "/") (:text t))
-(defrule sml-op-add  (or "+" "-" "^") (:text t))
+;; A symbolic operator is a maximal run of symbol characters, so `^/^` is not
+;; `^` followed by `/^`.
+(defrule sml-op-mult
+  (or (and (or "*" "/") (! sml-symbolic-char))
+      (and (or "div" "mod") (! (or (alphanumericp character) #\_ #\'))))
+  (:text t))
+(defrule sml-op-add (and (or "+" "-" "^") (! sml-symbolic-char)) (:text t))
 (defrule sml-op-precedence-nine
   (and "sub" (! (or (alphanumericp character) #\_ #\')))
   (:text t))
@@ -626,10 +674,15 @@
 (defrule sml-ignored-struct-block (and sml-struct-keyword sml-module-ignore-body sml-end-keyword)
   (:constant nil))
 
-(defrule sml-signature (and "signature" ws sml-id ws "=" ws sml-sig-block ws (? ";"))
+;; The body text is kept so that sealed structures can be restricted to the
+;; names their signature mentions.
+(defrule sml-sig-block-text (and sml-sig-keyword sml-module-ignore-body sml-end-keyword)
+  (:text t))
+
+(defrule sml-signature (and "signature" ws sml-id ws "=" ws sml-sig-block-text ws (? ";"))
   (:destructure (sig-kw w1 name w2 eq w3 body w4 semi)
-    (declare (ignore sig-kw w1 w2 eq w3 body w4 semi))
-    `(:signature ,name)))
+    (declare (ignore sig-kw w1 w2 eq w3 w4 semi))
+    `(:signature ,name :text ,body)))
 
 (defrule sml-open-let-boundary
   (and ws1 (or "in" "end") (! (or (alphanumericp character) #\_ #\'))))
@@ -692,8 +745,11 @@
   (and "structure" ws sml-id ws (* sml-structure-ascription-char)
        "=" ws sml-struct-keyword ws sml-decs ws sml-end-keyword ws (? ";"))
   (:destructure (structure-kw w1 name w2 ascription eq w3 struct-kw w4 decs w5 end-kw w6 semi)
-    (declare (ignore structure-kw w1 w2 ascription eq w3 struct-kw w4 w5 end-kw w6 semi))
-    `(:structure ,name ,decs)))
+    (declare (ignore structure-kw w1 w2 eq w3 struct-kw w4 w5 end-kw w6 semi))
+    (let ((signature (sml-structure-ascription-signature-name ascription)))
+      (if signature
+          `(:structure ,name ,decs :sig ,signature)
+          `(:structure ,name ,decs)))))
 
 (defrule sml-functor
   (and "functor" ws sml-id ws (* sml-structure-ascription-char)
@@ -760,7 +816,7 @@
     (declare (ignore hash))
     `(:selector ,label)))
 
-(defrule sml-atomic (or sml-let sml-record sml-list sml-selector sml-char sml-string sml-word sml-real sml-int
+(defrule sml-atomic (or sml-let sml-record sml-list sml-selector sml-char sml-string sml-word-expr sml-real sml-int
                         sml-op-var sml-bare-tilde-var sml-symbolic-var sml-var-or-ctor sml-parens))
 
 (defrule sml-deref (and "!" ws sml-prefix)
@@ -787,6 +843,7 @@
                           (! sml-op-mult) (! sml-op-add) (! sml-op-rel)
                           (! sml-op-list) (! ":=")
                           (! sml-generic-word-infix-op) (! sml-generic-symbolic-infix-op)
+                          (! (and "before" (! (or (alphanumericp character) #\_ #\'))))
                           sml-prefix))
 
 (defrule sml-app (and sml-prefix (* sml-app-arg))
@@ -847,7 +904,6 @@
       (and "plusF" (! (or (alphanumericp character) #\_ #\')))
       (and "plusE" (! (or (alphanumericp character) #\_ #\')))
       (and "plusI" (! (or (alphanumericp character) #\_ #\')))
-      (and "before" (! (or (alphanumericp character) #\_ #\')))
       (and "oplus" (! (or (alphanumericp character) #\_ #\')))
       (and "plus" (! (or (alphanumericp character) #\_ #\')))
       (and "o" (! (or (alphanumericp character) #\_ #\'))))
@@ -1013,7 +1069,7 @@
 ;; Parse the right-associative cons pattern: h :: t.
 (defrule sml-pat-cons (and (or sml-pat-as sml-pat-ascribed) ws "::" ws sml-pat)
   (:destructure (h w1 op w2 t-pat) (declare (ignore w1 op w2))
-    `(:pat-cons ,h ,t-pat)))
+    (build-cons-pattern-ast h t-pat)))
 
 (defrule sml-pat-symbolic-infix-op
   (and (! "::") (! ":=") (! "=>") (! "->") (! "=") (! "|") sml-symbolic-id)
@@ -1026,7 +1082,10 @@
   (:destructure (left w1 op w2 right)
     (declare (ignore w1 w2))
     `(:pat-app (:pat-ctor ,op)
-               (:pat-tuple ,(normalize-sml-infix-pattern-operand op left)
+               ;; Only the right operand (the annotation, as in `s@@A`) is turned
+               ;; into a variable; a capitalized left operand such as
+               ;; `EMPTYSpec@@A` is a genuine constructor.
+               (:pat-tuple ,left
                            ,(normalize-sml-infix-pattern-operand op right)))))
 
 ;; Patterns for case statements
@@ -1071,12 +1130,21 @@
     (declare (ignore w1 bar w2 w3 arr w4))
     `(,pat ,expr)))
 
+;; `before` is infix 0, looser than every other operator including :=.
+(defrule sml-before-expr
+  (and sml-assign-expr
+       (* (and ws "before" (! (or (alphanumericp character) #\_ #\')) ws sml-assign-expr)))
+  (:destructure (first rest)
+    (reduce (lambda (left group) `(:infix-app "before" ,left ,(fifth group)))
+            rest
+            :initial-value first)))
+
 (defrule sml-base-expr
   (or sml-fn
       sml-case
       sml-if
       sml-while
-      sml-assign-expr))
+      sml-before-expr))
 
 (defrule sml-handle-expr (and sml-base-expr (? (and ws "handle" ws sml-handle-branch (* sml-handle-match-branch))))
   (:destructure (expr opt-handle)
@@ -1146,7 +1214,23 @@
 (defrule sml-paren-infix-fun-name (or sml-infix-fun-name sml-id)
   (:text t))
 
-(defrule sml-fun-prefix-clause (and sml-fun-name (+ (and ws sml-pat)) ws "=" ws sml-expr)
+;; Curried parameters are atomic patterns: in `f J (x as p)` the capitalized J
+;; is a variable argument, not a constructor applied to the next pattern.
+(defrule sml-fun-param (and (! ":") (or sml-pat-list sml-pat-primary))
+  (:function second))
+
+(defrule sml-fun-result-type (and ws ":" (! ":") ws sml-type-text-before-equals)
+  (:function fifth))
+
+(defrule sml-fun-prefix-clause
+  (and sml-fun-name (+ (and ws sml-fun-param)) (? sml-fun-result-type) ws "=" ws sml-expr)
+  (:destructure (name params result-type w1 eq w2 expr)
+    (declare (ignore w1 eq w2))
+    `(,name ,(mapcar #'second params)
+            ,(if result-type `(:typed ,expr ,result-type) expr))))
+
+;; Lenient fallback for non-standard clauses such as `fun f x :: xs = ...`.
+(defrule sml-fun-loose-prefix-clause (and sml-fun-name (+ (and ws sml-pat)) ws "=" ws sml-expr)
   (:destructure (name params w1 eq w2 expr)
     (declare (ignore w1 eq w2))
     `(,name ,(mapcar #'second params) ,expr)))
@@ -1181,7 +1265,8 @@
                             sml-fun-bare-id-infix-clause
                             sml-fun-symbolic-infix-clause
                             sml-fun-bare-infix-clause
-                            sml-fun-prefix-clause))
+                            sml-fun-prefix-clause
+                            sml-fun-loose-prefix-clause))
 
 (defrule sml-fun-binding (and sml-fun-clause (* (and ws "|" ws sml-fun-clause)))
   (:destructure (first rest)

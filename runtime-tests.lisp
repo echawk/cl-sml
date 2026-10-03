@@ -754,4 +754,82 @@
              branches))
     (is (= 42 (sml-value "tupleDispatched")))))
 
+(test fun-clause-result-type-and-capitalized-parameters
+  (eval-sml-program
+   "fun lex () : int = 7;
+    fun cat J (atp as (a, b)) = J + a + b;
+    val lexed = lex ();
+    val catted = cat 1 (2, 3);")
+  (is (= 7 (sml-value "lexed")))
+  (is (= 6 (sml-value "catted"))))
+
+(test local-mutually-recursive-fun-group
+  (eval-sml-program
+   "fun outer n =
+      let
+        fun even m = if m = 0 then true else odd' (m - 1)
+        and odd' m = if m = 0 then false else even (m - 1)
+      in even n end;
+    val evenTen = outer 10;")
+  (is (eq t (sml-value "evenTen"))))
+
+(test op-binary-operators-take-pairs
+  (eval-sml-program
+   "fun foldr' f b nil = b | foldr' f b (x::r) = f (x, foldr' f b r);
+    val consed = foldr' (op ::) [] [1, 2, 3];
+    val summed = foldr' (op +) 0 [1, 2, 3];
+    val applied = (op +) (1, 2);")
+  (is (equal '(1 2 3) (sml-value "consed")))
+  (is (= 6 (sml-value "summed")))
+  (is (= 3 (sml-value "applied"))))
+
+(test before-binds-looser-than-assignment
+  (eval-sml-program
+   "val cell = ref 0;
+    val beforeResult = (10 before cell := 7);
+    val beforeCell = !cell;")
+  (is (= 10 (sml-value "beforeResult")))
+  (is (= 7 (sml-value "beforeCell"))))
+
+(test symbolic-operators-are-maximal-munch
+  (eval-sml-program
+   "infixr ^/^
+    fun a ^/^ b = a ^ \"/\" ^ b;
+    val joined = \"x\" ^/^ \"y\" ^/^ \"z\";")
+  (is (equal "x/y/z" (sml-value "joined"))))
+
+(test cons-pattern-with-looser-infix-constructor
+  (eval-sml-program
+   "infix @@
+    datatype 'a ann = @@ of 'a * int;
+    fun headOf (x :: r @@ _) = x | headOf _ = 0;
+    val headed = headOf ([4, 5] @@ 9);")
+  (is (= 4 (sml-value "headed"))))
+
+(test opened-sealed-structure-does-not-leak-hidden-constructors
+  (eval-sml-program
+   "signature PP = sig type mode val f : int -> int end;
+    structure P :> PP = struct
+      datatype mode = H | V | F | A
+      fun f x = x + 1
+    end;
+    structure Q = struct
+      open P
+      fun ppF F = F + 1
+    end;
+    val unleaked = Q.ppF 41;")
+  (is (= 42 (sml-value "unleaked"))))
+
+(test word-literal-negation-is-modular
+  (eval-sml-program "val maxWord = ~(0w1); val sixteen = 0w16;")
+  (is (= most-positive-fixnum (sml-value "maxWord")))
+  (is (= 16 (sml-value "sixteen"))))
+
+(test real-basis-primitives
+  (is (equal "3.14" (cl-sml::sml-real-to-string 3.14d0)))
+  (is (equal "1.0E10" (cl-sml::sml-real-to-string 1d10)))
+  (is (equal "~2.5" (cl-sml::sml-real-to-string -2.5d0)))
+  (is (= 4 (funcall (cl-sml::sml-basis-primitive "Real.round") 3.5d0)))
+  (is (= 2 (funcall (cl-sml::sml-basis-primitive "Real.round") 2.5d0))))
+
 (fiveam:run! 'cl-sml-runtime-suite)

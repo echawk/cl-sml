@@ -1069,6 +1069,106 @@
         (uiop:ensure-directory-pathname (truename path)))
   (sml-unit))
 
+;;; Real, Math, command-line and file-system primitives used by the Basis.
+
+(defmacro with-sml-float-traps-masked (&body body)
+  #+sbcl `(sb-int:with-float-traps-masked (:invalid :divide-by-zero :overflow :inexact)
+            ,@body)
+  #-sbcl `(progn ,@body))
+
+(defun sml-nan ()
+  (with-sml-float-traps-masked
+    (- sb-ext:double-float-positive-infinity sb-ext:double-float-positive-infinity)))
+
+(defun sml-real-nan-p (x)
+  #+sbcl (and (floatp x) (sb-ext:float-nan-p x))
+  #-sbcl (and (floatp x) (/= x x)))
+
+(defun sml-real-infinite-p (x)
+  #+sbcl (and (floatp x) (sb-ext:float-infinity-p x))
+  #-sbcl nil)
+
+(defun sml-real-finite-p (x)
+  (not (or (sml-real-nan-p x) (sml-real-infinite-p x))))
+
+(defun sml-real-to-integer (x rounder)
+  (if (sml-real-finite-p x)
+      (values (funcall rounder x))
+      (sml-raise-named-exception "Overflow")))
+
+(defun sml-real-to-string (x)
+  (cond
+    ((sml-real-nan-p x) "nan")
+    ((sml-real-infinite-p x) (if (plusp x) "inf" "~inf"))
+    (t
+     (let ((negative (minusp (float-sign x)))
+           (magnitude (abs x)))
+       (flet ((finish (body) (if negative (concatenate 'string "~" body) body)))
+         (if (zerop magnitude)
+             (finish "0.0")
+             (multiple-value-bind (k digits) (sb-impl::flonum-to-digits magnitude)
+               ;; magnitude = 0.DIGITS * 10^k
+               (let ((n (length digits)))
+                 (finish
+                  (cond
+                    ((and (<= 0 k) (<= k 7))
+                     (if (>= k n)
+                         (format nil "~A~A.0" digits
+                                 (make-string (- k n) :initial-element #\0))
+                         (format nil "~A.~A" (subseq digits 0 k) (subseq digits k))))
+                    ((and (< k 0) (> k -3))
+                     (format nil "0.~A~A" (make-string (- k) :initial-element #\0)
+                             digits))
+                    (t
+                     (let ((exponent (1- k)))
+                       (format nil "~A.~AE~A" (subseq digits 0 1)
+                               (if (> n 1) (subseq digits 1) "0")
+                               (sml-int-to-string exponent))))))))))))))
+
+(defun sml-real-next-after (tuple)
+  (let ((x (sml-tuple-first tuple))
+        (y (sml-tuple-second tuple)))
+    (cond ((or (sml-real-nan-p x) (sml-real-nan-p y)) (sml-nan))
+          ((= x y) y)
+          ((zerop x) (if (> y 0)
+                         least-positive-double-float
+                         (- least-positive-double-float)))
+          (t
+           (let ((ulp (scale-float 1d0 (- (nth-value 1 (decode-float x)) 53))))
+             (if (eq (> y x) (plusp x))
+                 (+ x (* (signum x) ulp))
+                 (- x (* (signum x) ulp))))))))
+
+(defun sml-math-guarded (function value)
+  (with-sml-float-traps-masked
+    (let ((result (funcall function value)))
+      (if (complexp result)
+          (sml-nan)
+          (coerce result 'double-float)))))
+
+(defun sml-command-line-name (unit)
+  (declare (ignore unit))
+  (or (first sb-ext:*posix-argv*) "cl-hamlet"))
+
+(defun sml-command-line-arguments (unit)
+  (declare (ignore unit))
+  (rest sb-ext:*posix-argv*))
+
+(defun sml-os-file-sys-is-dir (path)
+  (and (uiop:directory-exists-p path) t))
+
+(defun sml-os-file-sys-mk-dir (path)
+  (ensure-directories-exist (uiop:ensure-directory-pathname path))
+  (sml-unit))
+
+(defun sml-os-file-sys-rm-dir (path)
+  (uiop:delete-empty-directory (uiop:ensure-directory-pathname path))
+  (sml-unit))
+
+(defun sml-os-process-terminate (status)
+  (finish-output)
+  (uiop:quit (if (integerp status) status 0)))
+
 (defun sml-basis-primitive (name)
   (or (cdr (assoc name
                   `(("General.exnName" . ,#'sml-exn-name-primitive)
@@ -1155,7 +1255,71 @@
                     ("Math.sin" . ,#'sml-sin)
                     ("Math.cos" . ,#'sml-cos)
                     ("Math.exp" . ,#'sml-exp)
-                    ("Math.ln" . ,#'sml-ln))
+                    ("Math.ln" . ,#'sml-ln)
+                    ("Math.tan" . ,(lambda (v) (sml-math-guarded #'tan v)))
+                    ("Math.asin" . ,(lambda (v) (sml-math-guarded #'asin v)))
+                    ("Math.acos" . ,(lambda (v) (sml-math-guarded #'acos v)))
+                    ("Math.atan" . ,(lambda (v) (sml-math-guarded #'atan v)))
+                    ("Math.atan2" . ,(lambda (tuple)
+                                       (coerce (atan (sml-tuple-first tuple)
+                                                     (sml-tuple-second tuple))
+                                               'double-float)))
+                    ("Math.sinh" . ,(lambda (v) (sml-math-guarded #'sinh v)))
+                    ("Math.cosh" . ,(lambda (v) (sml-math-guarded #'cosh v)))
+                    ("Math.tanh" . ,(lambda (v) (sml-math-guarded #'tanh v)))
+                    ("Math.log10" . ,(lambda (v)
+                                       (sml-math-guarded (lambda (x) (log x 10d0)) v)))
+                    ("Math.pow" . ,(lambda (tuple)
+                                     (with-sml-float-traps-masked
+                                       (let ((result (expt (sml-tuple-first tuple)
+                                                           (sml-tuple-second tuple))))
+                                         (if (complexp result)
+                                             (sml-nan)
+                                             (coerce result 'double-float))))))
+                    ("Real.fromInt" . ,#'sml-real)
+                    ("Real.==" . ,(lambda (tuple)
+                                    (= (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                    ("Real.?=" . ,(lambda (tuple)
+                                    (let ((x (sml-tuple-first tuple))
+                                          (y (sml-tuple-second tuple)))
+                                      (or (= x y)
+                                          (and (sml-real-nan-p x) (sml-real-nan-p y))))))
+                    ("Real.floor" . ,(lambda (x) (sml-real-to-integer x #'floor)))
+                    ("Real.ceil" . ,(lambda (x) (sml-real-to-integer x #'ceiling)))
+                    ("Real.trunc" . ,(lambda (x) (sml-real-to-integer x #'truncate)))
+                    ("Real.round" . ,(lambda (x) (sml-real-to-integer x #'round)))
+                    ("Real.realFloor" . ,(lambda (x) (if (sml-real-finite-p x) (ffloor x) x)))
+                    ("Real.realCeil" . ,(lambda (x) (if (sml-real-finite-p x) (fceiling x) x)))
+                    ("Real.realTrunc" . ,(lambda (x) (if (sml-real-finite-p x) (ftruncate x) x)))
+                    ("Real.realRound" . ,(lambda (x) (if (sml-real-finite-p x) (fround x) x)))
+                    ("Real.rem" . ,(lambda (tuple)
+                                     (with-sml-float-traps-masked
+                                       (rem (sml-tuple-first tuple) (sml-tuple-second tuple)))))
+                    ("Real.copySign" . ,(lambda (tuple)
+                                          (float-sign (sml-tuple-second tuple)
+                                                      (abs (sml-tuple-first tuple)))))
+                    ("Real.signBit" . ,(lambda (x) (minusp (float-sign x))))
+                    ("Real.isNan" . ,#'sml-real-nan-p)
+                    ("Real.isFinite" . ,#'sml-real-finite-p)
+                    ("Real.isNormal" . ,(lambda (x)
+                                          (and (sml-real-finite-p x)
+                                               (>= (abs x)
+                                                   least-positive-normalized-double-float))))
+                    ("Real.checkFloat" . ,#'identity)
+                    ("Real.nextAfter" . ,#'sml-real-next-after)
+                    ("Real.maxFinite" . ,(sml-constant-primitive most-positive-double-float))
+                    ("Real.minPos" . ,(sml-constant-primitive least-positive-double-float))
+                    ("Real.minNormalPos"
+                     . ,(sml-constant-primitive least-positive-normalized-double-float))
+                    ("Real.precision" . ,(sml-constant-primitive 53))
+                    ("Real.radix" . ,(sml-constant-primitive 2))
+                    ("Real.toString" . ,#'sml-real-to-string)
+                    ("CommandLine.name" . ,#'sml-command-line-name)
+                    ("CommandLine.arguments" . ,#'sml-command-line-arguments)
+                    ("OS.FileSys.isDir" . ,#'sml-os-file-sys-is-dir)
+                    ("OS.FileSys.mkDir" . ,#'sml-os-file-sys-mk-dir)
+                    ("OS.FileSys.rmDir" . ,#'sml-os-file-sys-rm-dir)
+                    ("OS.Process.terminate" . ,#'sml-os-process-terminate))
                   :test #'string=))
       (sml-primitive-stub name)))
 

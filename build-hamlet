@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
+
+SBCL="${SBCL:-sbcl}"
+PACKAGE="SML.HAMLET-IMAGE"
+OUTPUT="$ROOT/cl-hamlet"
+# Loading HaMLet's generated parser needs a deep control stack; the
+# :save-runtime-options below bakes this size into the executable.
+STACK="${CL_HAMLET_STACK:-1GB}"
+
+"$SBCL" --control-stack-size "$STACK" --noinform --non-interactive \
+    --eval '(load "~/.sbclrc")' \
+    --eval '(ql:quickload :cl-sml)' \
+    --eval "(cl-sml:load-sml-file #P\"hamlet/basis/all.sml\" :package \"$PACKAGE\")" \
+    --eval "(cl-sml:load-sml-file #P\"hamlet/hamlet.sml\" :package \"$PACKAGE\")" \
+    --eval "(cl-sml::configure-hamlet-basis-path \"$PACKAGE\" #P\"$ROOT/hamlet/basis/\")" \
+    --eval "(setf cl-sml::*hamlet-image-package* \"$PACKAGE\")" \
+    --eval "(sb-ext:save-lisp-and-die \"$OUTPUT\" :executable t :save-runtime-options t :toplevel (lambda () (cl-sml::hamlet-image-entry-point) (sb-ext:exit :code 0)))"
+
+"$OUTPUT" "$ROOT/testdata/hamlet-executable-smoke.sml"

@@ -1,0 +1,44 @@
+# Project Todo
+
+- [ ] Continue SML97 conformance work.
+  - [x] Core tuples, unit, patterns, records, exceptions, local declarations,
+    type annotations/metadata, file loading, package namespaces, and REPL.
+  - [x] Load all files in `hamlet/basis/all.sml` and `hamlet/hamlet.sml`.
+  - [x] Make HaMLet operational: it parses, elaborates (SML97 type checking)
+    and evaluates programs, e.g. `./cl-hamlet file.sml` and the `cl-hamlet`
+    REPL.  Known gaps: basis library is re-elaborated on every start (~6s),
+    and `sml-primitive-stub`s remain for rarely used primitives.
+  - [ ] Load and run representative programs from `HOL/`.
+- [ ] Replace shallow module handling with explicit module/signature
+  elaboration; retain CL packages as the external namespace substrate.
+  Stopgaps in place: signature text is kept so sealed structures hide
+  constructors the signature never mentions (`restrict-sealed-structure-members`);
+  constructor vs variable patterns are still decided by a global registry.
+- [ ] Make the expression/pattern parser fixity-aware (`infix`/`infixr`
+  declarations); today precedence is a fixed grammar plus special cases
+  (`before`, `::` vs user infix constructors in patterns).
+- [ ] Distinguish word from int at run time or compile time (`~` on words is
+  special-cased only for literals).
+- [ ] Implement SML97 static semantics, including value restriction, equality
+  types, overloaded identifiers, record rows, and module type-name generation.
+- [ ] Complete the Basis features required by HaMLet, especially TextIO input,
+  files, OS paths, command-line handling, arrays, and vectors.
+- [x] Emit inspectable Common Lisp from expressions, declarations, and files.
+- [ ] Add deterministic project artifacts, dependency manifests, and SML-to-CL
+  source maps.
+- [x] Add basic CL interop through `sml-value`, `(setf sml-value)`,
+  `sml-function`, `call-sml`, and `with-sml-package`.
+- [ ] Add module handles, generated uncurried wrappers, and a conservative
+  `with-sml-syntax` API.
+- [x] Add `build-hamlet`, the intended preloaded `cl-hamlet` image recipe and
+  executable smoke test.
+- [x] Produce `cl-hamlet` on SBCL (`./build-hamlet`; needs the 1GB control
+  stack that `build-hamlet` bakes in via `:save-runtime-options`).
+- [ ] Preload/cache the elaborated basis in the `cl-hamlet` image so startup
+  does not re-elaborate `hamlet/basis` each time.
+- [ ] ABCL 1.9.2 has no `uiop:dump-image`; see the JAR/launcher item below.
+- [ ] Evaluate an executable JAR/launcher as the ABCL fallback image format.
+- [ ] Evaluate `cl-iparse` as a future grammar implementation.
+- [ ] Evaluate `rewrite-cl` for typed normalization and backend rewrites.
+- [ ] Prototype an optional Coalton backend only after a backend-neutral typed
+  IR exists; see `PLAN.md`.
