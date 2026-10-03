@@ -177,9 +177,43 @@
      *sml-structure-members*)
     (normalize-sml-member-names members)))
 
+(defvar *sml-constructor-function-tags*
+  (make-hash-table :test #'eq #+sbcl :weakness #+sbcl :key)
+  "Maps a constructor's function value to the tag its values carry.")
+
 (defun register-sml-constructor (symbol &optional canonical-symbol)
-  (setf (gethash symbol *sml-constructor-symbols*) (or canonical-symbol symbol))
+  (let ((canonical (or canonical-symbol symbol)))
+    (setf (gethash symbol *sml-constructor-symbols*) canonical)
+    (when (and (boundp symbol) (functionp (symbol-value symbol)))
+      (setf (gethash (symbol-value symbol) *sml-constructor-function-tags*)
+            canonical)))
   symbol)
+
+(defun sml-constructor-function-p (value)
+  (and (functionp value)
+       (nth-value 1 (gethash value *sml-constructor-function-tags*))))
+
+(defun sml-unqualified-name (symbol)
+  (let* ((name (symbol-name symbol))
+         (dot (position #\. name :from-end t)))
+    (if dot (subseq name (1+ dot)) name)))
+
+(defun sml-constructor-tag-p (tag constructor-symbol)
+  "Does TAG belong to the constructor that CONSTRUCTOR-SYMBOL denotes?  Used by
+patterns whose constructor could not be resolved at compile time, such as one
+reached through a functor parameter (`Token.LrTable.T`).  If the alias is not
+bound when the pattern runs, the unqualified names are compared: in a
+well-typed program only values of the pattern's datatype reach it, and
+constructor names are unique within a datatype."
+  (and (symbolp tag)
+       (or (eq tag constructor-symbol)
+           (eq tag (sml-constructor-canonical-symbol constructor-symbol))
+           (if (boundp constructor-symbol)
+               (let ((value (symbol-value constructor-symbol)))
+                 (and (functionp value)
+                      (eq tag (gethash value *sml-constructor-function-tags*))))
+               (string= (sml-unqualified-name tag)
+                        (sml-unqualified-name constructor-symbol))))))
 
 (defun sml-constructor-symbol-p (symbol)
   (gethash symbol *sml-constructor-symbols*))
@@ -213,7 +247,9 @@
       (funcall thunk)))
 
 (defun wrap-sml-functor-application-value (value bindings)
-  (if (and bindings (functionp value))
+  ;; Constructors need no functor bindings, and patterns recognise them by
+  ;; their function identity (see SML-CONSTRUCTOR-TAG-P).
+  (if (and bindings (functionp value) (not (sml-constructor-function-p value)))
       (lambda (&rest args)
         (call-with-sml-functor-bindings
          bindings

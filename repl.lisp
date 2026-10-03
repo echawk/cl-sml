@@ -58,11 +58,49 @@
           (sml-type-known-p (third type))))
     (t nil)))
 
+(defvar *repl-checked-value-types* nil
+  "Alist from value name to the type HaMLet inferred for the current phrase.")
+
+(defun hamlet-description-value-types (description)
+  "Parse the `val NAME : TYPE' entries of a HaMLet basis description, joining
+the indented continuation lines of long types."
+  (let ((entries nil))
+    (dolist (line (uiop:split-string description :separator '(#\Newline)))
+      (let ((trimmed (string-trim '(#\Space #\Tab) line)))
+        (cond
+          ((and (> (length trimmed) 4) (string= "val " trimmed :end2 4))
+           ;; A long type is wrapped as "val name :" plus indented lines.
+           (let ((colon (or (search " : " trimmed)
+                            (and (> (length trimmed) 6)
+                                 (string= " :" trimmed
+                                          :start2 (- (length trimmed) 2))
+                                 (- (length trimmed) 2)))))
+             (when colon
+               (push (cons (subseq trimmed 4 colon)
+                           (subseq trimmed (min (length trimmed) (+ colon 3))))
+                     entries))))
+          ((and entries
+                (plusp (length line))
+                (member (char line 0) '(#\Space #\Tab))
+                (plusp (length trimmed))
+                (not (search "(*" trimmed))
+                (not (member trimmed '("end" "sig" "struct") :test #'string=))
+                (not (find #\: trimmed :end 1)))
+           (setf (cdr (first entries))
+                 (if (string= (cdr (first entries)) "")
+                     trimmed
+                     (concatenate 'string (cdr (first entries)) " " trimmed)))))))
+    (nreverse entries)))
+
 (defun repl-type-suffix (symbol)
-  (let ((type (lookup-sml-binding-type symbol)))
-    (if (sml-type-known-p type)
-        (format nil " : ~A" (sml-type->string type))
-        "")))
+  (let ((checked (cdr (assoc (symbol-name symbol) *repl-checked-value-types*
+                             :test #'string=)))
+        (type (lookup-sml-binding-type symbol)))
+    (cond
+      (checked (format nil " : ~A" checked))
+      ((sml-type-known-p type)
+       (format nil " : ~A" (sml-type->string type)))
+      (t ""))))
 
 (defun sml-value->string (value)
   (cond
@@ -108,7 +146,8 @@
      (princ-to-string value))))
 
 (defun repl-symbol-display-name (symbol)
-  (string-downcase (symbol-name symbol)))
+  ;; SML identifiers are case-sensitive and interned with their exact spelling.
+  (symbol-name symbol))
 
 (defun repl-report-decl (decl)
   (case (car decl)
@@ -168,6 +207,14 @@
            (format nil "val it = (~A);" expression))
          trimmed))))
 
+(defun static-checker-diagnostic (source)
+  "When our parser rejects SOURCE, prefer the static checker's diagnostic: the
+phrase may simply be invalid SML.  Returns NIL if there is no checker or it
+accepts SOURCE (which then points at a gap in our parser)."
+  (when *sml-type-checker*
+    (handler-case (progn (type-check-repl-input :program source) nil)
+      (sml-static-type-error (condition) condition))))
+
 (defun prompt-string (continuation-p)
   (if continuation-p "= " "- "))
 
@@ -177,6 +224,7 @@
                   (prompt t)
                   (package "SML-USER"))
   (let ((*sml-package* (ensure-sml-package package))
+        (*repl-checked-value-types* nil)
         (buffer ""))
     (labels ((emit-prompt ()
                (when prompt
@@ -201,6 +249,11 @@
                (handler-case
                    (progn
                      (type-check-repl-input kind buffer)
+                     (setf *repl-checked-value-types*
+                           (and (hamlet-type-checker-p *sml-type-checker*)
+                                (hamlet-description-value-types
+                                 (hamlet-type-checker-last-description
+                                  *sml-type-checker*))))
                      (dolist (line (ecase kind
                                      (:program (eval-repl-program ast))
                                      (:expr (eval-repl-expression ast))))
@@ -214,5 +267,6 @@
                                #\;))
                    (string= (trim-repl-input line) ""))
                (when error
-                 (format error-output "Error: ~A~%" error))
+                 (format error-output "Error: ~A~%"
+                         (or (static-checker-diagnostic buffer) error)))
                (reset-buffer))))))))))

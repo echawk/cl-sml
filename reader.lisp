@@ -56,10 +56,13 @@
   (let* ((*sml-package* (ensure-sml-package (or package (current-sml-package))))
          (normalized
            (normalize-sml-type-declaration-continuations sml-text))
-         (ast (esrap:parse 'sml-program normalized)))
-    (type-check-sml-string normalized
-                           :checker type-checker
-                           :filename source-name)
+         ;; The static checker runs first: it is the authority on what is a
+         ;; valid SML program and gives better diagnostics than our parser.
+         (ast (progn
+                (type-check-sml-string normalized
+                                       :checker type-checker
+                                       :filename source-name)
+                (esrap:parse 'sml-program normalized))))
     (compile-with-hoisted-sml-forms
      (lambda () (compile-program ast))
      :identity sml-text)))

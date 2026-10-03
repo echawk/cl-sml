@@ -69,24 +69,35 @@
                          (or (= end (length text))
                              (not (identifier-char-p (char text end)))))))))
 
-(defun declarations-constructor-names (decs)
-  (loop for dec in decs
-        append (case (and (consp dec) (car dec))
-                 (:datatype (mapcar #'second (third dec)))
-                 (:exception (list (second dec)))
-                 (:exception-alias (list (second dec))))))
-
-(defun restrict-sealed-structure-members (members decs signature-name)
-  "Drop the datatype and exception constructors that SIGNATURE-NAME does not
-mention, so that `open` of a sealed structure does not leak hidden constructors
-into the scope of ordinary variable patterns."
+(defun restrict-sealed-structure-members (members signature-name)
+  "Restrict the registered members of a structure ascribed SIGNATURE-NAME to
+the names that signature mentions.  Hidden members (helpers, constructors of
+abstract types, names brought in by `open` in the body) otherwise leak into
+every scope that later `open`s the structure.  The check is textual, so a
+signature using `include` is not restricted."
   (let ((text (and signature-name
                    (gethash signature-name *sml-signature-texts*))))
     (if (or (null text) (sml-word-in-text-p "include" text))
         members
-        (let ((hidden (remove-if (lambda (name) (sml-word-in-text-p name text))
-                                 (declarations-constructor-names decs))))
-          (set-difference members hidden :test #'string=)))))
+        (remove-if-not (lambda (name)
+                         (sml-word-in-text-p
+                          (subseq name 0 (or (position #\. name) (length name)))
+                          text))
+                       members))))
+
+(defun note-signature-declaration (dec)
+  "Record a signature's text as soon as its declaration is seen, so that member
+lists computed ahead of compilation can already honour it."
+  (when (and (consp dec) (eq (car dec) :signature))
+    (let ((text (getf (cddr dec) :text)))
+      (when text
+        (setf (gethash (second dec) *sml-signature-texts*) text)))))
+
+(defun structure-declaration-members (dec &optional local-structures)
+  "The members a (:structure name decs [:sig S]) declaration makes visible."
+  (restrict-sealed-structure-members
+   (declarations-bound-names (third dec) local-structures)
+   (getf (cdddr dec) :sig)))
 
 (defun maybe-wrap-infix-value-initializer (name form)
   (if (sml-binary-infix-value-name-p name)
@@ -450,6 +461,7 @@ into the scope of ordinary variable patterns."
   (let ((members nil)
         (structures local-structures))
     (dolist (dec decs)
+      (note-signature-declaration dec)
       (case (car dec)
         (:open
          (dolist (name (split-sml-module-names (second dec)))
@@ -457,7 +469,7 @@ into the scope of ordinary variable patterns."
                  (append (lookup-sml-module-members-for-compiler name structures)
                          members))))
         (:structure
-         (let ((structure-members (declarations-bound-names (third dec) structures)))
+         (let ((structure-members (structure-declaration-members dec structures)))
            (push (cons (second dec) structure-members) structures)
            (setf members
                  (append (qualify-structure-member-names
@@ -1179,10 +1191,18 @@ into the scope of ordinary variable patterns."
                                         (third pat)
                                         local-exceptions
                                         lexical-env)
-	         (let ((ctor (constructor-symbol-for-name (second (second pat))
-                                                          lexical-env))
-	               (payload (compile-pat (third pat) local-exceptions lexical-env)))
-	           `(cons ',ctor ,payload)))))
+	         (let* ((name (second (second pat)))
+                        (ctor (constructor-symbol-for-name name lexical-env))
+	                (payload (compile-pat (third pat) local-exceptions lexical-env)))
+	           (if (or (known-constructor-symbol-for-name name)
+                           (sml-constructor-symbol-p ctor))
+	               `(cons ',ctor ,payload)
+                       ;; Not resolvable now (e.g. reached through a functor
+                       ;; parameter): compare against the run-time constructor.
+                       (let ((it (gensym "CTOR-VALUE")))
+                         `(guard1 (,it :type cons)
+                                  (sml-constructor-tag-p (car ,it) ',ctor)
+                                  (cdr ,it) ,payload)))))))
 
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
      (or (lexical-symbol-for-name (second pat) lexical-env)
@@ -1463,9 +1483,7 @@ into the scope of ordinary variable patterns."
     ((eq (car ast) :infix)
      `(progn))
     ((eq (car ast) :signature)
-     (let ((text (getf (cddr ast) :text)))
-       (when text
-         (setf (gethash (second ast) *sml-signature-texts*) text)))
+     (note-signature-declaration ast)
      `(progn))
     ((eq (car ast) :open)
      (compile-open-form (second ast)))
@@ -1540,10 +1558,7 @@ into the scope of ordinary variable patterns."
 	           (lambda () ,@forms)))))
     ((eq (car ast) :structure)
      (let* ((module-name (current-qualified-sml-name (second ast)))
-            (members (restrict-sealed-structure-members
-                      (declarations-bound-names (third ast))
-                      (third ast)
-                      (getf (cdddr ast) :sig)))
+            (members (structure-declaration-members ast))
             (structure-prefixes (module-local-structure-prefixes (third ast) module-name))
             (forms (let ((*sml-module-prefix* module-name)
                          (*sml-local-structure-prefixes* (append structure-prefixes
@@ -1613,7 +1628,7 @@ into the scope of ordinary variable patterns."
     (case (and (consp dec) (car dec))
       (:structure
        (let* ((full-name (current-qualified-sml-name name))
-              (members (declarations-bound-names (third dec))))
+              (members (structure-declaration-members dec)))
          (list (cons name members)
                (cons full-name members))))
       (:structure-app
@@ -1638,6 +1653,7 @@ into the scope of ordinary variable patterns."
   (let ((bindings nil)
         (prefixes nil))
     (dolist (dec decs bindings)
+      (note-signature-declaration dec)
       (let ((*sml-local-structure-members* (append bindings
                                                    *sml-local-structure-members*))
             (*sml-local-structure-prefixes* (append prefixes

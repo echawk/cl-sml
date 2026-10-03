@@ -11,16 +11,26 @@
   - [ ] Load and run representative programs from `HOL/`.
 - [ ] Replace shallow module handling with explicit module/signature
   elaboration; retain CL packages as the external namespace substrate.
-  Stopgaps in place: signature text is kept so sealed structures hide
-  constructors the signature never mentions (`restrict-sealed-structure-members`);
+  Stopgaps in place: signature text is kept so ascribed structures only
+  expose names the signature mentions (`restrict-sealed-structure-members`);
   constructor vs variable patterns are still decided by a global registry.
+- [ ] Parser: declarations whose type text runs to end of line swallow the
+  rest of a one-line structure (`struct type t = int fun f x = x end`).
 - [ ] Make the expression/pattern parser fixity-aware (`infix`/`infixr`
   declarations); today precedence is a fixed grammar plus special cases
   (`before`, `::` vs user infix constructors in patterns).
 - [ ] Distinguish word from int at run time or compile time (`~` on words is
   special-cased only for literals).
-- [ ] Implement SML97 static semantics, including value restriction, equality
-  types, overloaded identifiers, record rows, and module type-name generation.
+- [x] SML97 static semantics via HaMLet (git submodule `hamlet/`, unmodified)
+  through `hamlet-check.sml` and `type-checker.lisp`.  The checker runs before
+  our parser in `compile-sml-program-string`, file loading and the REPL;
+  `(enable-hamlet-type-checker)` turns it on, and `build-repl.sh` preloads it
+  into the `cl-sml` image.  The REPL prints HaMLet's inferred types.
+- [ ] Use HaMLet's elaborated static basis in code generation (types for
+  equality/overloading/word-vs-int, signature-accurate module members)
+  instead of the heuristic `register-sml-binding-type` machinery.
+- [ ] Keep one checker session per SML package (today it is a single global
+  session, so all packages share one static basis).
 - [ ] Complete the Basis features required by HaMLet, especially TextIO input,
   files, OS paths, command-line handling, arrays, and vectors.
 - [x] Emit inspectable Common Lisp from expressions, declarations, and files.

@@ -820,6 +820,42 @@
     val unleaked = Q.ppF 41;")
   (is (= 42 (sml-value "unleaked"))))
 
+(test opened-sealed-structure-does-not-leak-hidden-values
+  (eval-sml-program
+   "structure Hidden = struct fun size x = 99 end;
+    signature SHOWN = sig val shown : int -> int end;
+    structure Shown : SHOWN = struct
+      open Hidden
+      fun shown x = x + 1
+    end;
+    fun size l = 7;
+    structure User = struct
+      open Shown
+      val sized = size [1, 2]
+    end;
+    val leakChecked = User.sized;")
+  (is (= 7 (sml-value "leakChecked"))))
+
+(test constructor-pattern-through-functor-parameter
+  (eval-sml-program
+   "structure FnTable = struct
+      datatype term = T of int
+    end;
+    signature FN_TOKEN = sig
+      structure FnTable : sig datatype term = T of int end
+    end;
+    structure FnToken = struct
+      structure FnTable = FnTable
+    end;
+    functor ShowFn(structure Tok : FN_TOKEN) = struct
+      structure Table = Tok.FnTable
+      open Table
+      val show = fn (T 0) => \"zero\" | (T 1) => \"one\" | _ => \"other\"
+    end;
+    structure Shown = ShowFn(structure Tok = FnToken);
+    val shownOne = Shown.show (FnTable.T 1);")
+  (is (equal "one" (sml-value "shownOne"))))
+
 (test word-literal-negation-is-modular
   (eval-sml-program "val maxWord = ~(0w1); val sixteen = 0w16;")
   (is (= most-positive-fixnum (sml-value "maxWord")))

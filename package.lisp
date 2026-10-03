@@ -21,4 +21,7 @@
            #:sml-static-type-error
            #:make-hamlet-type-checker
            #:hamlet-type-check-string
+           #:hamlet-type-checker-last-description
+           #:enable-hamlet-type-checker
+           #:disable-type-checker
            #:repl))
