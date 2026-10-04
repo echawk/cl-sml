@@ -207,4 +207,12 @@
                              val pairOpsResult = PairOps.- ((true, 2), (true, 3));"
                             "pairOpsResult"))))
 
+(test hamlet-keeps-one-session-per-package
+  (compile-checked "val sessionOnlyInA = 1;" "SML.HAMLET-SESSION-A")
+  (signals sml-static-type-error
+    (compile-checked "val fromA = sessionOnlyInA;" "SML.HAMLET-SESSION-B"))
+  (compile-checked "val stillInA = sessionOnlyInA + 1;" "SML.HAMLET-SESSION-A")
+  (is (search "val stillInA : int"
+              (hamlet-type-checker-last-description *checker*))))
+
 (fiveam:run! 'cl-sml-hamlet-suite)

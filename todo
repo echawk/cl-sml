@@ -8,29 +8,48 @@
     and evaluates programs, e.g. `./cl-hamlet file.sml` and the `cl-hamlet`
     REPL.  Known gaps: basis library is re-elaborated on every start (~6s),
     and `sml-primitive-stub`s remain for rarely used primitives.
-  - [ ] Load and run representative programs from `HOL/`.
+  - [ ] Load and run representative programs from `HOL/`.  `./test-hol`
+    loads 56 portableML/prekernel/0 sources checked by HaMLet
+    (`hol-checked.lisp`).  Next blockers: parser gaps below, `abstype`,
+    `fun 'a f`, comments containing `end` inside `sig ... end`,
+    constructor argument types spanning lines (locn.sml, Redblackmap.sml),
+    Portable.sml (IntInf, OS.FileSys, Timer missing from HaMLet's basis),
+    and HaMLet under cl-sml failing on non-ASCII source (Subscript).
 - [ ] Replace shallow module handling with explicit module/signature
   elaboration; retain CL packages as the external namespace substrate.
-  Stopgaps in place: signature text is kept so ascribed structures only
-  expose names the signature mentions (`restrict-sealed-structure-members`);
-  constructor vs variable patterns are still decided by a global registry.
+  With the HaMLet checker, structure members and constructor/variable
+  status come from its elaboration (see below); without it, stopgaps
+  remain: signature text restricts ascribed structures
+  (`restrict-sealed-structure-members`) and patterns guess constructors
+  from capitalization and a global registry.
 - [ ] Parser: declarations whose type text runs to end of line swallow the
   rest of a one-line structure (`struct type t = int fun f x = x end`).
 - [ ] Make the expression/pattern parser fixity-aware (`infix`/`infixr`
   declarations); today precedence is a fixed grammar plus special cases
   (`before`, `::` vs user infix constructors in patterns).
-- [ ] Distinguish word from int at run time or compile time (`~` on words is
-  special-cased only for literals).
+- [ ] Distinguish word from int without a checker (with HaMLet, overloaded
+  operators are specialized and word arithmetic is modular; without it `~`
+  on words is special-cased only for literals).
 - [x] SML97 static semantics via HaMLet (git submodule `hamlet/`, unmodified)
   through `hamlet-check.sml` and `type-checker.lisp`.  The checker runs before
   our parser in `compile-sml-program-string`, file loading and the REPL;
   `(enable-hamlet-type-checker)` turns it on, and `build-repl.sh` preloads it
   into the `cl-sml` image.  The REPL prints HaMLet's inferred types.
-- [ ] Use HaMLet's elaborated static basis in code generation (types for
-  equality/overloading/word-vs-int, signature-accurate module members)
-  instead of the heuristic `register-sml-binding-type` machinery.
-- [ ] Keep one checker session per SML package (today it is a single global
-  session, so all packages share one static basis).
+- [x] Use HaMLet's elaboration in code generation.  `hamlet-check.sml`
+  reports facts keyed by source position (`static-facts.lisp`), which the
+  parser and compiler consult:
+  - identifier status decides constructor vs variable patterns
+  - overloaded operators are compiled for their resolved type (modular
+    word/word8 arithmetic, flooring `div`, char/string comparisons)
+  - structure members are those of the elaborated, ascribed environment
+  - datatype replication binds the replicated constructors
+  - infix applications of user operators are compiled as pair applications
+- [ ] Further uses of HaMLet's types: specialize `=` (vectors compare
+  structurally), declare CL types from inferred types, and retire
+  `register-sml-binding-type` / `infer-sml-ast-type` once the checker is
+  always on.  Functor bodies instantiated at application time are compiled
+  without facts.
+- [x] Keep one checker session per SML package.
 - [ ] Complete the Basis features required by HaMLet, especially TextIO input,
   files, OS paths, command-line handling, arrays, and vectors.
 - [x] Emit inspectable Common Lisp from expressions, declarations, and files.

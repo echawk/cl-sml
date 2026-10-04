@@ -1,13 +1,18 @@
 (in-package #:cl-sml)
 
 ;;; HaMLet (the `hamlet' git submodule) provides cl-sml's SML97 static
-;;; semantics.  A checker is a HaMLet session: each successfully elaborated
-;;; program extends the static basis that later programs are checked against.
+;;; semantics.  A checker keeps a HaMLet session per SML package: each
+;;; successfully elaborated program extends the static basis that later
+;;; programs compiled into the same package are checked against.
 
 (defstruct (hamlet-type-checker
-            (:constructor %make-hamlet-type-checker (package argument)))
+            (:constructor %make-hamlet-type-checker (package initial-argument)))
+  ;; The package HaMLet itself is loaded into.
   package
-  argument
+  ;; HaMLet's state for a fresh session: the initial (library) basis.
+  initial-argument
+  ;; SML package name -> HaMLet state of that package's session.
+  (sessions (make-hash-table :test #'equal))
   ;; HaMLet's rendering of the bindings from the last successful check,
   ;; e.g. "val x : int\n".
   (last-description "")
@@ -85,12 +90,26 @@ checker has not been created yet."
                 tuple))
           value))
 
+(defun hamlet-session-key ()
+  (package-name (ensure-sml-package *sml-package*)))
+
+(defun hamlet-type-checker-argument (checker &optional (key (hamlet-session-key)))
+  "HaMLet's state for the session of the SML package named KEY."
+  (or (gethash key (hamlet-type-checker-sessions checker))
+      (hamlet-type-checker-initial-argument checker)))
+
+(defun (setf hamlet-type-checker-argument)
+    (argument checker &optional (key (hamlet-session-key)))
+  (setf (gethash key (hamlet-type-checker-sessions checker)) argument))
+
 (defun hamlet-type-check-string (checker source &key filename)
   "Elaborate SOURCE with CHECKER and advance its static session on success.
 Returns HaMLet's description of the new bindings and the SML-STATIC-FACTS
 the code generator uses; signals SML-STATIC-TYPE-ERROR, leaving the session
 unchanged, if SOURCE is rejected."
   (let ((package (hamlet-type-checker-package checker))
+        ;; The session of the package being compiled, not HaMLet's own.
+        (session (hamlet-session-key))
         (diagnostics (make-string-output-stream)))
     (handler-case
         (with-sml-package (package)
@@ -106,10 +125,10 @@ unchanged, if SOURCE is rejected."
                  (result (let ((*error-output* diagnostics))
                            (call-sml "ClSmlHamlet.elab"
                                      (list :tuple
-                                           (hamlet-type-checker-argument checker)
+                                           (hamlet-type-checker-argument checker session)
                                            source-pair)))))
             (destructuring-bind (argument description facts) (cdr result)
-              (setf (hamlet-type-checker-argument checker) argument
+              (setf (hamlet-type-checker-argument checker session) argument
                     (hamlet-type-checker-last-description checker) description
                     (hamlet-type-checker-last-facts checker)
                     (make-sml-static-facts source (sml-list->list facts)))
