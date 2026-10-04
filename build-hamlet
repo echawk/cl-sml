@@ -20,4 +20,4 @@ STACK="${CL_HAMLET_STACK:-1GB}"
     --eval "(setf cl-sml::*hamlet-image-package* \"$PACKAGE\")" \
     --eval "(sb-ext:save-lisp-and-die \"$OUTPUT\" :executable t :save-runtime-options t :toplevel (lambda () (cl-sml::hamlet-image-entry-point) (sb-ext:exit :code 0)))"
 
-"$OUTPUT" "$ROOT/testdata/hamlet-executable-smoke.sml"
+"$OUTPUT" "$ROOT/t/testdata/hamlet-executable-smoke.sml"

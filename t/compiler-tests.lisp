@@ -33,10 +33,12 @@
 
 (test compile-file-emits-form-and-package-without-evaluation
   (multiple-value-bind (form package)
-      (cl-sml:compile-sml-file #P"testdata/sample-program.sml")
+      ;; The package is named after the path relative to the project.
+      (let ((*default-pathname-defaults* (asdf:system-source-directory "cl-sml")))
+        (cl-sml:compile-sml-file #P"t/testdata/sample-program.sml"))
     (let ((printed (write-to-string form :pretty nil)))
       (is (eq 'progn (car form)))
-      (is (string= "SML.FILE.TESTDATA.SAMPLE-PROGRAM" (package-name package)))
+      (is (string= "SML.FILE.T.TESTDATA.SAMPLE-PROGRAM" (package-name package)))
       (is (search "|file_result|" printed)))))
 
 (test compile-program-runs-static-checker-before-lowering
@@ -99,10 +101,10 @@
     (is (search "CASE-VALUE" printed))))
 
 (test emit-sml-file-writes-loadable-common-lisp
-  (let ((artifact #P"testdata/sample-program.generated.lisp"))
+  (let ((artifact (asdf:system-relative-pathname "cl-sml" "t/testdata/sample-program.generated.lisp")))
     (unwind-protect
          (multiple-value-bind (output package)
-             (cl-sml:emit-sml-file #P"testdata/sample-program.sml" artifact
+             (cl-sml:emit-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/sample-program.sml") artifact
                                    :package "SML.ARTIFACT-TEST")
            (is (probe-file output))
            (is (string= "SML.ARTIFACT-TEST" (package-name package)))
@@ -116,7 +118,7 @@
 
 (test load-sml-file-can-use-interpreted-debug-path
   (multiple-value-bind (package result)
-      (cl-sml:load-sml-file #P"testdata/sample-program.sml"
+      (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/sample-program.sml")
                             :package "SML.INTERPRETED-LOAD-TEST"
                             :compile nil)
     (declare (ignore result))
@@ -124,7 +126,7 @@
 
 (test load-sml-file-uses-compiled-artifact-path-by-default
   (multiple-value-bind (package result)
-      (cl-sml:load-sml-file #P"testdata/sample-program.sml"
+      (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/sample-program.sml")
                             :package "SML.COMPILED-LOAD-TEST")
     (is (string= "SML.COMPILED-LOAD-TEST" (package-name package)))
     (is (= 120 (cl-sml:sml-value "file_result" package)))
@@ -132,9 +134,7 @@
 
 (test load-sml-file-compiles-hoisted-dispatch-helpers
   (multiple-value-bind (package result)
-      (cl-sml:load-sml-file #P"testdata/large-dispatch.sml"
+      (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/large-dispatch.sml")
                             :package "SML.COMPILED-DISPATCH-TEST")
     (is (not (null result)))
     (is (= 42 (cl-sml:sml-value "dispatch_result" package)))))
-
-(fiveam:run! 'cl-sml-compiler-suite)

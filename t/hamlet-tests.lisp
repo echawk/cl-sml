@@ -9,8 +9,15 @@
 (in-suite cl-sml-hamlet-suite)
 
 ;;; Building a checker loads HaMLet and elaborates its basis library, so the
-;;; whole suite shares one session.
-(defvar *checker* (make-hamlet-type-checker))
+;;; whole suite shares one checker, created when the first test needs it
+;;; rather than when the test system is loaded.
+(defvar *checker-instance* nil)
+
+(defun checker ()
+  (or *checker-instance*
+      (setf *checker-instance* (make-hamlet-type-checker))))
+
+(define-symbol-macro *checker* (checker))
 
 (defun compile-checked (source package)
   (compile-sml-program-string source :package package :type-checker *checker*))
@@ -214,5 +221,3 @@
   (compile-checked "val stillInA = sessionOnlyInA + 1;" "SML.HAMLET-SESSION-A")
   (is (search "val stillInA : int"
               (hamlet-type-checker-last-description *checker*))))
-
-(fiveam:run! 'cl-sml-hamlet-suite)

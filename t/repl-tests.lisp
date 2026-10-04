@@ -93,7 +93,7 @@
       (is (or (null symbol) (not (boundp symbol)))))))
 
 (test repl-sees-file-loaded-definitions
-  (cl-sml:load-sml-file #P"testdata/sample-program.sml")
+  (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/sample-program.sml"))
   (multiple-value-bind (result output error-output)
       (run-repl-session (format nil "fileFact 4~%:quit~%"))
     (is (eq :quit result))
@@ -102,7 +102,7 @@
 
 (test repl-can-target-file-package
   (multiple-value-bind (package result)
-      (cl-sml:load-sml-file #P"testdata/sample-program.sml")
+      (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/sample-program.sml"))
     (declare (ignore result))
     (multiple-value-bind (repl-result output error-output)
         (run-repl-session-in-package (format nil "fileFact 4~%:quit~%") package)
@@ -126,5 +126,3 @@
     (is (eq :eof result))
     (is (search "- " output))
     (is (string= "" error-output))))
-
-(fiveam:run! 'cl-sml-repl-suite)

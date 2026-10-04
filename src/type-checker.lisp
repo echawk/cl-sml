@@ -23,7 +23,7 @@
   (asdf:system-relative-pathname "cl-sml" "hamlet/"))
 
 (defun hamlet-adapter-source ()
-  (asdf:system-relative-pathname "cl-sml" "hamlet-check.sml"))
+  (asdf:system-relative-pathname "cl-sml" "src/hamlet-check.sml"))
 
 (defun configure-hamlet-basis-path (package basis-path)
   (with-sml-package (package)

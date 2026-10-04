@@ -12,11 +12,11 @@
 
 (defparameter *package-name* "SML.HOL-CHECKED")
 
-;;; In load order.  testdata/hol-shims/ stands in for Poly/ML structures.
+;;; In load order.  t/testdata/hol-shims/ stands in for Poly/ML structures.
 (defparameter *sources*
   '("HOL/src/portableML/Uref.sig"
     "HOL/src/portableML/Uref.sml"
-    "testdata/hol-shims/FixedInt.sml"
+    "t/testdata/hol-shims/FixedInt.sml"
     "HOL/src/portableML/mosml/PrettyImpl.sml"
     "HOL/src/portableML/quotation_dtype.sml"
     "HOL/src/portableML/HOLquotation.sig"

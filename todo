@@ -10,7 +10,7 @@
     and `sml-primitive-stub`s remain for rarely used primitives.
   - [ ] Load and run representative programs from `HOL/`.  `./test-hol`
     loads 56 portableML/prekernel/0 sources checked by HaMLet
-    (`hol-checked.lisp`).  Next blockers: parser gaps below, `abstype`,
+    (`t/hol-checked.lisp`).  Next blockers: parser gaps below, `abstype`,
     `fun 'a f`, comments containing `end` inside `sig ... end`,
     constructor argument types spanning lines (locn.sml, Redblackmap.sml),
     Portable.sml (IntInf, OS.FileSys, Timer missing from HaMLet's basis),
@@ -31,12 +31,12 @@
   operators are specialized and word arithmetic is modular; without it `~`
   on words is special-cased only for literals).
 - [x] SML97 static semantics via HaMLet (git submodule `hamlet/`, unmodified)
-  through `hamlet-check.sml` and `type-checker.lisp`.  The checker runs before
+  through `src/hamlet-check.sml` and `src/type-checker.lisp`.  The checker runs before
   our parser in `compile-sml-program-string`, file loading and the REPL;
   `(enable-hamlet-type-checker)` turns it on, and `build-repl.sh` preloads it
   into the `cl-sml` image.  The REPL prints HaMLet's inferred types.
-- [x] Use HaMLet's elaboration in code generation.  `hamlet-check.sml`
-  reports facts keyed by source position (`static-facts.lisp`), which the
+- [x] Use HaMLet's elaboration in code generation.  `src/hamlet-check.sml`
+  reports facts keyed by source position (`src/static-facts.lisp`), which the
   parser and compiler consult:
   - identifier status decides constructor vs variable patterns
   - overloaded operators are compiled for their resolved type (modular

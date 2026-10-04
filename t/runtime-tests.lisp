@@ -157,7 +157,7 @@
          (input-line (cl-sml::sml-basis-primitive "TextIO.inputLine"))
          (input-all (cl-sml::sml-basis-primitive "TextIO.inputAll"))
          (end-of-stream (cl-sml::sml-basis-primitive "TextIO.endOfStream"))
-         (stream (funcall open-in #P"testdata/text-io-input.txt")))
+         (stream (funcall open-in (asdf:system-relative-pathname "cl-sml" "t/testdata/text-io-input.txt"))))
     (unwind-protect
          (progn
            (is (string= "alpha" (funcall input-n (list :tuple stream 5))))
@@ -194,7 +194,7 @@
         (ch-dir (cl-sml::sml-basis-primitive "OS.FileSys.chDir")))
     (unwind-protect
          (progn
-           (funcall ch-dir "testdata")
+           (funcall ch-dir (namestring (asdf:system-relative-pathname "cl-sml" "t/testdata/")))
            (is (uiop:string-suffix-p (funcall get-dir (cl-sml::sml-unit))
                                      "/testdata/"))
            (with-open-file (stream "text-io-input.txt" :direction :input)
@@ -682,10 +682,12 @@
 
 (test load-actual-sml-file
   (multiple-value-bind (package result)
-      (cl-sml:load-sml-file #P"testdata/sample-program.sml")
+      ;; The package is named after the path relative to the project.
+      (let ((*default-pathname-defaults* (asdf:system-source-directory "cl-sml")))
+        (cl-sml:load-sml-file #P"t/testdata/sample-program.sml"))
     (declare (ignore result))
     (let ((package-name (package-name package)))
-      (is (string= "SML.FILE.TESTDATA.SAMPLE-PROGRAM" package-name))
+      (is (string= "SML.FILE.T.TESTDATA.SAMPLE-PROGRAM" package-name))
       (is (= 11 (sml-value "file_x" package-name)))
       (is (= 31 (sml-value "file_y" package-name)))
       (is (= 120 (sml-value "file_result" package-name)))
@@ -694,7 +696,7 @@
 
 (test load-sml-use-resolves-relative-files
   (multiple-value-bind (package result)
-      (cl-sml:load-sml-file #P"testdata/use-main.sml"
+      (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/use-main.sml")
                             :package "SML.USE-TEST")
     (declare (ignore result))
     (let ((package-name (package-name package)))
@@ -703,9 +705,9 @@
 
 (test load-hamlet-basis-prefix-files
   (let ((package-name "SML.HAMLET-BASIS-SMOKE"))
-    (cl-sml:load-sml-file #P"hamlet/basis/infix.sml" :package package-name)
-    (cl-sml:load-sml-file #P"hamlet/basis/types.sml" :package package-name)
-    (cl-sml:load-sml-file #P"hamlet/basis/exceptions.sml" :package package-name)
+    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "hamlet/basis/infix.sml") :package package-name)
+    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "hamlet/basis/types.sml") :package package-name)
+    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "hamlet/basis/exceptions.sml") :package package-name)
     (let ((some-symbol (cl-sml::sml-symbol "SOME" package-name)))
       (is (not (eq some-symbol 'cl:some)))
       (is (eq (symbol-package some-symbol)
@@ -867,5 +869,3 @@
   (is (equal "~2.5" (cl-sml::sml-real-to-string -2.5d0)))
   (is (= 4 (funcall (cl-sml::sml-basis-primitive "Real.round") 3.5d0)))
   (is (= 2 (funcall (cl-sml::sml-basis-primitive "Real.round") 2.5d0))))
-
-(fiveam:run! 'cl-sml-runtime-suite)
