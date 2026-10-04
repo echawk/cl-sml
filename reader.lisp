@@ -58,14 +58,21 @@
            (normalize-sml-type-declaration-continuations sml-text))
          ;; The static checker runs first: it is the authority on what is a
          ;; valid SML program and gives better diagnostics than our parser.
-         (ast (progn
-                (type-check-sml-string normalized
-                                       :checker type-checker
-                                       :filename source-name)
-                (esrap:parse 'sml-program normalized))))
-    (compile-with-hoisted-sml-forms
-     (lambda () (compile-program ast))
-     :identity sml-text)))
+         ;; What it learned guides both parsing and code generation.
+         (facts (static-facts-from-check
+                 (multiple-value-list
+                  (type-check-sml-string normalized
+                                         :checker type-checker
+                                         :filename source-name)))))
+    (with-sml-static-facts (facts)
+      (let ((ast (esrap:parse 'sml-program normalized)))
+        (compile-with-hoisted-sml-forms
+         (lambda () (compile-program ast))
+         :identity sml-text)))))
+
+(defun static-facts-from-check (results)
+  "The SML-STATIC-FACTS among the values a type checker returned, if any."
+  (find-if #'sml-static-facts-p results))
 
 (defun compile-sml-declarations-string (sml-text &key package)
   (compile-sml-program-string sml-text :package package))

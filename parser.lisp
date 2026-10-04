@@ -10,9 +10,38 @@
                   (let ((op (second group))
                         (right (fourth group)))
                     ;; Creates an AST of: (:app (:app (:var "+") left) right)
-                    `(:app (:app (:var ,op) ,left) ,right)))
+                    `(:app (:app ,(sml-operator-var-node op) ,left) ,right)))
                 rest
                 :initial-value first)))
+  (defun sml-operator-var-node (op)
+    "The (:var OP) node for infix operator OP, at OP's source position."
+    (note-sml-ast-position (list :var op) (sml-ast-position op)))
+  (defun sml-fact-pattern-status (node)
+    "HaMLet's identifier status for pattern NODE, or NIL without facts."
+    (and (consp node)
+         (member (car node) '(:pat-ctor :pat-var))
+         (sml-pattern-status-at (sml-ast-position node) (second node))))
+  (defun sml-pattern-id-node* (name start default-kind)
+    "A :pat-ctor or :pat-var node for identifier NAME at offset START, as the
+static checker says, or of DEFAULT-KIND without one."
+    (let ((status (sml-pattern-status-at start name)))
+      (note-sml-ast-position
+       (list (cond ((null status) default-kind)
+                   ((sml-status-constructor-p status) :pat-ctor)
+                   (t :pat-var))
+             name)
+       start)))
+  (defun sml-pattern-id-node (name start)
+    "Like SML-PATTERN-ID-NODE*, guessing from the spelling without a checker."
+    (sml-pattern-id-node* name start
+                          (if (or (position #\. name)
+                                  (sml-constructor-looking-id-p name))
+                              :pat-ctor
+                              :pat-var)))
+  (defun sml-fact-constructor-production-p (production)
+    "PRODUCTION is (name . start): is NAME a constructor there?"
+    (sml-status-constructor-p
+     (sml-pattern-status-at (cdr production) (car production))))
   (defun build-tupled-infix-ast (first rest)
     (reduce (lambda (left group)
               `(:infix-app ,(second group) ,left ,(fourth group)))
@@ -183,6 +212,7 @@ looser than ::, while the standard arithmetic/list operators do not."
     (if (and (string= op "@@")
              (consp pat)
              (eq (car pat) :pat-ctor)
+             (not (sml-fact-pattern-status pat))
              (not (member (second pat) '("true" "false" "nil" "NONE")
                           :test #'string=)))
         `(:pat-var ,(second pat))
@@ -192,7 +222,8 @@ looser than ::, while the standard arithmetic/list operators do not."
 	           (pat-type (and (consp pat) (eq (car pat) :pat-typed) (third pat)))
            (raw-value-pat (if pat-type (second pat) pat))
            (value-pat (if (and (consp raw-value-pat)
-                               (eq (car raw-value-pat) :pat-ctor))
+                               (eq (car raw-value-pat) :pat-ctor)
+                               (not (sml-fact-pattern-status raw-value-pat)))
                           `(:pat-var ,(second raw-value-pat))
                           raw-value-pat))
            (value-expr (if inline-type (second expr) expr)))
@@ -345,7 +376,7 @@ looser than ::, while the standard arithmetic/list operators do not."
 ;; In expressions a word literal keeps its identity so that `~(0w1)` can be
 ;; compiled as modular negation: words are plain integers at run time.
 (defrule sml-word-expr sml-word
-  (:lambda (n) `(:word ,n)))
+  (:lambda (n &bounds start) (note-sml-ast-position (list :word n) start)))
 
 (defrule sml-real
   (and (? "~") (+ (character-ranges (#\0 #\9))) "." (+ (character-ranges (#\0 #\9))))
@@ -390,9 +421,16 @@ looser than ::, while the standard arithmetic/list operators do not."
     (declare (ignore not-kw dot))
     (format nil "~A.~A" first rest)))
 
-(defrule sml-pat-ctor-head (or sml-long-id sml-capitalized-id)
-  (:lambda (name)
-    `(:pat-ctor ,name)))
+(defrule sml-positioned-id sml-id
+  (:lambda (name &bounds start) (cons name start)))
+
+(defrule sml-fact-constructor-id
+    (sml-fact-constructor-production-p sml-positioned-id)
+  (:function car))
+
+(defrule sml-pat-ctor-head (or sml-long-id sml-capitalized-id sml-fact-constructor-id)
+  (:lambda (name &bounds start)
+    (note-sml-ast-position (list :pat-ctor name) start)))
 
 (defrule sml-pat-app-head
   (or sml-pat-ctor-head
@@ -404,11 +442,8 @@ looser than ::, while the standard arithmetic/list operators do not."
 
 ;; Notice we check upper/lower case to distinguish variables from constructors!
 (defrule sml-pat-var-or-ctor sml-id
-  (:lambda (name)
-    (if (or (position #\. name)
-            (sml-constructor-looking-id-p name))
-        `(:pat-ctor ,name)
-        `(:pat-var ,name))))
+  (:lambda (name &bounds start)
+    (sml-pattern-id-node name start)))
 
 (defrule sml-op-var sml-op-id
   (:lambda (name)
@@ -419,7 +454,10 @@ looser than ::, while the standard arithmetic/list operators do not."
                        "<" "<=" ">" ">=")
                 :test #'string=)
         `(:op-var ,name)
-        `(:var ,name))))
+        `(:var ,name)))
+  (:lambda (node &bounds start end)
+    (declare (ignore start))
+    (note-sml-ast-position node (- end (length (second node))))))
 
 (defrule sml-bare-bar-symbol (and "|" (! sml-symbolic-char)))
 
@@ -433,7 +471,9 @@ looser than ::, while the standard arithmetic/list operators do not."
   (and sml-bare-tilde-symbol (! (and ws sml-prefix)))
   (:destructure (tilde not-prefix)
     (declare (ignore tilde not-prefix))
-    '(:var "~")))
+    (list :var "~"))
+  (:lambda (node &bounds start)
+    (note-sml-ast-position node start)))
 
 (defrule sml-selector-start
   (and "#" (or (alpha-char-p character) (character-ranges (#\0 #\9)))))
@@ -448,22 +488,30 @@ looser than ::, while the standard arithmetic/list operators do not."
                  not-bar not-colon not-tilde name)
     (declare (ignore not-assign not-match-arrow not-type-arrow not-selector not-char
                      not-equals not-bar not-colon not-tilde))
-    `(:var ,name)))
+    `(:var ,name))
+  (:lambda (node &bounds start)
+    (note-sml-ast-position node start)))
 
 (defrule sml-pat-op-var sml-op-id
-  (:lambda (name)
-    `(:pat-var ,name)))
+  (:lambda (name &bounds start end)
+    (declare (ignore start))
+    (sml-pattern-id-node* name (- end (length name)) :pat-var)))
 
 (defrule sml-pat-symbolic-var (and (! "=") (! "|") sml-symbolic-id)
-  (:destructure (not-equals not-bar name)
+  (:destructure (not-equals not-bar name &bounds start)
     (declare (ignore not-equals not-bar))
-    `(:pat-var ,name)))
+    (sml-pattern-id-node* name start :pat-var)))
 
 (defrule sml-var-or-ctor sml-id
-  (:lambda (name)
-    (if (sml-constructor-looking-id-p name)
-        `(:ctor ,name)
-        `(:var ,name))))
+  (:lambda (name &bounds start)
+    (note-sml-ast-position
+     (let ((status (sml-expression-status-at start name)))
+       (if (if status
+               (sml-status-constructor-p status)
+               (sml-constructor-looking-id-p name))
+           `(:ctor ,name)
+           `(:var ,name)))
+     start)))
 
 ;; Operators
 ;; A symbolic operator is a maximal run of symbol characters, so `^/^` is not
@@ -471,8 +519,11 @@ looser than ::, while the standard arithmetic/list operators do not."
 (defrule sml-op-mult
   (or (and (or "*" "/") (! sml-symbolic-char))
       (and (or "div" "mod") (! (or (alphanumericp character) #\_ #\'))))
-  (:text t))
-(defrule sml-op-add (and (or "+" "-" "^") (! sml-symbolic-char)) (:text t))
+  (:text t)
+  (:lambda (op &bounds start) (note-sml-ast-position (copy-seq op) start)))
+(defrule sml-op-add (and (or "+" "-" "^") (! sml-symbolic-char))
+  (:text t)
+  (:lambda (op &bounds start) (note-sml-ast-position (copy-seq op) start)))
 (defrule sml-op-precedence-nine
   (and "sub" (! (or (alphanumericp character) #\_ #\')))
   (:text t))
@@ -481,7 +532,8 @@ looser than ::, while the standard arithmetic/list operators do not."
       (and "<" (! sml-symbolic-char))
       (and ">" (! sml-symbolic-char))
       (and "=" (! sml-symbolic-char)))
-  (:text t))
+  (:text t)
+  (:lambda (op &bounds start) (note-sml-ast-position (copy-seq op) start)))
 (defrule sml-op-append (and "@" (! sml-symbolic-char))
   (:constant "@"))
 
@@ -824,8 +876,8 @@ looser than ::, while the standard arithmetic/list operators do not."
     `(:deref ,expr)))
 
 (defrule sml-negate (and sml-bare-tilde-symbol ws sml-prefix)
-  (:destructure (tilde w expr) (declare (ignore tilde w))
-    `(:app (:var "~") ,expr)))
+  (:destructure (tilde w expr &bounds start) (declare (ignore tilde w))
+    `(:app ,(note-sml-ast-position (list :var "~") start) ,expr)))
 
 (defrule sml-prefix (or sml-deref sml-negate sml-atomic))
 

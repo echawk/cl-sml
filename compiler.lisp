@@ -256,7 +256,7 @@ lists computed ahead of compilation can already honour it."
 (defun functor-argument-declarations (args-text)
   (let ((inner (trim-sml-functor-arg-text args-text)))
     (unless (simple-sml-id-text-p inner)
-      (esrap:parse 'sml-decs inner))))
+      (without-sml-static-facts (esrap:parse 'sml-decs inner)))))
 
 (defun functor-argument-module-name (target-name args-text)
   (format nil "~A.%ARG-~36R"
@@ -321,6 +321,22 @@ lists computed ahead of compilation can already honour it."
       (exception-constructor-info name local-exceptions)
       (known-constructor-symbol-for-name name)
       (sml-constructor-symbol-p (resolved-sml-symbol name lexical-env))))
+
+(defun pattern-node-status (pat)
+  "The static checker's identifier status for pattern node PAT, if known."
+  (sml-node-fact-info pat "pat"))
+
+(defun pattern-node-constructor-p (pat &optional local-exceptions lexical-env)
+  (let ((status (pattern-node-status pat)))
+    (if status
+        (sml-status-constructor-p status)
+        (pattern-constructor-name-p (second pat) local-exceptions lexical-env))))
+
+(defun pattern-node-exception-p (pat &optional local-exceptions)
+  (let ((status (pattern-node-status pat)))
+    (if status
+        (sml-status-exception-p status)
+        (exception-constructor-info (second pat) local-exceptions))))
 
 (defun exception-constructor-type-p (type)
   (or (and (stringp type)
@@ -395,7 +411,7 @@ lists computed ahead of compilation can already honour it."
      (append (pattern-bound-names (second pat) local-exceptions lexical-env)
              (pattern-bound-names (third pat) local-exceptions lexical-env)))
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
-     (unless (pattern-constructor-name-p (second pat) local-exceptions lexical-env)
+     (unless (pattern-node-constructor-p pat local-exceptions lexical-env)
        (list (second pat))))
     ((and (listp pat) (member (car pat) '(:pat-unit :pat-nil)))
      nil)
@@ -1149,10 +1165,11 @@ lists computed ahead of compilation can already honour it."
        ((string= (second pat) "true") t)
        ((string= (second pat) "false") nil)
        ((string= (second pat) "nil") nil)
-       ((exception-constructor-info (second pat) local-exceptions)
+       ((pattern-node-exception-p pat local-exceptions)
         (compile-exception-ctor-pattern (second pat) lexical-env))
        (t
         (let* ((name (second pat))
+               (static-ctor-p (sml-status-constructor-p (pattern-node-status pat)))
                (it (gensym "CTOR"))
                (lexical-ctor (lexical-symbol-for-name name lexical-env))
                (known-ctor (known-constructor-symbol-for-name name))
@@ -1160,6 +1177,7 @@ lists computed ahead of compilation can already honour it."
                                 (resolved-sml-symbol name lexical-env))))
 	          (cond
 	            ((and lexical-ctor
+	                  (not static-ctor-p)
 	                  (not known-ctor)
 	                  (not (sml-constructor-symbol-p global-ctor)))
 	             lexical-ctor)
@@ -1171,6 +1189,10 @@ lists computed ahead of compilation can already honour it."
                            (eql ,it (symbol-value ',global-ctor)))))
             ((sml-constructor-symbol-p global-ctor)
              `(guard1 ,it (eql ,it (symbol-value ',global-ctor))))
+            (static-ctor-p
+             ;; A constructor not registered yet, e.g. one of a structure
+             ;; defined earlier in this same program.
+             `(guard1 ,it (sml-constructor-tag-p ,it ',global-ctor)))
             (t
              global-ctor))))))
 
@@ -1186,7 +1208,7 @@ lists computed ahead of compilation can already honour it."
     ((and (listp pat) (eq (car pat) :pat-app))
      (if (string= (second (second pat)) "ref")
          (compile-ref-pattern (third pat) local-exceptions lexical-env)
-         (if (exception-constructor-info (second (second pat)) local-exceptions)
+         (if (pattern-node-exception-p (second pat) local-exceptions)
          (compile-exception-app-pattern (second (second pat))
                                         (third pat)
                                         local-exceptions

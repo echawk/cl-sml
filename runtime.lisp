@@ -210,8 +210,10 @@ constructor names are unique within a datatype."
            (eq tag (sml-constructor-canonical-symbol constructor-symbol))
            (if (boundp constructor-symbol)
                (let ((value (symbol-value constructor-symbol)))
-                 (and (functionp value)
-                      (eq tag (gethash value *sml-constructor-function-tags*))))
+                 (if (functionp value)
+                     (eq tag (gethash value *sml-constructor-function-tags*))
+                     ;; A nullary constructor's value is its tag.
+                     (eq tag value)))
                (string= (sml-unqualified-name tag)
                         (sml-unqualified-name constructor-symbol))))))
 

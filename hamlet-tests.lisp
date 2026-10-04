@@ -109,4 +109,39 @@
              (cl-sml::hamlet-description-value-types
               (format nil "(* int *)~%val x : int~%val long :~%  int ->~%    int ->~%      int~%")))))
 
+;;; HaMLet's elaboration also guides code generation (static-facts.lisp).
+
+(defun checked-value (source name &optional (package "SML.HAMLET-FACTS-TEST"))
+  (eval (compile-checked source package))
+  (sml-value name package))
+
+(test hamlet-identifier-status-decides-lowercase-constructor-patterns
+  (is (= 2 (checked-value "datatype colour = red | green;
+                           fun colourCode red = 1 | colourCode green = 2;
+                           val greenCode = colourCode green;"
+                          "greenCode")))
+  (is (= 5 (checked-value "datatype tree = leaf | node of int;
+                           fun nodeValue leaf = 0 | nodeValue (node n) = n;
+                           val five = nodeValue (node 5);"
+                          "five"))))
+
+(test hamlet-identifier-status-decides-capitalized-variables
+  (is (= 5 (checked-value "fun succX X = X + 1; val succ4 = succX 4;" "succ4"))))
+
+(test hamlet-identifier-status-finds-constructors-of-same-program-structures
+  (is (= 2 (checked-value "structure FactsA = struct datatype t = foo | bar end;
+                           fun factsA FactsA.foo = 1 | factsA FactsA.bar = 2;
+                           val factsABar = factsA FactsA.bar;"
+                          "factsABar")))
+  (is (= 2 (checked-value "structure FactsB = struct datatype t = baz | qux end;
+                           open FactsB;
+                           fun factsB baz = 1 | factsB qux = 2;
+                           val factsBQux = factsB qux;"
+                          "factsBQux")))
+  (is (= 4 (checked-value "structure FactsC = struct exception oops of int
+                           end;
+                           val factsCaught = (raise FactsC.oops 4)
+                                             handle FactsC.oops n => n;"
+                          "factsCaught"))))
+
 (fiveam:run! 'cl-sml-hamlet-suite)

@@ -4,6 +4,7 @@
   :serial t
   :components ((:file "package")
                (:file "runtime")
+               (:file "static-facts")
                (:file "parser")
                (:file "compiler")
                (:file "reader")

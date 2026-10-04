@@ -10,7 +10,9 @@
   argument
   ;; HaMLet's rendering of the bindings from the last successful check,
   ;; e.g. "val x : int\n".
-  (last-description ""))
+  (last-description "")
+  ;; The SML-STATIC-FACTS of the last successful check.
+  (last-facts nil))
 
 (defun default-hamlet-root ()
   (asdf:system-relative-pathname "cl-sml" "hamlet/"))
@@ -75,10 +77,19 @@ checker has not been created yet."
 (defun disable-type-checker ()
   (setf *sml-type-checker* nil))
 
+(defun sml-list->list (value)
+  "HaMLet facts arrive as an SML list of 5-tuples."
+  (mapcar (lambda (tuple)
+            (if (and (consp tuple) (eq (car tuple) :tuple))
+                (cdr tuple)
+                tuple))
+          value))
+
 (defun hamlet-type-check-string (checker source &key filename)
   "Elaborate SOURCE with CHECKER and advance its static session on success.
-Returns HaMLet's description of the new bindings; signals
-SML-STATIC-TYPE-ERROR, leaving the session unchanged, if SOURCE is rejected."
+Returns HaMLet's description of the new bindings and the SML-STATIC-FACTS
+the code generator uses; signals SML-STATIC-TYPE-ERROR, leaving the session
+unchanged, if SOURCE is rejected."
   (let ((package (hamlet-type-checker-package checker))
         (diagnostics (make-string-output-stream)))
     (handler-case
@@ -94,9 +105,13 @@ SML-STATIC-TYPE-ERROR, leaving the session unchanged, if SOURCE is rejected."
                                      (list :tuple
                                            (hamlet-type-checker-argument checker)
                                            source-pair)))))
-            (setf (hamlet-type-checker-argument checker) (sml-tuple-first result)
-                  (hamlet-type-checker-last-description checker)
-                  (sml-tuple-second result))))
+            (destructuring-bind (argument description facts) (cdr result)
+              (setf (hamlet-type-checker-argument checker) argument
+                    (hamlet-type-checker-last-description checker) description
+                    (hamlet-type-checker-last-facts checker)
+                    (make-sml-static-facts source (sml-list->list facts)))
+              (values description
+                      (hamlet-type-checker-last-facts checker)))))
       (sml-raised-exception (cause)
         (let ((message (string-trim '(#\Space #\Newline)
                                     (get-output-stream-string diagnostics))))
