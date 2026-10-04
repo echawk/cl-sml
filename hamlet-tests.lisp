@@ -166,4 +166,23 @@
 (test hamlet-accepts-programs-without-final-semicolon
   (is (= 3 (checked-value "val noSemicolon = 1 + 2" "noSemicolon"))))
 
+(test hamlet-structure-environments-decide-visible-members
+  ;; The textual approximation cannot see through `include`...
+  (is (= 13 (checked-value "signature MEMBERS_BASE = sig val a : int end;
+                            signature MEMBERS_EXT = sig include MEMBERS_BASE val b : int end;
+                            structure Members :> MEMBERS_EXT =
+                            struct val a = 1 val b = 2 val hidden = 3 end;
+                            val hidden = 10;
+                            open Members;
+                            val membersSum = hidden + a + b;"
+                           "membersSum")))
+  ;; ...and is fooled by names in comments.
+  (is (= 1 (checked-value "signature MEMBERS_COMMENT = sig (* not helper *) val f : int -> int end;
+                           structure Commented : MEMBERS_COMMENT =
+                           struct fun helper x = x + 100 fun f x = x end;
+                           fun helper x = x;
+                           open Commented;
+                           val helperResult = helper 1;"
+                          "helperResult"))))
+
 (fiveam:run! 'cl-sml-hamlet-suite)

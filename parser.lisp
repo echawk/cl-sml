@@ -794,14 +794,19 @@ looser than ::, while the standard arithmetic/list operators do not."
     `(:structure-alias ,name ,target)))
 
 (defrule sml-structure
-  (and "structure" ws sml-id ws (* sml-structure-ascription-char)
+  (and "structure" ws sml-positioned-id ws (* sml-structure-ascription-char)
        "=" ws sml-struct-keyword ws sml-decs ws sml-end-keyword ws (? ";"))
-  (:destructure (structure-kw w1 name w2 ascription eq w3 struct-kw w4 decs w5 end-kw w6 semi)
+  (:destructure (structure-kw w1 positioned-name w2 ascription eq w3 struct-kw w4 decs w5 end-kw w6 semi)
     (declare (ignore structure-kw w1 w2 eq w3 struct-kw w4 w5 end-kw w6 semi))
-    (let ((signature (sml-structure-ascription-signature-name ascription)))
-      (if signature
-          `(:structure ,name ,decs :sig ,signature)
-          `(:structure ,name ,decs)))))
+    (let ((signature (sml-structure-ascription-signature-name ascription))
+          (name (car positioned-name)))
+      ;; The node is positioned at the structure's name, where the static
+      ;; checker reports the structure's members.
+      (note-sml-ast-position
+       (if signature
+           `(:structure ,name ,decs :sig ,signature)
+           `(:structure ,name ,decs))
+       (cdr positioned-name)))))
 
 (defrule sml-functor
   (and "functor" ws sml-id ws (* sml-structure-ascription-char)

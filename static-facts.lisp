@@ -69,11 +69,21 @@ next multiple of 8) to a character offset into SOURCE."
             (setf (gethash name (sml-static-facts-structures result))
                   (parse-sml-structure-members info))))))))
 
+(defun make-sml-ast-position-table ()
+  ;; Backtracking parses create many nodes that never reach the final AST;
+  ;; a weak table does not keep them alive.
+  #+sbcl (make-hash-table :test #'eq :weakness :key)
+  #-sbcl (make-hash-table :test #'eq))
+
 (defmacro with-sml-static-facts ((facts &key (offset 0)) &body body)
-  `(let ((*sml-static-facts* ,facts)
-         (*sml-static-facts-offset* ,offset)
-         (*sml-ast-positions* (make-hash-table :test #'eq)))
-     ,@body))
+  "Run BODY, parsing and compiling text the static checker described with
+FACTS.  Positions are only recorded when there are facts to look up."
+  (let ((facts-var (gensym "FACTS")))
+    `(let* ((,facts-var ,facts)
+            (*sml-static-facts* ,facts-var)
+            (*sml-static-facts-offset* ,offset)
+            (*sml-ast-positions* (and ,facts-var (make-sml-ast-position-table))))
+       ,@body)))
 
 (defmacro without-sml-static-facts (&body body)
   "Run BODY (e.g. a parse of text that is not the checked source) without

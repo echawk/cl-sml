@@ -144,12 +144,21 @@
       (write-sml-lisp-artifact form target-package pathname stream))
     (values (truename output-pathname) target-package)))
 
+(defvar *sml-artifact-random-state* (make-random-state t))
+
 (defun temporary-sml-artifact-pathname ()
-  (merge-pathnames
-   (make-pathname :name (string-downcase
-                         (symbol-name (gensym "cl-sml-load-")))
-                  :type "lisp")
-   (uiop:temporary-directory)))
+  "A fresh pathname for an emitted artifact.  Gensym counters restart in
+every image, so the name also carries a random component."
+  (loop for pathname = (merge-pathnames
+                        (make-pathname
+                         :name (format nil "~(~A~)-~36R"
+                                       (symbol-name (gensym "cl-sml-load-"))
+                                       (random (expt 36 6)
+                                               *sml-artifact-random-state*))
+                         :type "lisp")
+                        (uiop:temporary-directory))
+        unless (probe-file pathname)
+          return pathname))
 
 (defun execute-compiled-sml-file (form target-package source-pathname)
   ;; COMPILE-FILE lets JVM-hosted CL implementations split very large generated

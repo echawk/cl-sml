@@ -93,11 +93,26 @@ lists computed ahead of compilation can already honour it."
       (when text
         (setf (gethash (second dec) *sml-signature-texts*) text)))))
 
+(defun static-structure-members (dec)
+  "The value members of structure declaration DEC according to the static
+checker (signature matching included), or :UNKNOWN."
+  (let ((fact (first (sml-static-facts-at (sml-ast-position dec) "str"
+                                          (second dec)))))
+    (if fact
+        (mapcar #'cdr (parse-sml-structure-members (third fact)))
+        :unknown)))
+
 (defun structure-declaration-members (dec &optional local-structures)
   "The members a (:structure name decs [:sig S]) declaration makes visible."
-  (restrict-sealed-structure-members
-   (declarations-bound-names (third dec) local-structures)
-   (getf (cdddr dec) :sig)))
+  (let ((members (declarations-bound-names (third dec) local-structures))
+        (static-members (static-structure-members dec)))
+    (if (eq static-members :unknown)
+        (restrict-sealed-structure-members members (getf (cdddr dec) :sig))
+        ;; Exactly the members the elaborated (and possibly ascribed)
+        ;; structure has.
+        (remove-if-not (lambda (name)
+                         (member name static-members :test #'string=))
+                       members))))
 
 (defun maybe-wrap-infix-value-initializer (name form)
   (if (sml-binary-infix-value-name-p name)
