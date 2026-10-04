@@ -411,4 +411,8 @@ tab	"
                '(((:pat-var "x") (:app (:app (:var "+") (:var "x")) 1)))))))
 
 ;; Run the suite!
+(test hexadecimal-integer-literals
+  (is (= 1114111 (esrap:parse 'cl-sml::sml-expr "0x10FFFF")))
+  (is (equal '(:app (:var "~") 31) (esrap:parse 'cl-sml::sml-expr "~0x1F"))))
+
 (fiveam:run! 'cl-sml-parser-suite)

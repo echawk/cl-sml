@@ -185,4 +185,26 @@
                            val helperResult = helper 1;"
                           "helperResult"))))
 
+(test hamlet-datatype-replication-binds-constructors
+  (is (= 7 (checked-value "structure ReplSource = struct datatype pretty = PS of string | PB of int
+                           end;
+                           structure ReplTarget = struct
+                             datatype pretty = datatype ReplSource.pretty
+                             fun len (PS s) = size s | len (PB n) = n
+                           end;
+                           val replLength = ReplTarget.len (ReplTarget.PS \"abc\")
+                                            + ReplTarget.len (ReplSource.PB 4);"
+                          "replLength"))))
+
+(test hamlet-infix-application-of-pair-operands
+  ;; With pair operands, the curried call was mistaken for a tuple call.
+  (is (equal '(:tuple t 6)
+             (checked-value "structure PairOps = struct
+                               fun ((true, n1) + (true, n2)) = (true, n1 * n2)
+                                 | ((x, n1) + (y, n2)) = (false, 0)
+                               fun i - j = i + j
+                             end;
+                             val pairOpsResult = PairOps.- ((true, 2), (true, 3));"
+                            "pairOpsResult"))))
+
 (fiveam:run! 'cl-sml-hamlet-suite)

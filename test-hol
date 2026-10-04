@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
+
+export XDG_CACHE_HOME="${CL_SML_CACHE_HOME:-$ROOT/.cache}"
+"${SBCL:-sbcl}" --eval '(handler-case (load #P"hol-smoke.lisp") (error (condition) (format *error-output* "HOL smoke failure: ~A~%" condition) (sb-ext:exit :code 1)))' --eval "(quit)"
+
+# The same and more HOL sources, checked by HaMLet (needs a deep stack).
+exec "${SBCL:-sbcl}" --control-stack-size 1GB --non-interactive \
+    --eval '(handler-case (load #P"hol-checked.lisp") (error (condition) (format *error-output* "HOL checked failure: ~A~%" condition) (sb-ext:exit :code 1)))'

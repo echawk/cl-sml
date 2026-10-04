@@ -20,6 +20,8 @@
  *   ("ov",  l, c, vid, tyname)   overloaded identifier resolved at tyname
  *   ("scon", l, c, text, tyname) special constant resolved at tyname
  *   ("str", l, c, strid, members) structure binding and its value members
+ *   ("dtrep", l, c, tycon, members) datatype replication and the
+ *                                  constructors it binds
  *
  * where is is "v", "c" or "e" for nullary constructors and exceptions, and
  * "c1" or "e1" for ones carrying an argument.  Structure members are a
@@ -57,6 +59,13 @@ struct
         | IdStatus.c => "c" ^ arity
         | IdStatus.e => "e" ^ arity
       end
+
+  (* "is:vid" entries for the identifiers a value environment binds *)
+  fun valEnvMembers (prefix, VE) =
+      VIdMap.foldri
+        (fn (vid, valstr, acc) =>
+           (statusString valstr ^ ":" ^ prefix ^ VId.toString vid) :: acc)
+        [] VE
 
   fun tynameString tau =
       SOME (TyName.toString (Type.tyname tau)) handle _ => NONE
@@ -131,7 +140,12 @@ struct
   and dec (VALDec (_, vb)@@A) = valBind vb
     | dec (TYPEDec _@@A) = ()
     | dec (DATATYPEDec _@@A) = ()
-    | dec (DATATYPE2Dec _@@A) = ()
+    | dec (DATATYPE2Dec (tycon@@A', _)@@A) =
+      (case Prop.try (elab A) of
+         SOME (StaticObjectsCore.Env (_, _, VE)) =>
+           add ("dtrep", A', TyCon.toString tycon,
+                String.concatWith " " (valEnvMembers ("", VE)))
+       | NONE => ())
     | dec (ABSTYPEDec (_, d)@@A) = dec d
     | dec (EXCEPTIONDec eb@@A) = exBind eb
     | dec (LOCALDec (d1, d2)@@A) = (dec d1; dec d2)
@@ -167,14 +181,11 @@ struct
   structure M = SyntaxModule
 
   fun envMembers (prefix, StaticObjectsCore.Env (SE, TE, VE)) =
-      VIdMap.foldri
-        (fn (vid, valstr, acc) =>
-           (statusString valstr ^ ":" ^ prefix ^ VId.toString vid) :: acc)
-        (StrIdMap.foldri
-           (fn (strid, E, acc) =>
-              envMembers (prefix ^ StrId.toString strid ^ ".", E) @ acc)
-           [] SE)
-        VE
+      valEnvMembers (prefix, VE) @
+      StrIdMap.foldri
+        (fn (strid, E, acc) =>
+           envMembers (prefix ^ StrId.toString strid ^ ".", E) @ acc)
+        [] SE
 
   fun strExp (M.STRUCTStrExp d@@A) = strDec d
     | strExp (M.IDStrExp _@@A) = ()

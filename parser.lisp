@@ -351,15 +351,19 @@ looser than ::, while the standard arithmetic/list operators do not."
     (declare (ignore not-kw))
     (join-sml-id-parts id (cons (list dot tail) rest))))
 
-(defrule sml-int (and (? "~") (+ (character-ranges (#\0 #\9))))
-  (:destructure (neg digits)
-    (let ((n (parse-integer (text digits))))
-      (if neg (- n) n))))
-
 (defrule sml-hex-digit
   (or (character-ranges (#\0 #\9))
       (character-ranges (#\a #\f))
       (character-ranges (#\A #\F))))
+
+(defrule sml-int
+  (or (and (? "~") "0x" (+ sml-hex-digit))
+      (and (? "~") (+ (character-ranges (#\0 #\9)))))
+  (:lambda (parts)
+    (let* ((hexp (= (length parts) 3))
+           (n (parse-integer (text (car (last parts)))
+                             :radix (if hexp 16 10))))
+      (if (first parts) (- n) n))))
 
 (defrule sml-word-hex (and "0w" (or "x" "X") (+ sml-hex-digit))
   (:destructure (prefix marker digits)
@@ -505,7 +509,8 @@ looser than ::, while the standard arithmetic/list operators do not."
 (defrule sml-var-or-ctor sml-id
   (:lambda (name &bounds start)
     (note-sml-ast-position
-     (let ((status (sml-expression-status-at start name)))
+     (let ((status (and (string/= name "ref")   ; a primitive function here
+                        (sml-expression-status-at start name))))
        (if (if status
                (sml-status-constructor-p status)
                (sml-constructor-looking-id-p name))
@@ -665,10 +670,14 @@ looser than ::, while the standard arithmetic/list operators do not."
     (cons first (mapcar #'third rest))))
 
 (defrule sml-datatype-replication
-  (and "datatype" ws sml-tycon-name ws "=" ws "datatype" ws sml-type-text-to-eol ws (? ";"))
-  (:destructure (dt w1 name w2 eq w3 dt2 w4 source w5 semi)
+  (and "datatype" ws sml-positioned-id ws "=" ws "datatype" ws sml-type-text-to-eol ws (? ";"))
+  (:destructure (dt w1 positioned-name w2 eq w3 dt2 w4 source w5 semi)
     (declare (ignore dt w1 w2 eq w3 dt2 w4 w5 semi))
-    `(:datatype-replication ,name ,source)))
+    ;; Positioned at the type name, where the static checker reports the
+    ;; constructors the replication binds.
+    (note-sml-ast-position
+     `(:datatype-replication ,(car positioned-name) ,source)
+     (cdr positioned-name))))
 
 (defrule sml-withtype-tail
   (and ws "withtype" ws sml-tycon-name ws "=" ws sml-type-decl-rhs

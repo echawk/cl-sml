@@ -357,6 +357,18 @@ constructor names are unique within a datatype."
                                   (sml-constructor-canonical-symbol source)))
       (export (list target) (ensure-sml-package package-name)))))
 
+(defun alias-sml-constructor (target source)
+  "Make constructor symbol TARGET denote the constructor SOURCE denotes."
+  (proclaim `(special ,target))
+  (setf (symbol-value target) (symbol-value source))
+  (let ((type (lookup-sml-binding-type source)))
+    (when type
+      (register-sml-binding-type target type)))
+  (when (sml-constructor-symbol-p source)
+    (register-sml-constructor target (sml-constructor-canonical-symbol source)))
+  (export (list target) (symbol-package target))
+  target)
+
 (defun alias-sml-functor-application (package-name target-structure functor-name
                                       &key argument value-bindings)
   (let* ((members (lookup-sml-functor-members package-name functor-name))

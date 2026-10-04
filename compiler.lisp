@@ -102,6 +102,32 @@ checker (signature matching included), or :UNKNOWN."
         (mapcar #'cdr (parse-sml-structure-members (third fact)))
         :unknown)))
 
+(defun replicated-constructors (dec)
+  "The (status . name) constructors that datatype replication DEC binds,
+according to the static checker, or NIL when unknown."
+  (let ((fact (first (sml-static-facts-at (sml-ast-position dec) "dtrep"
+                                          (second dec)))))
+    (and fact (parse-sml-structure-members (third fact)))))
+
+(defun compile-datatype-replication-constructors (dec)
+  "Bind the constructors DEC = (:datatype-replication name source) brings
+into scope to those of the replicated datatype."
+  (let* ((source-type (string-trim '(#\Space #\Tab #\Newline #\;) (third dec)))
+         (dot (position #\. source-type :from-end t))
+         (source-prefix (and dot (subseq source-type 0 dot))))
+    (loop for (nil . name) in (replicated-constructors dec)
+          for source = (resolved-sml-symbol
+                        (if source-prefix
+                            (qualify-sml-name source-prefix name)
+                            name))
+          for target = (target-sml-symbol name)
+          unless (eq source target)
+            collect (if (symbolp source)
+                        `(alias-sml-constructor ',target ',source)
+                        ;; A built-in such as `ref`, compiled to a function.
+                        `(progn (defparameter ,target ,source)
+                                ,(compile-export-form (list target)))))))
+
 (defun structure-declaration-members (dec &optional local-structures)
   "The members a (:structure name decs [:sig S]) declaration makes visible."
   (let ((members (declarations-bound-names (third dec) local-structures))
@@ -453,6 +479,7 @@ checker (signature matching included), or :UNKNOWN."
     (:fun (list (second dec)))
     (:funs (mapcan #'declaration-direct-bound-names (cdr dec)))
     (:datatype (mapcar #'second (third dec)))
+    (:datatype-replication (mapcar #'cdr (replicated-constructors dec)))
     (:exception (list (second dec)))
     (:exception-alias (list (second dec)))
     (:local (declarations-bound-names (third dec)))
@@ -1358,6 +1385,29 @@ NIL when AST is not one or the static checker did not resolve it."
                     (compile-overloaded-operation
                      name tyname (compile-args name tyname (third head) arg)))))))))))
 
+(defun compile-checked-infix-application (ast local-exceptions lexical-env)
+  "Compile `x op y`, parsed as the curried (:app (:app (:var op) x) y), as
+the application of OP to the pair (x, y) when the static checker confirms OP
+is a variable (and not overloaded).  Infix values are wrapped by
+SML-TUPLE-OR-CURRIED-BINARY, which otherwise has to guess from the shape of
+X: a pair X was taken for both arguments.  Returns NIL otherwise."
+  (when (and (consp ast) (eq (car ast) :app)
+             (consp (second ast)) (eq (car (second ast)) :app))
+    (let ((op (second (second ast))))
+      (when (and (consp op) (eq (car op) :var)
+                 (sml-binary-infix-value-name-p (second op))
+                 (equal (sml-node-fact-info op "id") "v")
+                 (not (sml-overloaded-instance op)))
+        (let ((function (resolved-sml-symbol (second op) lexical-env)))
+          ;; Built-in primitives are plain curried functions.
+          (when (symbolp function)
+            `(funcall ,function
+                      (list :tuple
+                            ,(compile-expr (third (second ast))
+                                           local-exceptions lexical-env)
+                            ,(compile-expr (third ast)
+                                           local-exceptions lexical-env)))))))))
+
 (defun compile-expr (ast &optional local-exceptions lexical-env)
   "Compiles an SML expression AST into a Common Lisp form."
   (cond
@@ -1410,6 +1460,7 @@ NIL when AST is not one or the static checker did not resolve it."
      (logand most-positive-fixnum (- (second (third ast)))))
 
     ((compile-overloaded-application ast local-exceptions lexical-env))
+    ((compile-checked-infix-application ast local-exceptions lexical-env))
 
     ;; Replace the :app block in compile-expr
     ((and (listp ast) (eq (car ast) :app))
@@ -1607,7 +1658,8 @@ NIL when AST is not one or the static checker did not resolve it."
           ,(compile-export-form nil))))
     ((eq (car ast) :datatype-replication)
      `(progn
-        ,(compile-type-alias-form (second ast) (third ast))))
+        ,(compile-type-alias-form (second ast) (third ast))
+        ,@(compile-datatype-replication-constructors ast)))
     ((eq (car ast) :type)
      `(progn
         ,(compile-type-alias-form (second ast) (third ast))))
