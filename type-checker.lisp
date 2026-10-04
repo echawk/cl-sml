@@ -99,7 +99,10 @@ unchanged, if SOURCE is rejected."
                          (if filename
                              (sml-some-value (namestring filename))
                              (sml-none-value))
-                         source))
+                         ;; HaMLet's program grammar wants a final `;`,
+                         ;; which source files usually lack.  A redundant
+                         ;; one is harmless, and appending keeps positions.
+                         (concatenate 'string source (string #\Newline) ";")))
                  (result (let ((*error-output* diagnostics))
                            (call-sml "ClSmlHamlet.elab"
                                      (list :tuple

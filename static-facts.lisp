@@ -82,14 +82,19 @@ recording or consulting facts."
          (*sml-ast-positions* nil))
      ,@body))
 
+(defun sml-ast-node-p (node)
+  "Can NODE carry a position?  AST nodes are lists; infix operators are
+fresh strings until they become (:var op) nodes."
+  (or (consp node) (stringp node)))
+
 (defun note-sml-ast-position (node start)
   "Record that NODE starts at offset START of the parsed text.  Returns NODE."
-  (when (and *sml-ast-positions* (consp node))
+  (when (and *sml-ast-positions* start (sml-ast-node-p node))
     (setf (gethash node *sml-ast-positions*) start))
   node)
 
 (defun sml-ast-position (node)
-  (and *sml-ast-positions* (consp node)
+  (and *sml-ast-positions* (sml-ast-node-p node)
        (values (gethash node *sml-ast-positions*))))
 
 (defun sml-static-facts-at (offset kind &optional name)

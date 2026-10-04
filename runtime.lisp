@@ -773,12 +773,12 @@ constructor names are unique within a datatype."
 (defun sml-list-hd (list)
   (if list
       (car list)
-      (error "hd called on empty list")))
+      (sml-raise-named-exception "Empty")))
 
 (defun sml-list-tl (list)
   (if list
       (cdr list)
-      (error "tl called on empty list")))
+      (sml-raise-named-exception "Empty")))
 
 ;; --- Curried Standard Library ---
 ;; SML functions are auto-curried. Lisp's standard functions are not.
@@ -787,8 +787,30 @@ constructor names are unique within a datatype."
 (defun sml-~ (a) (- a))
 (defun sml-- (a) (lambda (b) (- a b)))
 (defun sml-* (a) (lambda (b) (* a b)))
-(defun sml-div (a) (lambda (b) (truncate a b)))
-(defun sml-mod (a) (lambda (b) (mod a b)))
+(defun sml-int-div (a b)
+  "SML `div`: quotient rounded towards negative infinity."
+  (if (zerop b)
+      (sml-raise-named-exception "Div")
+      (values (floor a b))))
+(defun sml-int-mod (a b)
+  "SML `mod`: remainder with the sign of the divisor."
+  (if (zerop b)
+      (sml-raise-named-exception "Div")
+      (mod a b)))
+(defun sml-div (a) (lambda (b) (sml-int-div a b)))
+(defun sml-mod (a) (lambda (b) (sml-int-mod a b)))
+
+;;; Words are non-negative integers below 2^bits.  Code generation uses the
+;;; static checker's resolution of overloaded operators to reduce the results
+;;; of word arithmetic modulo the word type's size.
+(defconstant +sml-word-size+ (integer-length most-positive-fixnum)
+  "Word.wordSize.")
+
+(defun sml-word-type-bits (tyname)
+  "The size in bits of word type TYNAME (as named by the static checker), or
+NIL if TYNAME is not a word type."
+  (cond ((string= tyname "word") +sml-word-size+)
+        ((string= tyname "word8") 8)))
 (defun sml-real-infinity (negativep)
   #+sbcl
   (if negativep
@@ -1225,7 +1247,7 @@ constructor names are unique within a datatype."
                                       (truncate (second tuple) (third tuple))))
                     ("Int.rem" . ,(lambda (tuple)
                                      (rem (second tuple) (third tuple))))
-                    ("Word.wordSize" . ,(sml-constant-primitive (integer-length most-positive-fixnum)))
+                    ("Word.wordSize" . ,(sml-constant-primitive +sml-word-size+))
                     ("Word.toInt" . ,#'identity)
                     ("Word.toIntX" . ,#'identity)
                     ("Word.fromInt" . ,#'identity)
@@ -1448,6 +1470,20 @@ constructor names are unique within a datatype."
       (register-sml-binding-type some
                                  '(:fn :unknown (:option :unknown))))
     (export (list none some) package)
+    ;; The exceptions of the initial basis, raised by the run-time
+    ;; primitives through SML-RAISE-NAMED-EXCEPTION.
+    (dolist (name '("Bind" "Chr" "Div" "Domain" "Empty" "Match" "Option"
+                    "Overflow" "Size" "Subscript" "Fail"))
+      (let ((symbol (sml-symbol-in-package-name name package)))
+        (unless (boundp symbol)
+          (if (string= name "Fail")
+              (setf (symbol-value symbol) (make-sml-exception-function name))
+              (setf (symbol-value symbol) (make-sml-exception-constructor name)))
+          (register-sml-binding-type symbol
+                                     (if (string= name "Fail")
+                                         '(:fn "string" "exn")
+                                         "exn"))
+          (export symbol package))))
     package))
 
 (initialize-sml-package *sml-package*)

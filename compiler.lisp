@@ -1255,6 +1255,94 @@ lists computed ahead of compilation can already honour it."
             ,(compile-pat (third pat) local-exceptions lexical-env)))
     (t (error "Unknown pattern ~A" pat))))
 
+(defun overloaded-identifier-instance (node)
+  "When NODE is an occurrence of an overloaded identifier (`+`, `<`, `abs`,
+...) whose type the static checker resolved, return its name and the type
+name it is used at (\"int\", \"word\", \"word8\", \"real\", \"char\" or
+\"string\")."
+  (when (and (consp node) (member (car node) '(:var :op-var)))
+    (let ((tyname (sml-overloaded-instance node)))
+      (when tyname
+        (values (second node) tyname)))))
+
+(defun compile-overloaded-operation (name tyname args)
+  "Specialized CL for overloaded identifier NAME used at type TYNAME and
+applied to the compiled ARGS (one for unary, two for binary operators).
+Returns NIL for combinations without a specialization."
+  (let ((bits (sml-word-type-bits tyname))
+        (comparison (cdr (assoc name '(("<" . <) (">" . >)
+                                       ("<=" . <=) (">=" . >=))
+                                :test #'string=))))
+    (flet ((wrap (form)
+             (if bits `(ldb (byte ,bits 0) ,form) form)))
+      (cond
+        ((= (length args) 1)
+         (let ((x (first args)))
+           (cond
+             ((string= name "~") (wrap `(- ,x)))
+             ((and (string= name "abs") (not bits)) `(abs ,x)))))
+        ((/= (length args) 2) nil)
+        (comparison
+         (destructuring-bind (x y) args
+           (cond
+             ((string= tyname "char")
+              `(,(cdr (assoc comparison '((< . char<) (> . char>)
+                                          (<= . char<=) (>= . char>=))))
+                ,x ,y))
+             ((string= tyname "string")
+              `(if (,(cdr (assoc comparison '((< . string<) (> . string>)
+                                              (<= . string<=) (>= . string>=))))
+                    ,x ,y)
+                   t nil))
+             (t `(,comparison ,x ,y)))))
+        ((member name '("+" "-" "*") :test #'string=)
+         (destructuring-bind (x y) args
+           (wrap `(,(intern name :cl) ,x ,y))))
+        ((string= name "div") `(sml-int-div ,@args))
+        ((string= name "mod") `(sml-int-mod ,@args))))))
+
+(defun compile-overloaded-identifier-value (name tyname)
+  "A curried function value for overloaded identifier NAME at TYNAME, or NIL."
+  (let ((x (gensym "X"))
+        (y (gensym "Y")))
+    (if (member name '("~" "abs") :test #'string=)
+        (let ((body (compile-overloaded-operation name tyname (list x))))
+          (and body `(lambda (,x) ,body)))
+        (let ((body (compile-overloaded-operation name tyname (list x y))))
+          (and body `(lambda (,x) (lambda (,y) ,body)))))))
+
+(defun compile-overloaded-application (ast local-exceptions lexical-env)
+  "Specialized code for AST, an application of an overloaded identifier, or
+NIL when AST is not one or the static checker did not resolve it."
+  (when (and (consp ast) (eq (car ast) :app))
+    (destructuring-bind (head arg) (cdr ast)
+      (flet ((compile-args (name tyname &rest asts)
+               ;; Only compile the operands once a specialization exists:
+               ;; compiling can hoist helper definitions.
+               (if (compile-overloaded-operation
+                    name tyname (mapcar (lambda (a) (declare (ignore a)) (gensym))
+                                        asts))
+                   (mapcar (lambda (a) (compile-expr a local-exceptions lexical-env))
+                           asts)
+                   (return-from compile-overloaded-application nil))))
+        (multiple-value-bind (name tyname) (overloaded-identifier-instance head)
+          (if name
+              (cond
+                ;; Unary application, or `op +` applied to a pair.
+                ((and (eq (car head) :var)
+                      (member name '("~" "abs") :test #'string=))
+                 (compile-overloaded-operation name tyname (compile-args name tyname arg)))
+                ((and (consp arg) (eq (car arg) :tuple) (= (length arg) 3))
+                 (compile-overloaded-operation
+                  name tyname (compile-args name tyname (second arg) (third arg)))))
+              ;; Curried infix application: (:app (:app op x) y).
+              (when (and (consp head) (eq (car head) :app))
+                (multiple-value-bind (name tyname)
+                    (overloaded-identifier-instance (second head))
+                  (when name
+                    (compile-overloaded-operation
+                     name tyname (compile-args name tyname (third head) arg)))))))))))
+
 (defun compile-expr (ast &optional local-exceptions lexical-env)
   "Compiles an SML expression AST into a Common Lisp form."
   (cond
@@ -1263,14 +1351,18 @@ lists computed ahead of compilation can already honour it."
     ((characterp ast) ast)
 
     ((and (listp ast) (eq (car ast) :var))
-     (resolved-sml-symbol (second ast) lexical-env))
+     (multiple-value-bind (name tyname) (overloaded-identifier-instance ast)
+       (or (and name (compile-overloaded-identifier-value name tyname))
+           (resolved-sml-symbol (second ast) lexical-env))))
 
     ((and (listp ast) (eq (car ast) :word))
      (second ast))
 
     ((and (listp ast) (eq (car ast) :op-var))
      `(sml-tuple-or-curried-binary
-       ,(compile-expr `(:var ,(second ast)) local-exceptions lexical-env)))
+       ,(multiple-value-bind (name tyname) (overloaded-identifier-instance ast)
+          (or (and name (compile-overloaded-identifier-value name tyname))
+              (compile-expr `(:var ,(second ast)) local-exceptions lexical-env)))))
 
     ((and (listp ast) (eq (car ast) :ctor))
      (cond
@@ -1301,6 +1393,8 @@ lists computed ahead of compilation can already honour it."
           (consp (third ast))
           (eq (car (third ast)) :word))
      (logand most-positive-fixnum (- (second (third ast)))))
+
+    ((compile-overloaded-application ast local-exceptions lexical-env))
 
     ;; Replace the :app block in compile-expr
     ((and (listp ast) (eq (car ast) :app))

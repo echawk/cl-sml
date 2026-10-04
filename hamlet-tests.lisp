@@ -112,7 +112,8 @@
 ;;; HaMLet's elaboration also guides code generation (static-facts.lisp).
 
 (defun checked-value (source name &optional (package "SML.HAMLET-FACTS-TEST"))
-  (eval (compile-checked source package))
+  (with-sml-package (package)
+    (eval (compile-checked source package)))
   (sml-value name package))
 
 (test hamlet-identifier-status-decides-lowercase-constructor-patterns
@@ -143,5 +144,26 @@
                            val factsCaught = (raise FactsC.oops 4)
                                              handle FactsC.oops n => n;"
                           "factsCaught"))))
+
+(test hamlet-overloading-resolution-makes-word-arithmetic-modular
+  (is (= (1- (expt 2 cl-sml::+sml-word-size+))
+         (checked-value "val wordWrap = 0w0 - 0w1;" "wordWrap")))
+  (is (= 1 (checked-value "fun addByte (x : Word8.word) = x + 0w255;
+                           val byteWrap = addByte 0w2;"
+                          "byteWrap")))
+  (is (= 244 (checked-value "val byteProduct = (0w5 : Word8.word) * 0w100;"
+                            "byteProduct")))
+  (is (= 255 (checked-value "val byteNeg = ~(0w1 : Word8.word);" "byteNeg")))
+  (is (= 44 (checked-value "val byteSum = foldl (op +) (0w0 : Word8.word) [0w200, 0w100];"
+                           "byteSum"))))
+
+(test hamlet-overloading-resolution-specializes-int-and-text-operators
+  (is (= -4 (checked-value "val floorDiv = ~7 div 2;" "floorDiv")))
+  (is (= 99 (checked-value "val divByZero = 7 div 0 handle Div => 99;" "divByZero")))
+  (is (eq t (checked-value "val stringLess = \"abc\" < \"abd\";" "stringLess")))
+  (is (eq t (checked-value "val charGreater = #\"z\" > #\"a\";" "charGreater"))))
+
+(test hamlet-accepts-programs-without-final-semicolon
+  (is (= 3 (checked-value "val noSemicolon = 1 + 2" "noSemicolon"))))
 
 (fiveam:run! 'cl-sml-hamlet-suite)
