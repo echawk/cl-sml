@@ -65,9 +65,8 @@
   stack that `build-hamlet` bakes in via `:save-runtime-options`).
 - [ ] Preload/cache the elaborated basis in the `cl-hamlet` image so startup
   does not re-elaborate `hamlet/basis` each time.
-- [ ] ABCL 1.9.2 has no `uiop:dump-image`; see the JAR/launcher item below.
-- [ ] Evaluate an executable JAR/launcher as the ABCL fallback image format.
 - [ ] Evaluate `cl-iparse` as a future grammar implementation.
 - [ ] Evaluate `rewrite-cl` for typed normalization and backend rewrites.
 - [ ] Prototype an optional Coalton backend only after a backend-neutral typed
   IR exists; see `PLAN.md`.
+  - Ensure this is entirely optional; based on whether we are able to typecheck (ie hamlet.sml exists).
