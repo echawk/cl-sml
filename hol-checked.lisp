@@ -96,7 +96,7 @@
      "pretty")))
 
 (unless (probe-file #P"HOL/README.md")
-  (error "HOL checkout is not available at ./HOL"))
+  (error "HOL checkout is not available at ./HOL; run `git submodule update --init HOL`."))
 
 (defun quietly (thunk)
   (let ((*standard-output* (make-broadcast-stream))
