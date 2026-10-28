@@ -5,6 +5,7 @@
   :pathname "src/"
   :serial t
   :components ((:file "package")
+               (:file "portability")
                (:file "runtime")
                (:file "static-facts")
                (:file "parser")

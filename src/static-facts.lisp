@@ -72,8 +72,7 @@ next multiple of 8) to a character offset into SOURCE."
 (defun make-sml-ast-position-table ()
   ;; Backtracking parses create many nodes that never reach the final AST;
   ;; a weak table does not keep them alive.
-  #+sbcl (make-hash-table :test #'eq :weakness :key)
-  #-sbcl (make-hash-table :test #'eq))
+  (make-portable-weak-eq-hash-table))
 
 (defmacro with-sml-static-facts ((facts &key (offset 0)) &body body)
   "Run BODY, parsing and compiling text the static checker described with

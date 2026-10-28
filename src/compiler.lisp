@@ -832,12 +832,7 @@ into scope to those of the replicated datatype."
 
 (defun sml-lambda-form (name arg body)
   "A one-argument lambda; named on SBCL so that backtraces show SML names."
-  #+sbcl
-  (if name
-      `(sb-int:named-lambda ,(format nil "sml:~A" name) (,arg) ,body)
-      `(lambda (,arg) ,body))
-  #-sbcl
-  (progn name `(lambda (,arg) ,body)))
+  (portable-sml-lambda-form name arg body))
 
 (defun compile-fn-clauses (clauses &optional local-exceptions function-name outer-lexical-env)
   (let* ((arity (length (first (first clauses))))
@@ -1161,7 +1156,12 @@ into scope to those of the replicated datatype."
             (trivia:match ,tmp
               (,(compile-pat pat local-exceptions lexical-env)
                (progn
-                 ,@(mapcar (lambda (sym) `(defparameter ,sym ,sym)) bound-symbols)
+                 ;; DEFparameter makes SYM special before evaluating its init
+                 ;; form.  Some implementations then resolve the RHS to the
+                 ;; global binding instead of the pattern variable.
+                 ,@(mapcar (lambda (sym)
+                             `(setf (symbol-value ',sym) ,sym))
+                           bound-symbols)
                  ,@(mapcar (lambda (binding)
                              (compile-type-registration-form (car binding) (cdr binding)))
                            typed-bindings)

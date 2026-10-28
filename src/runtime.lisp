@@ -178,7 +178,7 @@
     (normalize-sml-member-names members)))
 
 (defvar *sml-constructor-function-tags*
-  (make-hash-table :test #'eq #+sbcl :weakness #+sbcl :key)
+  (make-portable-weak-eq-hash-table)
   "Maps a constructor's function value to the tag its values carry.")
 
 (defun register-sml-constructor (symbol &optional canonical-symbol)
@@ -824,14 +824,7 @@ NIL if TYNAME is not a word type."
   (cond ((string= tyname "word") +sml-word-size+)
         ((string= tyname "word8") 8)))
 (defun sml-real-infinity (negativep)
-  #+sbcl
-  (if negativep
-      sb-ext:double-float-negative-infinity
-      sb-ext:double-float-positive-infinity)
-  #-sbcl
-  (if negativep
-      (- most-positive-double-float)
-      most-positive-double-float))
+  (portable-float-infinity negativep))
 
 (defun sml-/ (a)
   (lambda (b)
@@ -1144,21 +1137,16 @@ NIL if TYNAME is not a word type."
 ;;; Real, Math, command-line and file-system primitives used by the Basis.
 
 (defmacro with-sml-float-traps-masked (&body body)
-  #+sbcl `(sb-int:with-float-traps-masked (:invalid :divide-by-zero :overflow :inexact)
-            ,@body)
-  #-sbcl `(progn ,@body))
+  `(with-portable-float-traps-masked ,@body))
 
 (defun sml-nan ()
-  (with-sml-float-traps-masked
-    (- sb-ext:double-float-positive-infinity sb-ext:double-float-positive-infinity)))
+  (portable-float-nan))
 
 (defun sml-real-nan-p (x)
-  #+sbcl (and (floatp x) (sb-ext:float-nan-p x))
-  #-sbcl (and (floatp x) (/= x x)))
+  (portable-float-nan-p x))
 
 (defun sml-real-infinite-p (x)
-  #+sbcl (and (floatp x) (sb-ext:float-infinity-p x))
-  #-sbcl nil)
+  (portable-float-infinite-p x))
 
 (defun sml-real-finite-p (x)
   (not (or (sml-real-nan-p x) (sml-real-infinite-p x))))
@@ -1178,7 +1166,7 @@ NIL if TYNAME is not a word type."
        (flet ((finish (body) (if negative (concatenate 'string "~" body) body)))
          (if (zerop magnitude)
              (finish "0.0")
-             (multiple-value-bind (k digits) (sb-impl::flonum-to-digits magnitude)
+             (multiple-value-bind (k digits) (portable-flonum-to-digits magnitude)
                ;; magnitude = 0.DIGITS * 10^k
                (let ((n (length digits)))
                  (finish
@@ -1220,11 +1208,11 @@ NIL if TYNAME is not a word type."
 
 (defun sml-command-line-name (unit)
   (declare (ignore unit))
-  (or (first sb-ext:*posix-argv*) "cl-hamlet"))
+  (or (uiop:argv0) "cl-hamlet"))
 
 (defun sml-command-line-arguments (unit)
   (declare (ignore unit))
-  (rest sb-ext:*posix-argv*))
+  (portable-command-line-arguments))
 
 (defun sml-os-file-sys-is-dir (path)
   (and (uiop:directory-exists-p path) t))

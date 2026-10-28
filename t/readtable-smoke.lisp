@@ -52,7 +52,7 @@
           (funcall (sml-user-value "maybeAddfoo") my-opt)))
 
 (format t "maybeAddfoo(NONE) = ~A~%"
-        (funcall (sml-user-value "maybeAddfoo") (sml-user-symbol "NONE")))
+        (funcall (sml-user-value "maybeAddfoo") (sml-user-value "NONE")))
 
 (format t "isSafe(5) = ~A~%"
            (funcall (sml-user-value "isSafe") 5))
