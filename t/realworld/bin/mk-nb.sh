@@ -2,8 +2,10 @@
 # mk-nb.sh NAME...: nb/<NAME> = work/<NAME> rewritten by workaround.py (all
 # rules) to look past the first blockers; checks the rewrite with Poly/ML.
 R=$(cd "$(dirname "$0")/.." && pwd)
+# State (work/, image, caches, results) lives in $RW_STATE (default: the harness dir).
+S=${RW_STATE:-$R}
 for n in "$@"; do
-  w=$R/work/$n; d=$R/nb/$n
+  w=$S/work/$n; d=$S/nb/$n
   rm -rf "$d"; mkdir -p "$d"
   rules=$(python3 "$R/bin/workaround.py" "$w/prog.sml" "$d/prog.sml" $RULES)
   [ -f "$w/driver.sml" ] && cp "$w/driver.sml" "$d/"

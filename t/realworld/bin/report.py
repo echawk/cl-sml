@@ -11,7 +11,8 @@ generated Lisp) and RUNTIME (exn = uncaught SML exception, stack, heap, crash).
 import os, sys, subprocess
 
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-W = os.path.join(R, "work")
+S = os.environ.get("RW_STATE", R)  # state dir (work/, image, results)
+W = os.path.join(S, "work")
 
 def read(path, default=None):
     try:

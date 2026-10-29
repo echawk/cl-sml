@@ -5,8 +5,10 @@
 # like the *-shim modes.  Separates HaMLet's own (Definition-strict) verdicts
 # from differences in cl-sml's compiled copy of HaMLet.
 R=$(cd "$(dirname "$0")/.." && pwd)
-H=$R/hamlet-ref/hamlet/hamlet
-mkdir -p "$R/tmp/hamlet-ref"; cd "$R/tmp/hamlet-ref" || exit 1
+# State (work/, image, caches, results) lives in $RW_STATE (default: the harness dir).
+S=${RW_STATE:-$R}
+H=$S/hamlet-ref/hamlet/hamlet
+mkdir -p "$S/tmp/hamlet-ref"; cd "$S/tmp/hamlet-ref" || exit 1
 for d in "$R"/work/*/; do
   n=$(basename "$d")
   f=$n.sml

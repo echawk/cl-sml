@@ -4,6 +4,8 @@
 # Poly/ML first; if Poly rejects the program (compile error) or crashes in
 # its compiler, fall back to MLton (-default-type int64).
 R=$(cd "$(dirname "$0")/.." && pwd)
+# State (work/, image, caches, results) lives in $RW_STATE (default: the harness dir).
+S=${RW_STATE:-$R}
 d=$(cd "$1" && pwd)
 [ -f "$d/ref.out" ] && [ -z "${FORCE:-}" ] && exit 0
 now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }

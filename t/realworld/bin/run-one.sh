@@ -2,13 +2,15 @@
 # run-one.sh WORKDIR MODE: run one program under cl-sml (MODE plain|checked
 # [-bare]) in a fresh process from cl-sml-rw.core; writes WORKDIR/MODE.{out,res,log,bt}.
 R=$(cd "$(dirname "$0")/.." && pwd)
+# State (work/, image, caches, results) lives in $RW_STATE (default: the harness dir).
+S=${RW_STATE:-$R}
 d=$(cd "$1" && pwd); m=$2
 T=${TIMEOUT:-120}
-export XDG_CACHE_HOME="$R/cache" TMPDIR="$R/tmp/$(basename "$d")-$m"
+export XDG_CACHE_HOME="$S/cache" TMPDIR="$S/tmp/$(basename "$d")-$m"
 rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
 "$R/bin/mkrundir.sh" "$d" "$m"
 rm -f "$d/$m.res" "$d/$m.bt" "$d/$m.out"
-"$R/bin/timeout.pl" $((T + 60)) sbcl --core "$R/cl-sml-rw.core" \
+"$R/bin/timeout.pl" $((T + 60)) sbcl --core "$S/cl-sml-rw.core" \
   --control-stack-size 1GB --dynamic-space-size 8GB --noinform --non-interactive \
   --no-sysinit --no-userinit \
   --load "$R/bin/driver.lisp" \

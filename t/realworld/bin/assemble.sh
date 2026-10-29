@@ -1,5 +1,5 @@
 #!/bin/sh
-# Assemble the corpus into $R/work/<name>/{prog.sml,driver.sml,ref.sml}.
+# Assemble the corpus into $S/work/<name>/{prog.sml,driver.sml,ref.sml}.
 #   bm-*   SML/NJ benchmark suite (benchmarks/programs): util/bmark.sig +
 #          util/log.sml + FILES (minus ../BASIS/*) + main.sml; driver.sml runs
 #          Main.testit with Log output on stdout.
@@ -7,9 +7,11 @@
 #          tests (no .mlb); expected output in expected.out.
 set -eu
 R=$(cd "$(dirname "$0")/.." && pwd)
-P=${CLSML_ROOT:-/Users/ethan/sml/cl-sml}
+# State (work/, image, caches, results) lives in $RW_STATE (default: the harness dir).
+S=${RW_STATE:-$R}
+P=${CLSML_ROOT:-$(cd "$R/../.." && pwd)}
 B=$P/benchmarks
-W=$R/work
+W=$S/work
 mkdir -p "$W"
 
 for dir in "$B"/programs/*/; do

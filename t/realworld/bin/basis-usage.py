@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from workaround import strip_comments
 
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-W = os.path.join(R, "work")
+S = os.environ.get("RW_STATE", R)  # state dir (work/, image, results)
+W = os.path.join(S, "work")
 STRUCTS = """General Option Bool List ListPair Char String Substring StringCvt Int
 LargeInt Position Word Word8 LargeWord IEEEReal Math Real LargeReal Vector
 Word8Vector CharVector VectorSlice Word8VectorSlice CharVectorSlice Array
@@ -36,8 +37,8 @@ for name in sorted(os.listdir(W)):
 
 ids = sorted(uses)
 # (a) reference HaMLet static basis
-hamlet = os.path.join(R, "hamlet-ref", "hamlet", "hamlet")
-tmp = os.path.join(R, "tmp", "basis-usage"); os.makedirs(tmp, exist_ok=True)
+hamlet = os.path.join(S, "hamlet-ref", "hamlet", "hamlet")
+tmp = os.path.join(S, "tmp", "basis-usage"); os.makedirs(tmp, exist_ok=True)
 def hamlet_has(ident):
     last = ident.split(".")[-1]
     # types/structures/exceptions too: try value, then type, then structure
@@ -56,7 +57,7 @@ lisp = "(progn " + " ".join(
     '(format t "~A~C~A~%%" %s #\\Tab (let ((s (find-symbol %s "SML.RW"))) (and s (boundp s))))'
     % (json_s, json_s) for json_s in ['"%s"' % i.replace("\\", "\\\\") for i in ids]) + ")"
 lf = os.path.join(tmp, "q.lisp"); open(lf, "w").write(lisp)
-out = subprocess.run(["sbcl", "--core", os.path.join(R, "cl-sml-rw.core"), "--noinform",
+out = subprocess.run(["sbcl", "--core", os.path.join(S, "cl-sml-rw.core"), "--noinform",
                       "--non-interactive", "--no-userinit", "--load", lf],
                      capture_output=True, text=True).stdout
 bound = {}
@@ -69,7 +70,7 @@ with ThreadPoolExecutor(8) as ex:
 rows = []
 for i in ids:
     rows.append((i, len(uses[i]), has[i], bound.get(i, False), sorted(uses[i])))
-with open(os.path.join(R, "basis-usage.tsv"), "w") as f:
+with open(os.path.join(S, "basis-usage.tsv"), "w") as f:
     f.write("id\tnprogs\thamlet_static\tclsml_runtime_value\tprograms\n")
     for i, n, h, b, ps in rows:
         f.write("%s\t%d\t%s\t%s\t%s\n" % (i, n, h, b, " ".join(ps)))
