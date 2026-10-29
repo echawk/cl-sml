@@ -170,6 +170,25 @@
   (is (eq t (checked-value "val stringLess = \"abc\" < \"abd\";" "stringLess")))
   (is (eq t (checked-value "val charGreater = #\"z\" > #\"a\";" "charGreater"))))
 
+(test hamlet-overloading-resolution-keeps-reals-ieee
+  ;; Real-typed operators are compiled to CL arithmetic, which traps on SBCL
+  ;; and ECL unless the traps are masked.
+  (let ((big (format nil "~D.0" (expt 10 200))))
+    (is (eq t (checked-value
+               (format nil "fun realSquare (x : real) = x * x;
+                            val realOverflowed = realSquare ~A > realSquare 1.0;"
+                       big)
+               "realOverflowed"))))
+  (is (null (checked-value "val realNanOrdered = let val n = 0.0 / 0.0
+                                                 in n < 1.0 orelse n >= 1.0 end;"
+                           "realNanOrdered"))))
+
+(test hamlet-checked-self-tail-calls-loop
+  (is (= 1000000 (checked-value "fun checkedCount 0 acc = acc
+                                   | checkedCount n acc = checkedCount (n - 1) (acc + 1);
+                                 val checkedCounted = checkedCount 1000000 0;"
+                                "checkedCounted"))))
+
 (test hamlet-accepts-programs-without-final-semicolon
   (is (= 3 (checked-value "val noSemicolon = 1 + 2" "noSemicolon"))))
 
