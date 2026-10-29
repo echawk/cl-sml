@@ -1263,9 +1263,13 @@ into scope to those of the replicated datatype."
 	               `(cons ',ctor ,payload)
                        ;; Not resolvable now (e.g. reached through a functor
                        ;; parameter): compare against the run-time constructor.
+                       ;; The value may be a nullary constructor (a symbol)
+                       ;; of the same datatype, so test for a cons rather
+                       ;; than assert one.
                        (let ((it (gensym "CTOR-VALUE")))
-                         `(guard1 (,it :type cons)
-                                  (sml-constructor-tag-p (car ,it) ',ctor)
+                         `(guard1 ,it
+                                  (and (consp ,it)
+                                       (sml-constructor-tag-p (car ,it) ',ctor))
                                   (cdr ,it) ,payload)))))))
 
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
@@ -1853,16 +1857,17 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
 (defun declaration-binding-symbol-bindings (dec)
   (case (and (consp dec) (car dec))
     (:open
+     ;; `open A B` opens B after A, so B's members shadow A's: they are
+     ;; pushed last and found first.
      (let ((bindings nil))
-       (dolist (name (split-sml-module-names (second dec)))
+       (dolist (name (split-sml-module-names (second dec)) bindings)
          (let ((source (resolve-structure-prefix name)))
            (dolist (member (lookup-sml-module-members-for-compiler
                             name
                             *sml-local-structure-members*))
              (push (cons member
                          (sml-symbol (qualify-sml-name source member)))
-                   bindings))))
-       (nreverse bindings)))
+                   bindings))))))
     (:local
      (mapcar (lambda (name)
                (cons name (target-sml-symbol name)))
@@ -1879,8 +1884,9 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
                (cons (second ctor) (target-sml-symbol (second ctor))))
              (third dec)))
     (:open
+     ;; As for values, later structures shadow earlier ones.
      (let ((bindings nil))
-       (dolist (name (split-sml-module-names (second dec)))
+       (dolist (name (split-sml-module-names (second dec)) bindings)
          (let ((source (resolve-structure-prefix name)))
            (dolist (member (lookup-sml-module-members-for-compiler
                             name
@@ -1888,8 +1894,7 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
              (let* ((source-symbol (sml-symbol (qualify-sml-name source member)))
                     (canonical (sml-constructor-canonical-symbol source-symbol)))
                (when canonical
-                 (push (cons member canonical) bindings))))))
-       (nreverse bindings)))
+                 (push (cons member canonical) bindings))))))))
     (:local
      (mapcan #'declaration-constructor-symbol-bindings (third dec)))
     (otherwise

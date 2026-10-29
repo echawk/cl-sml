@@ -29,6 +29,7 @@
                (:file "runtime-tests")
                (:file "repl-tests")
                (:file "hamlet-tests")
+               (:file "semantics-tests")
                (:file "run"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
