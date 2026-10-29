@@ -1,4 +1,3 @@
-(load "~/.sbclrc")
 (ql:quickload :cl-sml)
 
 (defparameter *hol-smoke-package* "SML.HOL-SMOKE")
