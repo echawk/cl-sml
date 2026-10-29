@@ -56,7 +56,10 @@ Returns THUNK's value and the captured text."
          (basis-source (merge-pathnames #P"basis/all.sml" root))
          (hamlet-source (merge-pathnames #P"hamlet.sml" root))
          (basis-path (merge-pathnames #P"basis/" root))
-         (*sml-type-checker* nil))
+         (*sml-type-checker* nil)
+         ;; The Lisp generated for HaMLet itself is not worth the memory
+         ;; (some 14 MB) its records would keep alive in every image.
+         (*record-sml-lisp-source* nil))
     (unless (probe-file hamlet-source)
       (error "HaMLet sources not found at ~A; run `git submodule update --init`."
              root))
@@ -145,3 +148,16 @@ unchanged, if SOURCE is rejected."
 (defmethod type-check-sml-string-using ((checker hamlet-type-checker) source
                                         &key filename)
   (hamlet-type-check-string checker source :filename filename))
+
+(defun call-preserving-sml-checker-session (checker thunk)
+  "Call THUNK, then forget what CHECKER elaborated meanwhile in the session
+of the current SML package, e.g. to compile a phrase that is not run."
+  (if (hamlet-type-checker-p checker)
+      (let* ((key (hamlet-session-key))
+             (sessions (hamlet-type-checker-sessions checker)))
+        (multiple-value-bind (argument presentp) (gethash key sessions)
+          (unwind-protect (funcall thunk)
+            (if presentp
+                (setf (gethash key sessions) argument)
+                (remhash key sessions)))))
+      (funcall thunk)))

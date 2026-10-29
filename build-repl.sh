@@ -23,4 +23,4 @@ fi
     --eval '(load "~/.sbclrc")' \
     --eval "(ql:quickload '(:cl-sml))" \
     --eval "$ENABLE" \
-    --eval "(sb-ext:save-lisp-and-die \"$OUTPUT\" :executable t :save-runtime-options t :toplevel (lambda () (cl-sml:repl) (sb-ext:exit :code 0)))"
+    --eval "(sb-ext:save-lisp-and-die \"$OUTPUT\" :executable t :save-runtime-options t :toplevel (lambda () (sb-ext:exit :code (cl-sml:main))))"

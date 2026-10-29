@@ -130,6 +130,8 @@ tab	"
                         (:app (:app (:var "-") (:var "n")) 1)))))))
              (parse 'cl-sml::sml-val-rec
                     "val rec fact = fn 0 => 1 | n => n * fact (n - 1);")))
+  (is (equal '(:program (:val (:pat-var "recorded") 1))
+             (parse 'cl-sml::sml-program "val recorded = 1;")))
   (is (equal '(:val (:pat-tuple (:pat-var "x") (:pat-var "y"))
                     (:tuple 1 2))
              (parse 'cl-sml::sml-val "val (x, y) = (1, 2);")))
