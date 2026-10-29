@@ -1,0 +1,5 @@
+CHECKER
+UNBOUND-VARIABLE: The variable SML.HAMLET-TYPE-CHECKER::|recbind| is unbound.
+
+cl-sml frames (innermost first):
+  CL-SML::CALL-WITH-SML-FUNCTOR-BINDINGS

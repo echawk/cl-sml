@@ -1,0 +1,5 @@
+val _ = print (CharVector.map Char.toUpper "abc" ^ "\n")
+val _ = print (String.map Char.toUpper "abc" ^ "\n")
+val _ = print (CharVector.foldr (fn (c, acc) => acc ^ str c) "" "abc" ^ "\n")
+val _ = print (implode (map Char.toUpper (explode "abc")) ^ "\n")
+val _ = print (Vector.foldr (fn (c, acc) => acc ^ str c) "" (Vector.fromList [#"a", #"b", #"c"]) ^ "\n")

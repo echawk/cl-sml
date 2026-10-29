@@ -1,0 +1,35 @@
+null ok
+5
+[1,2,3,4,5,6]
+1 [2,3,4,5]
+5
+1[2,3,4,5]
+3
+nth Subscript
+nth neg Subscript
+[1,2] [3,4,5]
+take Subscript
+drop Subscript
+[5,4,3,2,1]
+[1,2,3]
+[2,1,3,4]
+12345
+[1,4,9,16,25]
+[20,40]
+4
+none
+[1,3,5]
+[1,2][3,4,5]
+12345
+54321
+2
+2
+exists
+all
+not all
+[0,1,4,9,16]
+tabulate Size
+LESS
+GREATER
+List.Empty
+last Empty

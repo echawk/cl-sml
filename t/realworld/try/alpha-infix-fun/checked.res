@@ -1,0 +1,1 @@
+RUNTIME	RUNTIME	0.06		4	SIMPLE-TYPE-ERROR: Value of 2 in                    (SB-KERNEL:%COERCE-CALLABLE-FOR-CALL 2)                    is                      2,                    not a                      (OR FUNCTION SYMBOL).

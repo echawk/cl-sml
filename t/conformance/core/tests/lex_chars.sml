@@ -1,0 +1,11 @@
+fun p c = print (Int.toString (ord c) ^ "\n")
+val _ = p #"a"
+val _ = p #"\n"
+val _ = p #"\^@"
+val _ = p #"\255"
+val _ = p #"\u00FF"
+val _ = p #"\""
+val _ = p #"\\"
+val _ = p #" "
+val _ = print (if #"a" < #"b" then "lt\n" else "ge\n")
+val _ = print (str #"x" ^ implode [#"y", #"z"] ^ "\n")

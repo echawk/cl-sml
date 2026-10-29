@@ -1,0 +1,1 @@
+LISPCOMPILE	LISPCOMPILE	0.11		1	COMPILED-PROGRAM-ERROR: Execution of a form compiled with errors. Form:   (LET ((T 5))   (PROGN (+ T 1))) Compile-time error:   COMMON-LISP:T names a defined constant, and cannot be used in LET.

@@ -1,0 +1,8 @@
+fun p n = print (Int.toString n ^ "\n")
+val rec fact = fn 0 => 1 | n => n * fact (n - 1)
+val _ = p (fact 5)
+val rec even = fn 0 => true | n => odd (n - 1)
+and odd = fn 0 => false | n => even (n - 1)
+val _ = print ((if even 10 andalso odd 7 then "ok" else "bad") ^ "\n")
+val x = 1 and rec g = fn 0 => 0 | n => n + g (n - 1)
+val _ = p (g 4 + x)

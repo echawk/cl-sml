@@ -1,0 +1,477 @@
+id	nprogs	hamlet_static	clsml_runtime_value	programs
+Array.appi	1	True	True	ln-mlbasis-seki-bernoulli
+Array.array	12	True	True	bm-barnes-hut bm-count-graphs bm-lexgen bm-mlyacc bm-plclub-ray bm-simple bm-smith-nf bm-tyan bm-vliw ln-core-equality ln-core-prime_eratos ln-mlbasis-seki-bernoulli
+Array.fromList	3	True	True	bm-mlyacc bm-tyan ln-core-equality
+Array.init	1	True	False	bm-plclub-ray
+Array.length	5	True	True	bm-mlyacc bm-plclub-ray bm-smith-nf bm-tyan bm-vliw
+Array.make	1	True	False	bm-plclub-ray
+Array.map	1	True	False	bm-plclub-ray
+Array.maxLen	1	True	True	bm-dlx
+Array.of_list	1	True	False	bm-plclub-ray
+Array.sub	13	True	True	bm-aobench bm-barnes-hut bm-count-graphs bm-lexgen bm-minimax bm-mlyacc bm-plclub-ray bm-simple bm-smith-nf bm-tyan bm-vliw ln-core-prime_eratos ln-mlbasis-seki-bernoulli
+Array.tabulate	6	True	True	bm-count-graphs bm-minimax bm-plclub-ray bm-smith-nf bm-tyan bm-vliw
+Array.unsafe_get	1	True	False	bm-plclub-ray
+Array.unsafe_set	1	True	False	bm-plclub-ray
+Array.update	13	True	True	bm-aobench bm-barnes-hut bm-count-graphs bm-lexgen bm-minimax bm-mlyacc bm-plclub-ray bm-simple bm-smith-nf bm-tyan bm-vliw ln-core-prime_eratos ln-mlbasis-seki-bernoulli
+Array2.array	2	True	False	bm-plclub-ray bm-simple
+Array2.array2	1	True	False	bm-simple
+Array2.sub	2	True	False	bm-plclub-ray bm-simple
+Array2.update	2	True	False	bm-plclub-ray bm-simple
+BinIO.closeOut	41	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+BinIO.flushOut	41	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+BinIO.openOut	41	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+BinIO.output	41	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+BinIO.output1	41	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+BinIO.outstream	41	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+Bool.toString	10	True	True	bm-vliw ln-core-datatype-equality ln-core-equality ln-core-functor2 ln-core-functor3 ln-core-functor_exception ln-core-opaque2 ln-mlbasis-char ln-mlbasis-string-issubstring ln-mlbasis-widestring-issubstring
+Byte.bytesToString	1	True	True	bm-smith-nf
+Byte.charToByte	1	True	True	bm-smith-nf
+Byte.stringToBytes	4	True	True	bm-aobench bm-id-ray bm-mc-ray bm-ray
+Byte.unpackString	1	True	True	bm-plclub-ray
+Char.chr	2	True	True	bm-lexgen ln-mlbasis-char
+Char.fromString	2	True	True	bm-ray ln-mlbasis-char
+Char.isAlpha	3	True	True	bm-mlyacc ln-core-parser_combinator ln-mlbasis-char
+Char.isAlphaNum	2	True	True	ln-core-parser_combinator ln-mlbasis-char
+Char.isAscii	1	True	True	ln-mlbasis-char
+Char.isCntrl	1	True	True	ln-mlbasis-char
+Char.isDigit	4	True	True	bm-mlyacc bm-ray ln-core-parser_combinator ln-mlbasis-char
+Char.isGraph	1	True	True	ln-mlbasis-char
+Char.isHexDigit	2	True	True	ln-core-parser_combinator ln-mlbasis-char
+Char.isLower	2	True	True	ln-core-parser_combinator ln-mlbasis-char
+Char.isPrint	1	True	True	ln-mlbasis-char
+Char.isPunct	1	True	True	ln-mlbasis-char
+Char.isSpace	5	True	True	bm-barnes-hut bm-black-scholes bm-ray ln-core-parser_combinator ln-mlbasis-char
+Char.isUpper	2	True	True	ln-core-parser_combinator ln-mlbasis-char
+Char.ord	4	True	True	bm-lexgen bm-plclub-ray bm-ray bm-vliw
+Char.toCString	1	True	True	ln-mlbasis-char
+Char.toLower	1	True	True	ln-mlbasis-char
+Char.toString	4	True	True	bm-ray bm-tyan ln-core-parser_combinator ln-mlbasis-char
+Char.toUpper	2	True	True	ln-mlbasis-char ln-mlbasis-substring
+CharVector.foldl	1	True	True	bm-lexgen
+CharVector.sub	1	True	True	bm-plclub-ray
+CharVector.tabulate	1	True	True	bm-pidigits
+General.!	1	True	True	ln-mlbasis-general
+General.:=	1	True	True	ln-mlbasis-general
+General.Bind	1	True	True	ln-mlbasis-general
+General.Chr	1	True	True	ln-mlbasis-general
+General.Div	1	True	True	ln-mlbasis-general
+General.Domain	1	True	True	ln-mlbasis-general
+General.EQUAL	1	True	True	ln-mlbasis-general
+General.Fail	1	True	True	ln-mlbasis-general
+General.LESS	1	True	True	ln-mlbasis-general
+General.Match	1	True	True	ln-mlbasis-general
+General.Overflow	1	True	True	ln-mlbasis-general
+General.Size	1	True	True	ln-mlbasis-general
+General.Span	1	True	True	ln-mlbasis-general
+General.Subscript	1	True	True	ln-mlbasis-general
+General.before	1	True	True	ln-mlbasis-general
+General.exn	1	True	False	ln-mlbasis-general
+General.exnMessage	2	True	True	bm-cml-sieve bm-pingpong
+General.exnName	1	True	True	ln-mlbasis-exn-name
+General.ignore	1	True	True	ln-mlbasis-general
+General.o	1	True	True	ln-mlbasis-general
+General.order	1	True	False	ln-mlbasis-general
+General.unit	1	True	False	ln-mlbasis-general
+IEEEReal.TO_NEAREST	1	True	True	ln-mlbasis-real-intinf
+IEEEReal.TO_NEGINF	1	True	True	ln-mlbasis-real-intinf
+IEEEReal.TO_POSINF	1	True	True	ln-mlbasis-real-intinf
+IEEEReal.TO_ZERO	1	True	True	ln-mlbasis-real-intinf
+Int.*	1	True	True	ln-core-fib_monoid
+Int.+	3	True	True	bm-dlx ln-core-opaque1 ln-core-opaque2
+Int.-	1	True	True	bm-dlx
+Int.<	1	True	True	bm-dlx
+Int.<=	2	True	True	bm-dlx bm-lexgen
+Int.>	2	True	True	bm-dlx bm-lexgen
+Int.>=	1	True	True	bm-dlx
+Int.abs	1	True	True	bm-mandelbrot-rat
+Int.compare	1	True	True	bm-kcfa
+Int.fromInt	1	True	True	bm-dlx
+Int.fromString	4	True	True	bm-black-scholes bm-count-graphs bm-dlx bm-plclub-ray
+Int.int	2	True	False	bm-plclub-ray ln-mlbasis-seki-bernoulli
+Int.max	6	True	True	bm-binary-trees bm-fannkuch bm-minimax bm-smith-nf bm-tyan bm-vliw
+Int.maxInt	2	True	True	ln-mlbasis-overflow ln-mlbasis-real
+Int.min	2	True	True	bm-ratio-regions bm-smith-nf
+Int.minInt	2	True	True	ln-mlbasis-overflow ln-mlbasis-real
+Int.mod	1	True	True	bm-ratio-regions
+Int.quot	3	True	True	bm-delta-blue bm-ratio-regions ln-mlbasis-overflow
+Int.rem	2	True	True	bm-stream-sieve ln-mlbasis-overflow
+Int.scan	1	True	True	bm-barnes-hut
+Int.toString	58	True	True	bm-aobench bm-barnes-hut bm-binary-trees bm-boyer bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-mandelbrot bm-mandelbrot-rat bm-mc-ray bm-minimax bm-mlyacc bm-nucleic bm-plclub-ray bm-ratio-regions bm-ray bm-simple bm-tsp bm-twenty-four bm-tyan bm-vliw ln-core-abstype ln-core-capture ln-core-fib_linear ln-core-fib_monoid ln-core-fib_slow ln-core-fix_by_datatype ln-core-fix_by_ref ln-core-fizzbuzz ln-core-functor1 ln-core-functor2 ln-core-listrev ln-core-local_datatype ln-core-opaque1 ln-core-opaque2 ln-core-parser_combinator ln-core-prime_as_typevar ln-core-prime_eratos ln-core-prime_trialdiv ln-core-signature1 ln-core-signature3 ln-core-val_projection ln-mlbasis-general ln-mlbasis-int-inf ln-mlbasis-int-inf-factorial ln-mlbasis-int-inf-factorial-hex ln-mlbasis-int-inf-wilson ln-mlbasis-real ln-mlbasis-seki-bernoulli ln-mlbasis-vector
+Int16.*	1	True	False	ln-mlbasis-int16
+Int16.+	1	True	False	ln-mlbasis-int16
+Int16.-	1	True	False	ln-mlbasis-int16
+Int16.abs	1	True	False	ln-mlbasis-int16
+Int16.div	1	True	False	ln-mlbasis-int16
+Int16.fmt	1	True	False	ln-mlbasis-int16
+Int16.fromLarge	1	True	False	ln-mlbasis-int16
+Int16.fromString	1	True	False	ln-mlbasis-int16
+Int16.mod	1	True	False	ln-mlbasis-int16
+Int16.quot	1	True	False	ln-mlbasis-int16
+Int16.rem	1	True	False	ln-mlbasis-int16
+Int16.scan	1	True	False	ln-mlbasis-int16
+Int16.toLarge	1	True	False	ln-mlbasis-int16
+Int16.toString	1	True	False	ln-mlbasis-int16
+Int16.~	1	True	False	ln-mlbasis-int16
+Int32.*	1	True	False	ln-mlbasis-int32
+Int32.+	1	True	False	ln-mlbasis-int32
+Int32.-	1	True	False	ln-mlbasis-int32
+Int32.abs	1	True	False	ln-mlbasis-int32
+Int32.div	1	True	False	ln-mlbasis-int32
+Int32.fmt	1	True	False	ln-mlbasis-int32
+Int32.fromLarge	1	True	False	ln-mlbasis-int32
+Int32.fromString	1	True	False	ln-mlbasis-int32
+Int32.mod	1	True	False	ln-mlbasis-int32
+Int32.quot	1	True	False	ln-mlbasis-int32
+Int32.rem	1	True	False	ln-mlbasis-int32
+Int32.scan	1	True	False	ln-mlbasis-int32
+Int32.toLarge	1	True	False	ln-mlbasis-int32
+Int32.toString	1	True	False	ln-mlbasis-int32
+Int32.~	1	True	False	ln-mlbasis-int32
+Int64.*	1	True	False	ln-mlbasis-int64
+Int64.+	1	True	False	ln-mlbasis-int64
+Int64.-	1	True	False	ln-mlbasis-int64
+Int64.abs	1	True	False	ln-mlbasis-int64
+Int64.div	1	True	False	ln-mlbasis-int64
+Int64.fmt	1	True	False	ln-mlbasis-int64
+Int64.fromLarge	1	True	False	ln-mlbasis-int64
+Int64.fromString	1	True	False	ln-mlbasis-int64
+Int64.mod	1	True	False	ln-mlbasis-int64
+Int64.quot	1	True	False	ln-mlbasis-int64
+Int64.rem	1	True	False	ln-mlbasis-int64
+Int64.scan	1	True	False	ln-mlbasis-int64
+Int64.toLarge	1	True	False	ln-mlbasis-int64
+Int64.toString	1	True	False	ln-mlbasis-int64
+Int64.~	1	True	False	ln-mlbasis-int64
+Int8.*	1	True	False	ln-mlbasis-int8
+Int8.+	1	True	False	ln-mlbasis-int8
+Int8.-	1	True	False	ln-mlbasis-int8
+Int8.abs	1	True	False	ln-mlbasis-int8
+Int8.div	1	True	False	ln-mlbasis-int8
+Int8.fmt	1	True	False	ln-mlbasis-int8
+Int8.fromLarge	1	True	False	ln-mlbasis-int8
+Int8.fromString	1	True	False	ln-mlbasis-int8
+Int8.mod	1	True	False	ln-mlbasis-int8
+Int8.quot	1	True	False	ln-mlbasis-int8
+Int8.rem	1	True	False	ln-mlbasis-int8
+Int8.scan	1	True	False	ln-mlbasis-int8
+Int8.toLarge	1	True	False	ln-mlbasis-int8
+Int8.toString	1	True	False	ln-mlbasis-int8
+Int8.~	1	True	False	ln-mlbasis-int8
+IntInf.*	2	True	False	bm-smith-nf ln-mlbasis-int-inf-rand
+IntInf.+	2	True	False	bm-smith-nf ln-mlbasis-int-inf-rand
+IntInf.-	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.<	2	True	False	bm-smith-nf ln-mlbasis-seki-bernoulli
+IntInf.<<	2	True	False	ln-mlbasis-int-inf ln-mlbasis-real-intinf
+IntInf.<=	1	True	False	ln-mlbasis-seki-bernoulli
+IntInf.>	1	True	False	ln-mlbasis-seki-bernoulli
+IntInf.>=	1	True	False	ln-mlbasis-seki-bernoulli
+IntInf.abs	3	True	False	bm-smith-nf ln-mlbasis-int-inf-rand ln-mlbasis-seki-bernoulli
+IntInf.andb	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.compare	1	True	False	ln-mlbasis-seki-bernoulli
+IntInf.div	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.divMod	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.fmt	4	True	False	ln-mlbasis-int-inf-factorial-hex ln-mlbasis-int-inf-fib-hex ln-mlbasis-int-inf-fib-monoid ln-mlbasis-int-inf-rand
+IntInf.fromInt	7	True	False	bm-iter-pidigits bm-smith-nf ln-mlbasis-int-inf-factorial ln-mlbasis-int-inf-factorial-hex ln-mlbasis-int-inf-fib-monoid ln-mlbasis-int-inf-wilson ln-mlbasis-seki-bernoulli
+IntInf.fromLarge	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.fromString	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.int	6	True	False	bm-pidigits bm-smith-nf ln-mlbasis-int-inf-fib-monoid ln-mlbasis-int-inf-wilson ln-mlbasis-real-intinf ln-mlbasis-seki-bernoulli
+IntInf.log2	1	True	False	ln-mlbasis-int-inf
+IntInf.mod	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.notb	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.orb	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.quot	3	True	False	bm-iter-pidigits bm-smith-nf ln-mlbasis-int-inf-rand
+IntInf.quotRem	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.rem	2	True	False	ln-mlbasis-int-inf-rand ln-mlbasis-seki-bernoulli
+IntInf.scan	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.toLarge	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.toString	8	True	False	bm-iter-pidigits bm-pidigits bm-smith-nf ln-mlbasis-int-inf ln-mlbasis-int-inf-factorial ln-mlbasis-int-inf-fib ln-mlbasis-int-inf-rand ln-mlbasis-seki-bernoulli
+IntInf.xorb	1	True	False	ln-mlbasis-int-inf-rand
+IntInf.~	3	True	False	bm-smith-nf ln-mlbasis-int-inf-rand ln-mlbasis-seki-bernoulli
+IntInf.~>>	1	True	False	ln-mlbasis-int-inf
+LargeInt.toString	7	True	True	ln-mlbasis-int-inf-rand ln-mlbasis-int16 ln-mlbasis-int32 ln-mlbasis-int54 ln-mlbasis-int64 ln-mlbasis-int8 ln-mlbasis-real-intinf
+List.@	1	True	True	bm-twenty-four
+List.Empty	1	True	True	bm-minimax
+List.all	2	True	True	bm-minimax bm-vliw
+List.app	28	True	True	bm-black-scholes bm-count-graphs bm-delta-blue bm-dlx bm-kcfa bm-mc-ray bm-plclub-ray bm-ratio-regions bm-twenty-four bm-tyan bm-vliw ln-core-capture ln-mlbasis-char ln-mlbasis-int-inf ln-mlbasis-int-inf-rand ln-mlbasis-int16 ln-mlbasis-int32 ln-mlbasis-int54 ln-mlbasis-int64 ln-mlbasis-int8 ln-mlbasis-real ln-mlbasis-real-intinf ln-mlbasis-scan-real ln-mlbasis-scan-word ln-mlbasis-word16 ln-mlbasis-word32 ln-mlbasis-word64 ln-mlbasis-word8
+List.collate	1	True	True	bm-kcfa
+List.concat	5	True	True	bm-black-scholes bm-mazefun bm-mlyacc bm-nucleic bm-vliw
+List.drop	1	True	True	bm-dlx
+List.exists	6	True	True	bm-kcfa bm-mazefun bm-minimax bm-mlyacc bm-ratio-regions ln-core-parser_combinator
+List.filter	2	True	True	bm-delta-blue bm-plclub-ray
+List.find	1	True	True	bm-plclub-ray
+List.foldl	8	True	True	bm-black-scholes bm-delta-blue bm-kcfa bm-mc-ray bm-minimax bm-mlyacc bm-tyan ln-core-parser_combinator
+List.foldr	6	True	True	bm-lexgen bm-mazefun bm-minimax bm-mlyacc bm-tyan bm-vliw
+List.hd	2	True	True	bm-mazefun bm-minimax
+List.last	1	True	True	ln-core-capture
+List.length	4	True	True	bm-dlx bm-mazefun bm-twenty-four bm-vliw
+List.map	18	True	True	bm-black-scholes bm-boyer bm-id-ray bm-kcfa bm-nbody bm-plclub-ray bm-sat bm-twenty-four bm-tyan bm-vliw ln-core-parser_combinator ln-mlbasis-string ln-mlbasis-substring ln-mlbasis-word16-law ln-mlbasis-word32-law ln-mlbasis-word64-law ln-mlbasis-word8-law ln-mlbasis-word_law
+List.nth	4	True	True	bm-dlx bm-minimax bm-plclub-ray bm-smith-nf
+List.null	1	True	True	bm-mazefun
+List.rev	8	True	True	bm-black-scholes bm-delta-blue bm-id-ray bm-kcfa bm-nbody bm-plclub-ray bm-twenty-four ln-core-capture
+List.revAppend	1	True	True	bm-delta-blue
+List.tabulate	6	True	True	bm-black-scholes bm-cml-sieve bm-count-graphs bm-dlx bm-mc-ray bm-minimax
+List.take	1	True	True	bm-dlx
+List.tl	2	True	True	bm-mazefun bm-minimax
+ListPair.allEq	3	True	True	bm-cml-sieve bm-kcfa bm-stream-sieve
+ListPair.foldl	1	True	True	bm-kcfa
+Math.acos	1	True	True	bm-plclub-ray
+Math.asin	1	True	True	bm-plclub-ray
+Math.atan2	1	True	True	bm-nucleic
+Math.cos	4	True	True	bm-aobench bm-nucleic bm-plclub-ray bm-simple
+Math.exp	1	True	True	bm-black-scholes
+Math.ln	2	True	True	bm-black-scholes bm-tsp
+Math.pi	4	True	True	bm-aobench bm-barnes-hut bm-black-scholes bm-nbody
+Math.pow	4	True	True	bm-aobench bm-barnes-hut bm-id-ray bm-plclub-ray
+Math.sin	4	True	True	bm-aobench bm-nucleic bm-plclub-ray bm-simple
+Math.sqrt	10	True	True	bm-aobench bm-barnes-hut bm-black-scholes bm-id-ray bm-nbody bm-nucleic bm-plclub-ray bm-ray bm-simple bm-tsp
+Math.tan	1	True	True	bm-id-ray
+OS.Process.exit	1	True	True	bm-ray
+OS.Process.success	1	True	True	bm-ray
+Option.composePartial	1	True	True	bm-black-scholes
+Option.getOpt	1	True	True	ln-mlbasis-real
+Option.isNone	1	True	False	bm-minimax
+Option.isSome	1	True	True	bm-minimax
+Option.valOf	2	True	True	bm-black-scholes bm-id-ray
+Real.!=	1	True	True	bm-vliw
+Real.==	6	True	True	bm-barnes-hut bm-plclub-ray bm-twenty-four bm-vliw ln-mlbasis-real ln-mlbasis-real-intinf
+Real.abs	4	True	True	bm-aobench bm-black-scholes bm-plclub-ray ln-mlbasis-real
+Real.floor	2	True	True	bm-plclub-ray bm-vliw
+Real.fmt	3	True	False	bm-barnes-hut bm-nbody ln-mlbasis-real-intinf
+Real.fromInt	4	True	True	bm-aobench bm-plclub-ray bm-twenty-four bm-vliw
+Real.fromLargeInt	3	True	True	bm-aobench bm-plclub-ray ln-mlbasis-real-intinf
+Real.fromManExp	1	True	False	ln-mlbasis-real
+Real.fromString	6	True	True	bm-black-scholes bm-id-ray bm-plclub-ray bm-ray bm-vliw ln-mlbasis-scan-real
+Real.isNan	2	True	True	ln-mlbasis-real ln-mlbasis-real-intinf
+Real.max	3	True	True	bm-barnes-hut bm-plclub-ray ln-mlbasis-real
+Real.maxFinite	2	True	False	ln-mlbasis-real ln-mlbasis-real-intinf
+Real.min	2	True	True	bm-barnes-hut ln-mlbasis-real
+Real.minNormalPos	2	True	False	ln-mlbasis-real ln-mlbasis-real-intinf
+Real.minPos	2	True	False	ln-mlbasis-real ln-mlbasis-real-intinf
+Real.negInf	2	True	True	ln-mlbasis-real ln-mlbasis-real-intinf
+Real.posInf	3	True	True	bm-plclub-ray ln-mlbasis-real ln-mlbasis-real-intinf
+Real.realCeil	1	True	False	ln-mlbasis-real
+Real.realFloor	2	True	False	bm-barnes-hut ln-mlbasis-real
+Real.realMod	2	True	False	bm-plclub-ray ln-mlbasis-real
+Real.realRound	1	True	False	ln-mlbasis-real
+Real.realTrunc	1	True	False	ln-mlbasis-real
+Real.rem	1	True	False	ln-mlbasis-real
+Real.round	1	True	True	bm-id-ray
+Real.scan	1	True	True	bm-barnes-hut
+Real.signBit	2	True	True	ln-mlbasis-real ln-mlbasis-real-intinf
+Real.split	1	True	False	ln-mlbasis-real
+Real.toLargeInt	1	True	True	ln-mlbasis-real-intinf
+Real.toManExp	1	True	False	ln-mlbasis-real
+Real.toString	9	True	True	bm-barnes-hut bm-black-scholes bm-f-arith bm-ray bm-simple bm-tsp bm-vliw ln-mlbasis-real ln-mlbasis-scan-real
+Real.trunc	2	True	True	bm-aobench bm-simple
+Real64.Math.cos	1	True	False	bm-mc-ray
+Real64.Math.pi	1	True	False	bm-mc-ray
+Real64.Math.sin	1	True	False	bm-mc-ray
+Real64.Math.sqrt	1	True	False	bm-mc-ray
+Real64.Math.tan	1	True	False	bm-mc-ray
+Real64.floor	1	True	False	bm-mc-ray
+Real64.fromInt	1	True	False	bm-mc-ray
+Real64.fromLargeInt	2	True	False	bm-mc-ray bm-tsp
+Real64.negInf	1	True	False	bm-mc-ray
+Real64.posInf	1	True	False	bm-mc-ray
+Real64.real	3	True	False	bm-barnes-hut bm-mc-ray bm-tsp
+Real64.toString	1	True	False	bm-mc-ray
+SMLofNJ.Cont.callcc	2	True	False	bm-cml-sieve bm-pingpong
+SMLofNJ.Cont.cont	2	True	False	bm-cml-sieve bm-pingpong
+SMLofNJ.Cont.throw	2	True	False	bm-cml-sieve bm-pingpong
+String.<=	1	True	True	bm-lexgen
+String.^	1	True	True	ln-mlbasis-string
+String.char	1	True	False	ln-mlbasis-string
+String.compare	1	True	True	bm-kcfa
+String.concat	7	True	True	bm-barnes-hut bm-mc-ray bm-mlyacc bm-smith-nf bm-tyan bm-vliw ln-mlbasis-string
+String.concatWith	3	True	True	ln-mlbasis-string ln-mlbasis-string_fields ln-mlbasis-substring
+String.concatWithMap	3	True	False	bm-boyer bm-kcfa bm-sat
+String.explode	2	True	True	bm-tyan ln-mlbasis-string
+String.extract	1	True	True	bm-plclub-ray
+String.fields	1	True	True	ln-mlbasis-string_fields
+String.implode	2	True	True	bm-tyan ln-mlbasis-string
+String.isSubstring	1	True	True	ln-mlbasis-string-issubstring
+String.map	1	True	True	ln-mlbasis-string
+String.size	7	True	True	bm-mlyacc bm-plclub-ray bm-ratio-regions bm-smith-nf bm-vliw ln-core-parser_combinator ln-mlbasis-string
+String.str	3	True	True	bm-lexgen ln-mlbasis-string ln-mlbasis-substring
+String.string	1	True	False	ln-mlbasis-string
+String.sub	7	True	True	bm-lexgen bm-plclub-ray bm-ratio-regions bm-ray bm-vliw ln-core-parser_combinator ln-mlbasis-string
+String.substring	1	True	True	bm-plclub-ray
+String.toString	3	True	True	ln-mlbasis-char ln-mlbasis-scan-real ln-mlbasis-scan-word
+String.tokens	2	True	True	bm-black-scholes bm-id-ray
+String.translate	1	True	True	ln-mlbasis-string
+StringCvt.BIN	7	True	True	ln-mlbasis-int-inf-rand ln-mlbasis-int16 ln-mlbasis-int32 ln-mlbasis-int54 ln-mlbasis-int64 ln-mlbasis-int8 ln-mlbasis-scan-word
+StringCvt.DEC	13	True	True	bm-barnes-hut ln-mlbasis-int-inf ln-mlbasis-int-inf-rand ln-mlbasis-int16 ln-mlbasis-int32 ln-mlbasis-int54 ln-mlbasis-int64 ln-mlbasis-int8 ln-mlbasis-scan-word ln-mlbasis-word16 ln-mlbasis-word32 ln-mlbasis-word64 ln-mlbasis-word8
+StringCvt.FIX	2	True	True	bm-barnes-hut bm-nbody
+StringCvt.GEN	1	True	True	ln-mlbasis-real-intinf
+StringCvt.HEX	14	True	True	ln-mlbasis-int-inf-factorial-hex ln-mlbasis-int-inf-fib-hex ln-mlbasis-int-inf-fib-monoid ln-mlbasis-int-inf-rand ln-mlbasis-int16 ln-mlbasis-int32 ln-mlbasis-int54 ln-mlbasis-int64 ln-mlbasis-int8 ln-mlbasis-scan-word ln-mlbasis-word16 ln-mlbasis-word32 ln-mlbasis-word64 ln-mlbasis-word8
+StringCvt.OCT	11	True	True	ln-mlbasis-int-inf-rand ln-mlbasis-int16 ln-mlbasis-int32 ln-mlbasis-int54 ln-mlbasis-int64 ln-mlbasis-int8 ln-mlbasis-scan-word ln-mlbasis-word16 ln-mlbasis-word32 ln-mlbasis-word64 ln-mlbasis-word8
+StringCvt.SCI	1	True	True	bm-barnes-hut
+StringCvt.padLeft	3	True	True	bm-barnes-hut bm-iter-pidigits bm-lexgen
+StringCvt.scanString	7	True	True	ln-mlbasis-int-inf-rand ln-mlbasis-int16 ln-mlbasis-int32 ln-mlbasis-int54 ln-mlbasis-int64 ln-mlbasis-int8 ln-mlbasis-scan-word
+Substring.explode	1	True	True	ln-mlbasis-substring
+Substring.fields	1	True	True	ln-mlbasis-substring
+Substring.full	2	True	True	ln-core-parser_combinator ln-mlbasis-substring
+Substring.getc	1	True	True	ln-core-parser_combinator
+Substring.splitl	1	True	True	ln-mlbasis-substring
+Substring.splitr	1	True	True	ln-mlbasis-substring
+Substring.string	1	True	True	ln-mlbasis-substring
+Substring.substring	2	True	True	ln-core-parser_combinator ln-mlbasis-substring
+Substring.tokens	1	True	True	ln-mlbasis-substring
+Substring.translate	1	True	True	ln-mlbasis-substring
+Substring.triml	1	True	True	ln-mlbasis-substring
+Substring.trimr	1	True	True	ln-mlbasis-substring
+TextIO.closeIn	5	True	True	bm-barnes-hut bm-black-scholes bm-lexgen bm-ray bm-vliw
+TextIO.closeOut	4	True	True	bm-barnes-hut bm-lexgen bm-mlyacc bm-vliw
+TextIO.flushOut	41	True	True	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+TextIO.input1	1	True	True	bm-ray
+TextIO.inputLine	5	True	True	bm-barnes-hut bm-black-scholes bm-dlx bm-id-ray bm-vliw
+TextIO.inputN	2	True	True	bm-lexgen bm-plclub-ray
+TextIO.instream	5	True	False	bm-lexgen bm-mlyacc bm-plclub-ray bm-ray bm-vliw
+TextIO.lookahead	1	True	False	bm-ray
+TextIO.openIn	8	True	True	bm-barnes-hut bm-black-scholes bm-dlx bm-id-ray bm-lexgen bm-plclub-ray bm-ray bm-vliw
+TextIO.openOut	4	True	True	bm-barnes-hut bm-lexgen bm-mlyacc bm-vliw
+TextIO.output	41	True	True	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+TextIO.outstream	41	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+TextIO.print	1	True	True	bm-dlx
+TextIO.stdErr	41	True	True	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw
+TextIO.stdIn	2	True	True	bm-dlx bm-lexgen
+TextIO.stdOut	3	True	True	bm-barnes-hut bm-lexgen bm-ray
+Time.compare	1	True	False	bm-kcfa
+Time.same	1	True	False	bm-kcfa
+Time.t	1	True	False	bm-kcfa
+Time.zero	1	True	False	bm-kcfa
+Unsafe.Array.sub	1	True	False	bm-plclub-ray
+Unsafe.Array.update	1	True	False	bm-plclub-ray
+Unsafe.Real64.castFromWord	1	True	False	bm-aobench
+Vector.app	1	True	True	ln-mlbasis-vector
+Vector.concat	1	True	True	ln-mlbasis-vector
+Vector.fromList	3	True	True	bm-plclub-ray ln-core-equality ln-mlbasis-vector
+Vector.length	2	True	True	bm-count-graphs ln-mlbasis-seki-bernoulli
+Vector.sub	4	True	True	bm-count-graphs bm-plclub-ray bm-smith-nf ln-mlbasis-seki-bernoulli
+Vector.tabulate	3	True	True	bm-count-graphs bm-smith-nf ln-mlbasis-seki-bernoulli
+WideChar.toString	1	True	False	ln-mlbasis-widestring-sub
+WideString.isSubstring	1	True	False	ln-mlbasis-widestring-issubstring
+WideString.sub	1	True	False	ln-mlbasis-widestring-sub
+Word.<	1	True	True	ln-mlbasis-word_law
+Word.<<	5	True	True	bm-barnes-hut bm-binary-trees bm-tyan bm-vliw ln-mlbasis-word_shift
+Word.<=	1	True	True	ln-mlbasis-word_law
+Word.>	1	True	True	ln-mlbasis-word_law
+Word.>=	1	True	True	ln-mlbasis-word_law
+Word.>>	5	True	True	bm-mc-ray bm-tsp bm-tyan bm-vliw ln-mlbasis-word_shift
+Word.andb	6	True	True	bm-barnes-hut bm-fannkuch bm-mc-ray bm-tsp bm-tyan bm-vliw
+Word.div	1	True	True	ln-mlbasis-word_law
+Word.fmt	1	True	True	ln-mlbasis-int-inf
+Word.fromInt	9	True	True	bm-barnes-hut bm-binary-trees bm-dlx bm-fannkuch bm-mandelbrot-rat bm-mc-ray bm-plclub-ray bm-tyan bm-vliw
+Word.fromLarge	3	True	True	bm-aobench bm-dlx ln-mlbasis-word_law
+Word.mod	3	True	True	bm-dlx bm-mc-ray ln-mlbasis-word_law
+Word.orb	1	True	True	bm-vliw
+Word.toInt	4	True	True	bm-barnes-hut bm-dlx bm-plclub-ray bm-tyan
+Word.toIntX	4	True	True	bm-binary-trees bm-mandelbrot-rat bm-mc-ray bm-vliw
+Word.toLarge	1	True	True	bm-aobench
+Word.toLargeIntX	2	True	True	bm-mc-ray bm-tsp
+Word.toString	3	True	True	ln-core-xorshift64 ln-mlbasis-word_law ln-mlbasis-word_shift
+Word.word	2	True	False	bm-mc-ray bm-tsp
+Word.wordSize	1	True	True	ln-core-xorshift64
+Word.xorb	1	True	True	bm-vliw
+Word.~	1	True	True	ln-mlbasis-word
+Word.~>>	3	True	True	bm-barnes-hut bm-mandelbrot-rat ln-mlbasis-word_shift
+Word16.*	1	True	False	ln-mlbasis-word16
+Word16.+	1	True	False	ln-mlbasis-word16
+Word16.-	1	True	False	ln-mlbasis-word16
+Word16.<	1	True	False	ln-mlbasis-word16-law
+Word16.<<	1	True	False	ln-mlbasis-word16
+Word16.<=	1	True	False	ln-mlbasis-word16-law
+Word16.>	1	True	False	ln-mlbasis-word16-law
+Word16.>=	1	True	False	ln-mlbasis-word16-law
+Word16.>>	1	True	False	ln-mlbasis-word16
+Word16.andb	1	True	False	ln-mlbasis-word16
+Word16.div	2	True	False	ln-mlbasis-word16 ln-mlbasis-word16-law
+Word16.fmt	1	True	False	ln-mlbasis-word16
+Word16.fromLarge	1	True	False	ln-mlbasis-word16-law
+Word16.mod	2	True	False	ln-mlbasis-word16 ln-mlbasis-word16-law
+Word16.notb	1	True	False	ln-mlbasis-word16
+Word16.orb	1	True	False	ln-mlbasis-word16
+Word16.toString	2	True	False	ln-mlbasis-word16 ln-mlbasis-word16-law
+Word16.word	1	True	False	ln-mlbasis-word16-law
+Word16.xorb	1	True	False	ln-mlbasis-word16
+Word16.~	1	True	False	ln-mlbasis-word16
+Word16.~>>	1	True	False	ln-mlbasis-word16
+Word32.*	1	True	False	ln-mlbasis-word32
+Word32.+	2	True	False	bm-dlx ln-mlbasis-word32
+Word32.-	2	True	False	bm-dlx ln-mlbasis-word32
+Word32.<	1	True	False	ln-mlbasis-word32-law
+Word32.<<	2	True	False	bm-dlx ln-mlbasis-word32
+Word32.<=	1	True	False	ln-mlbasis-word32-law
+Word32.>	1	True	False	ln-mlbasis-word32-law
+Word32.>=	1	True	False	ln-mlbasis-word32-law
+Word32.>>	2	True	False	bm-dlx ln-mlbasis-word32
+Word32.andb	2	True	False	bm-dlx ln-mlbasis-word32
+Word32.div	2	True	False	ln-mlbasis-word32 ln-mlbasis-word32-law
+Word32.fmt	1	True	False	ln-mlbasis-word32
+Word32.fromInt	1	True	False	bm-dlx
+Word32.fromLarge	1	True	False	ln-mlbasis-word32-law
+Word32.fromString	1	True	False	bm-dlx
+Word32.mod	2	True	False	ln-mlbasis-word32 ln-mlbasis-word32-law
+Word32.notb	2	True	False	bm-dlx ln-mlbasis-word32
+Word32.orb	2	True	False	bm-dlx ln-mlbasis-word32
+Word32.toInt	1	True	False	bm-dlx
+Word32.toIntX	1	True	False	bm-dlx
+Word32.toLarge	1	True	False	bm-dlx
+Word32.toString	2	True	False	ln-mlbasis-word32 ln-mlbasis-word32-law
+Word32.word	2	True	False	bm-dlx ln-mlbasis-word32-law
+Word32.xorb	2	True	False	bm-dlx ln-mlbasis-word32
+Word32.~	1	True	False	ln-mlbasis-word32
+Word32.~>>	2	True	False	bm-dlx ln-mlbasis-word32
+Word64.*	1	True	False	ln-mlbasis-word64
+Word64.+	1	True	False	ln-mlbasis-word64
+Word64.-	1	True	False	ln-mlbasis-word64
+Word64.<	1	True	False	ln-mlbasis-word64-law
+Word64.<<	2	True	False	bm-aobench ln-mlbasis-word64
+Word64.<=	1	True	False	ln-mlbasis-word64-law
+Word64.>	1	True	False	ln-mlbasis-word64-law
+Word64.>=	1	True	False	ln-mlbasis-word64-law
+Word64.>>	3	True	False	bm-aobench bm-plclub-ray ln-mlbasis-word64
+Word64.andb	3	True	False	bm-aobench bm-plclub-ray ln-mlbasis-word64
+Word64.div	2	True	False	ln-mlbasis-word64 ln-mlbasis-word64-law
+Word64.fmt	1	True	False	ln-mlbasis-word64
+Word64.fromLarge	1	True	False	ln-mlbasis-word64-law
+Word64.mod	2	True	False	ln-mlbasis-word64 ln-mlbasis-word64-law
+Word64.notb	1	True	False	ln-mlbasis-word64
+Word64.orb	1	True	False	ln-mlbasis-word64
+Word64.toInt	2	True	False	bm-aobench bm-plclub-ray
+Word64.toLarge	5	True	False	ln-mlbasis-word16-law ln-mlbasis-word32-law ln-mlbasis-word64-law ln-mlbasis-word8-law ln-mlbasis-word_law
+Word64.toLargeInt	2	True	False	bm-aobench bm-plclub-ray
+Word64.toString	3	True	False	ln-mlbasis-word64 ln-mlbasis-word64-law ln-mlbasis-xorshift64-word64
+Word64.word	8	True	False	bm-aobench bm-plclub-ray ln-mlbasis-word16-law ln-mlbasis-word32-law ln-mlbasis-word64-law ln-mlbasis-word8-law ln-mlbasis-word_law ln-mlbasis-xorshift64-word64
+Word64.wordSize	1	True	False	ln-mlbasis-xorshift64-word64
+Word64.xorb	1	True	False	ln-mlbasis-word64
+Word64.~	1	True	False	ln-mlbasis-word64
+Word64.~>>	1	True	False	ln-mlbasis-word64
+Word8.*	1	True	True	ln-mlbasis-word8
+Word8.+	1	True	True	ln-mlbasis-word8
+Word8.-	1	True	True	ln-mlbasis-word8
+Word8.<	1	True	True	ln-mlbasis-word8-law
+Word8.<<	1	True	True	ln-mlbasis-word8
+Word8.<=	1	True	True	ln-mlbasis-word8-law
+Word8.>	1	True	True	ln-mlbasis-word8-law
+Word8.>=	1	True	True	ln-mlbasis-word8-law
+Word8.>>	1	True	True	ln-mlbasis-word8
+Word8.andb	1	True	True	ln-mlbasis-word8
+Word8.div	2	True	True	ln-mlbasis-word8 ln-mlbasis-word8-law
+Word8.fmt	1	True	True	ln-mlbasis-word8
+Word8.fromInt	5	True	True	bm-aobench bm-id-ray bm-mc-ray bm-plclub-ray bm-ray
+Word8.fromLarge	1	True	True	ln-mlbasis-word8-law
+Word8.mod	2	True	True	ln-mlbasis-word8 ln-mlbasis-word8-law
+Word8.notb	1	True	True	ln-mlbasis-word8
+Word8.orb	1	True	True	ln-mlbasis-word8
+Word8.toString	2	True	True	ln-mlbasis-word8 ln-mlbasis-word8-law
+Word8.word	42	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw ln-mlbasis-word8-law
+Word8.xorb	1	True	True	ln-mlbasis-word8
+Word8.~	1	True	True	ln-mlbasis-word8
+Word8.~>>	1	True	True	ln-mlbasis-word8
+Word8Array.app	2	True	True	bm-aobench bm-id-ray
+Word8Array.array	1	True	True	bm-id-ray
+Word8Array.update	1	True	True	bm-id-ray
+Word8ArraySlice.slice	1	True	True	bm-plclub-ray
+Word8Vector.tabulate	1	True	True	bm-smith-nf
+Word8Vector.vector	41	True	False	bm-aobench bm-barnes-hut bm-binary-trees bm-black-scholes bm-boyer bm-cml-sieve bm-count-graphs bm-delta-blue bm-dlx bm-f-arith bm-fannkuch bm-fft bm-id-ray bm-iter-pidigits bm-kcfa bm-knuth-bendix bm-lexgen bm-life bm-logic bm-mandelbrot bm-mandelbrot-rat bm-mazefun bm-mc-ray bm-minimax bm-mlyacc bm-nbody bm-nucleic bm-pidigits bm-pingpong bm-plclub-ray bm-ratio-regions bm-ray bm-safe-for-space bm-sat bm-simple bm-smith-nf bm-stream-sieve bm-tsp bm-twenty-four bm-tyan bm-vliw

@@ -1,0 +1,29 @@
+RUNTIME
+SIMPLE-ERROR: All clauses in a fun binding must name the same function: (("::"
+                                                                          ((:PAT-CTOR
+                                                                            "A")
+                                                                           (:PAT-CTOR
+                                                                            "C")
+                                                                           (:PAT-APP
+                                                                            (:PAT-CTOR
+                                                                             "D")
+                                                                            (:PAT-CTOR
+                                                                             "E")))
+                                                                          (:APP
+                                                                           (:APP
+                                                                            (:VAR
+                                                                             "^")
+                                                                            (:CTOR
+                                                                             "A"))
+                                                                           (:CTOR
+                                                                            "E")))
+                                                                         ("nil"
+                                                                          ((:PAT-CTOR
+                                                                            "D")
+                                                                           (:PAT-CTOR
+                                                                            "E"))
+                                                                          (:CTOR
+                                                                           "E")))
+
+cl-sml frames (innermost first):
+  CL-SML::BUILD-FUN-BINDING-AST

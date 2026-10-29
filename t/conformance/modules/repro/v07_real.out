@@ -1,0 +1,19 @@
+3.14159265359
+0.333333333333
+2 ~3 3 ~2
+3 3 ~3 ~2
+1 2 2 1
+10 3.25
+==
+!=
+nan
+nan<>nan
+infinite
+inf ~inf
+LESS
+2.5 1.5 3.5
+3.25
+NONE
+floor nan Domain
+round inf Overflow
+5.5 3.5
