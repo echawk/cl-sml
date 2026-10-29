@@ -824,12 +824,23 @@ looser than ::, while the standard arithmetic/list operators do not."
     (declare (ignore functor-kw w1 w2 eq w3 struct-kw w4 w5 end-kw w6 semi))
     `(:functor ,name ,decs :param ,(sml-functor-param-name ascription))))
 
-(defrule sml-decs (* (and ws (or sml-signature sml-functor sml-structure-functor-app
-                                 sml-structure-alias sml-structure sml-open
-                                 sml-local sml-infix-decl sml-type-decl
-                                 sml-datatype-replication sml-datatype
-                                 sml-exception-alias sml-exception sml-val-rec
-                                 sml-val sml-fun sml-top-expr) ws))
+(defvar *sml-declaration-positions* nil
+  "When non-NIL, an EQ hash table from declaration AST nodes to the offset
+where the declaration starts, filled in by the parser.  Used to report where
+the Common Lisp generated for a binding came from.")
+
+(defrule sml-dec (or sml-signature sml-functor sml-structure-functor-app
+                     sml-structure-alias sml-structure sml-open
+                     sml-local sml-infix-decl sml-type-decl
+                     sml-datatype-replication sml-datatype
+                     sml-exception-alias sml-exception sml-val-rec
+                     sml-val sml-fun sml-top-expr)
+  (:lambda (dec &bounds start)
+    (when (and *sml-declaration-positions* (consp dec))
+      (setf (gethash dec *sml-declaration-positions*) start))
+    dec))
+
+(defrule sml-decs (* (and ws sml-dec ws))
   (:destructure (&rest items)
     (mapcar #'second items)))
 

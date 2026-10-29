@@ -1895,11 +1895,22 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
     (otherwise
      nil)))
 
+(defvar *sml-declaration-compiled-hook* nil
+  "When non-NIL, a function called with each declaration-level AST node and
+the CL form compiled for it, while the declaration's compile-time
+environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
+
+(defun note-compiled-sml-declaration (dec form)
+  (when *sml-declaration-compiled-hook*
+    (funcall *sml-declaration-compiled-hook* dec form))
+  form)
+
 (defun compile-program-decls (decs &optional (local-exceptions nil) lexical-env)
   (if (null decs)
       nil
       (let* ((dec (first decs))
-             (form (compile-decl dec local-exceptions lexical-env))
+             (form (note-compiled-sml-declaration
+                    dec (compile-decl dec local-exceptions lexical-env)))
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
              (module-bindings (declaration-local-module-member-bindings dec))
              (symbol-bindings (declaration-binding-symbol-bindings dec))
