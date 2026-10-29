@@ -1258,7 +1258,8 @@ looser than ::, while the standard arithmetic/list operators do not."
           `(:vals ,@bindings)
           first))))
 
-(defrule sml-val-rec (and "val" ws "rec" ws sml-id ws "=" ws sml-expr ws (? ";"))
+;; WS1 after `rec': `val recorded = 1' binds `recorded'.
+(defrule sml-val-rec (and "val" ws "rec" ws1 sml-id ws "=" ws sml-expr ws (? ";"))
   (:destructure (v w1 rec w2 name w3 eq w4 expr w5 semi)
     (declare (ignore v w1 rec w2 w3 eq w4 w5 semi))
     `(:val-rec ,name ,expr)))
