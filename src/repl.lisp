@@ -258,6 +258,10 @@ accepts SOURCE (which then points at a gap in our parser)."
                                      (:program (eval-repl-program ast))
                                      (:expr (eval-repl-expression ast))))
                        (format output "~A~%" line)))
+                 (sml-raised-exception (condition)
+                   (format error-output "uncaught exception ~A~%"
+                           (sml-exception-description
+                            (sml-exception-value condition))))
                  (error (condition)
                    (format error-output "Error: ~A~%" condition)))
                (reset-buffer))

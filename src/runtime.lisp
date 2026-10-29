@@ -724,6 +724,13 @@ constructor names are unique within a datatype."
   (and (consp value)
        (eq (car value) :record)))
 
+(defun sml-record-or-tuple-p (value)
+  "Can VALUE be the value of a record type?  Tuples (and the unit) are the
+records whose labels are 1, ..., n."
+  (and (consp value)
+       (or (eq (car value) :record)
+           (eq (car value) :tuple))))
+
 (defun sml-record-fields (record)
   (if (sml-record-p record)
       (cdr record)
@@ -749,10 +756,25 @@ constructor names are unique within a datatype."
      (error "Expected SML record or tuple, got ~S" record))))
 
 (define-condition sml-raised-exception (error)
-  ((value :initarg :value :reader sml-exception-value))
+  ((value :initarg :value :reader sml-exception-value)
+   ;; For Match and Bind raised by a failed match: the function (or "fn",
+   ;; "case", "val") and source offset of the match, for diagnostics.
+   (context :initarg :context :initform nil :reader sml-exception-context))
   (:report (lambda (condition stream)
-             (format stream "Unhandled SML exception: ~A"
-                     (sml-exception-value condition)))))
+             (format stream "uncaught exception ~A~@[ (~{no match in ~A~@[ at offset ~D~]~})~]"
+                     (sml-exception-description (sml-exception-value condition))
+                     (sml-exception-context condition)))))
+
+(defun sml-exception-description (value)
+  "How the REPL shows exception VALUE, e.g. `Match` or `Fail \"msg\"`."
+  (cond
+    ((sml-exception-tag-p value) (sml-exception-name value))
+    ((sml-exception-p value)
+     (format nil "~A ~A"
+             (sml-exception-name value)
+             ;; Defined with the REPL's printer.
+             (funcall 'sml-value->string (sml-exception-payload value))))
+    (t (princ-to-string value))))
 
 (defun sml-raise (value)
   (error 'sml-raised-exception :value value))
@@ -950,12 +972,31 @@ NIL if TYNAME is not a word type."
 (defun sml-str (char)
   (string char))
 
+(defvar *sml-initial-exceptions* (make-hash-table :test #'equal)
+  "The exceptions of the initial basis by name.  There is one of each, shared
+by every SML package.")
+
+(defun sml-initial-exception (name)
+  "The initial basis' exception NAME (`Match`, `Div`, `Fail`, ...)."
+  (or (gethash name *sml-initial-exceptions*)
+      (setf (gethash name *sml-initial-exceptions*)
+            (if (string= name "Fail")
+                (make-sml-exception-function name)
+                (make-sml-exception-constructor name)))))
+
 (defun sml-raise-named-exception (name)
-  (let ((symbol (sml-symbol name *sml-package*)))
-    (sml-raise
-     (if (boundp symbol)
-         (symbol-value symbol)
-         (make-sml-exception-constructor name)))))
+  "Raise the initial basis' exception NAME.  A program that binds the name to
+another exception does not change what the primitives raise."
+  (sml-raise (sml-initial-exception name)))
+
+(declaim (ftype (function (t &optional t t) nil) sml-raise-match-failure))
+(defun sml-raise-match-failure (exception-name &optional where position)
+  "Raise `Match` or `Bind` (EXCEPTION-NAME) because no rule of a match
+applied.  WHERE names the function, or is \"fn\", \"case\" or \"val\";
+POSITION is the source offset of the match, when known."
+  (error 'sml-raised-exception
+         :value (sml-initial-exception exception-name)
+         :context (and where (list where position))))
 
 (defun sml-sequence-sub (sequence index)
   (if (and (integerp index)
@@ -1476,9 +1517,7 @@ NIL if TYNAME is not a word type."
                     "Overflow" "Size" "Subscript" "Fail"))
       (let ((symbol (sml-symbol-in-package-name name package)))
         (unless (boundp symbol)
-          (if (string= name "Fail")
-              (setf (symbol-value symbol) (make-sml-exception-function name))
-              (setf (symbol-value symbol) (make-sml-exception-constructor name)))
+          (setf (symbol-value symbol) (sml-initial-exception name))
           (register-sml-binding-type symbol
                                      (if (string= name "Fail")
                                          '(:fn "string" "exn")
