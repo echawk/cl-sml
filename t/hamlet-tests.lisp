@@ -221,3 +221,30 @@
   (compile-checked "val stillInA = sessionOnlyInA + 1;" "SML.HAMLET-SESSION-A")
   (is (search "val stillInA : int"
               (hamlet-type-checker-last-description *checker*))))
+
+(test repl-generates-code-with-hamlet-facts
+  ;; REPL phrases are compiled like files: with what HaMLet learned, so
+  ;; overloaded operators are specialized and word arithmetic is modular.
+  (let* ((output (make-string-output-stream))
+         (result (with-sml-type-checker (*checker*)
+                   (repl :input (make-string-input-stream
+                                 (format nil "val replWordWrap = 0w0 - 0w1;~%(0w5 : Word8.word) * 0w100;~%:quit~%"))
+                         :output output
+                         :error-output (make-broadcast-stream)
+                         :prompt nil
+                         :package "SML.HAMLET-REPL-FACTS-TEST")))
+         (printed (get-output-stream-string output)))
+    (is (eq :quit result))
+    (is (search (format nil "val replWordWrap = ~D : word"
+                        (1- (expt 2 cl-sml::+sml-word-size+)))
+                printed))
+    (is (search "val it = 244 : word8" printed))))
+
+(test sml->lisp-uses-hamlet-without-extending-its-session
+  (let ((package "SML.HAMLET-EXPAND-TEST"))
+    (is (search "LDB"
+                (write-to-string
+                 (sml->lisp "fun expandByte (x : Word8.word) = x + 0w1"
+                            :package package :type-checker *checker*))))
+    (signals sml-static-type-error
+      (compile-checked "val afterExpand = expandByte;" package))))
