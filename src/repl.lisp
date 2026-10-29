@@ -178,6 +178,20 @@ the indented continuation lines of long types."
                      (if (getf (cddr decl) :arg-type)
                          (format nil " of ~A" (getf (cddr decl) :arg-type))
                          "")))))
+    ((:vals :funs)
+     (mapcan #'repl-report-decl (cdr decl)))
+    (:local
+     (mapcan #'repl-report-decl (third decl)))
+    ((:structure :structure-app :structure-alias)
+     (list (format nil "structure ~A" (second decl))))
+    ((:functor :signature :type)
+     (list (format nil "~(~A~) ~A" (car decl) (second decl))))
+    (:datatype-replication
+     (list (format nil "datatype ~A" (second decl))))
+    (:exception-alias
+     (list (format nil "exception ~A" (second decl))))
+    ((:open :infix)
+     nil)
     (otherwise
      (list (format nil "~S" decl)))))
 

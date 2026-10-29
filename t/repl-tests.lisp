@@ -127,6 +127,20 @@
     (is (search "- " output))
     (is (string= "" error-output))))
 
+(test repl-reports-module-and-compound-declarations
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil "structure ReplS = struct val v = 1 end;~%fun replEven 0 = true | replEven n = replOdd (n - 1)~%and replOdd 0 = false | replOdd n = replEven (n - 1);~%local val hidden = 2 in val replShown = hidden end;~%:quit~%")
+       "SML.REPL-REPORT-TEST")
+    (is (eq :quit result))
+    (is (search "structure ReplS" output))
+    (is (not (search ":STRUCTURE" output)))
+    (is (search "val replEven = <fn>" output))
+    (is (search "val replOdd = <fn>" output))
+    (is (search "val replShown = 2" output))
+    (is (not (search "hidden" output)))
+    (is (string= "" error-output))))
+
 ;;; REPL commands
 
 (test repl-lisp-command-shows-generated-code-with-location
