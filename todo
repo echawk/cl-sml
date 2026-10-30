@@ -10,23 +10,21 @@
     and `sml-primitive-stub`s remain for rarely used primitives.
   - [ ] Load and run representative programs from `HOL/`.  `./test-hol`
     loads 56 portableML/prekernel/0 sources checked by HaMLet
-    (`t/hol-checked.lisp`).  Next blockers: parser gaps below, `abstype`,
-    `fun 'a f`, comments containing `end` inside `sig ... end`,
-    constructor argument types spanning lines (locn.sml, Redblackmap.sml),
-    Portable.sml (IntInf, OS.FileSys, Timer missing from HaMLet's basis),
-    and HaMLet under cl-sml failing on non-ASCII source (Subscript).
+    (`t/hol-checked.lisp`).  Next blockers: Portable.sml (IntInf,
+    OS.FileSys, Timer missing from HaMLet's basis), and HaMLet under cl-sml
+    failing on non-ASCII source (Subscript: source is read as UTF-8, so
+    characters above 255 reach HaMLet's 8-bit lexer tables).
 - [ ] Replace shallow module handling with explicit module/signature
   elaboration; retain CL packages as the external namespace substrate.
   With the HaMLet checker, structure members and constructor/variable
-  status come from its elaboration (see below); without it, stopgaps
-  remain: signature text restricts ascribed structures
-  (`restrict-sealed-structure-members`) and patterns guess constructors
-  from capitalization and a global registry.
-- [ ] Parser: declarations whose type text runs to end of line swallow the
-  rest of a one-line structure (`struct type t = int fun f x = x end`).
-- [ ] Make the expression/pattern parser fixity-aware (`infix`/`infixr`
-  declarations); today precedence is a fixed grammar plus special cases
-  (`before`, `::` vs user infix constructors in patterns).
+  status come from its elaboration (see below); without it, the parser
+  tracks identifier status and fixity per package (`src/parser.lisp`),
+  ascribed structures export what their signature's specifications
+  name, and only names behind an `open` of an unknown structure fall back
+  to guessing constructors from capitalization.
+- [x] SML97 front end: a lexer (`src/lexer.lisp`) and a recursive-descent
+  parser with scoped fixity, types, signatures and structure expressions
+  as ASTs (`src/parser.lisp`).  Infix applications are pair applications.
 - [ ] Distinguish word from int without a checker (with HaMLet, overloaded
   operators are specialized and word arithmetic is modular; without it `~`
   on words is special-cased only for literals).

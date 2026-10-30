@@ -65,8 +65,7 @@ package when PACKAGE is NIL."
   ;; Offsets at which the lines of the parsed text start.
   line-starts
   ;; Source line of each line of the parsed text, when the parsed text was
-  ;; rewritten (see NORMALIZE-SML-TYPE-DECLARATION-CONTINUATIONS); otherwise
-  ;; the parsed text's first line is FIRST-LINE.
+  ;; rewritten; otherwise the parsed text's first line is FIRST-LINE.
   line-map
   (first-line 1))
 
@@ -137,7 +136,7 @@ it compiles in RECORDING.  A NIL RECORDING records nothing."
   (case (car dec)
     ((:fun :funs) "fun")
     ((:val :vals) "val")
-    (:val-rec "val rec")
+    ((:val-rec :val-recs) "val rec")
     ((:datatype :datatype-replication) "datatype")
     ((:exception :exception-alias) "exception")
     ((:structure :structure-app :structure-alias) "structure")
@@ -177,7 +176,7 @@ members of structures are recorded by their own declarations."
      (cons (cons :type (second dec))
            (mapcar (lambda (name) (cons :value name))
                    (declaration-direct-bound-names dec))))
-    ((:fun :funs :val :vals :val-rec :exception :exception-alias)
+    ((:fun :funs :val :vals :val-rec :val-recs :exception :exception-alias)
      (mapcar (lambda (name) (cons :value name))
              (declaration-direct-bound-names dec)))
     (otherwise nil)))
@@ -398,16 +397,16 @@ SML-LISP-SOURCE), with comments saying where each definition came from."
   "If TEXT is a single SML expression (optionally ending with `;'), the
 expression's text, else NIL."
   (let* ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) text))
-         (program (handler-case (esrap:parse 'sml-program trimmed)
-                    (error () nil))))
+         (program (handler-case (parse-sml-program trimmed)
+                    (sml-syntax-error () nil))))
     (cond
       (program
        (and (= (length program) 2)
             (consp (second program))
             (eq (car (second program)) :expr)
             (string-right-trim '(#\Space #\Tab #\Newline #\Return #\;) trimmed)))
-      ((handler-case (progn (esrap:parse 'sml-expr trimmed) t)
-         (error () nil))
+      ((handler-case (progn (parse-sml-expression trimmed) t)
+         (sml-syntax-error () nil))
        trimmed))))
 
 (defun sml->lisp (text &key (package *sml-package*) (type-checker *sml-type-checker*))

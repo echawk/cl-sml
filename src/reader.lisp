@@ -9,56 +9,6 @@
 (defun sml-file-directory (pathname)
   (make-pathname :directory (pathname-directory (truename pathname))))
 
-(defun sml-declaration-start-line-p (line)
-  (some (lambda (keyword)
-          (let ((length (length keyword)))
-            (and (<= length (length line))
-                 (string= keyword line :end2 length)
-                 (or (= length (length line))
-                     (member (char line length)
-                             '(#\Space #\Tab #\; #\= #\: #\()
-                             :test #'char=)))))
-        '("abstype" "datatype" "end" "exception" "fun" "functor" "in"
-          "infix" "infixr" "local" "nonfix" "open" "signature"
-          "structure" "type" "val" "withtype")))
-
-(defun sml-type-declaration-start-line-p (line)
-  (let ((trimmed (string-left-trim '(#\Space #\Tab) line)))
-    (and (<= 4 (length trimmed))
-         (string= "type" trimmed :end2 4)
-         (or (= 4 (length trimmed))
-             (member (char trimmed 4) '(#\Space #\Tab #\()
-                     :test #'char=)))))
-
-(defun normalize-sml-type-declaration-continuations (source)
-  "Join the continuation lines of type declarations in SOURCE.  Returns the
-rewritten text and a vector of the line of SOURCE each of its lines is."
-  (let ((line-map (make-array 16 :adjustable t :fill-pointer 0)))
-    (values
-     (with-output-to-string (out)
-       (let ((in-type-declaration nil)
-             (at-start t))
-         (loop for line in (uiop:split-string source :separator '(#\Newline))
-               for line-number from 1
-               do (let* ((trimmed-left (string-left-trim '(#\Space #\Tab) line))
-                         (starts-declaration
-                           (sml-declaration-start-line-p trimmed-left)))
-                    (cond
-                      ((and in-type-declaration
-                            (not starts-declaration)
-                            (plusp (length trimmed-left)))
-                       (write-char #\Space out)
-                       (write-string trimmed-left out))
-                      (t
-                       (unless at-start
-                         (write-char #\Newline out))
-                       (vector-push-extend line-number line-map)
-                       (write-string line out)
-                       (setf in-type-declaration
-                             (sml-type-declaration-start-line-p line)))))
-                  (setf at-start nil))))
-     line-map)))
-
 (defun compile-sml-program-string (sml-text &key package source-name
                                                     (type-checker *sml-type-checker*))
   "Compile the SML program SML-TEXT to a Common Lisp form, without evaluating
@@ -67,23 +17,19 @@ declaration, in the order of the declarations' forms in the program, where
 LINE is the declaration's line in SML-TEXT (or NIL) and DESCRIPTION is e.g.
 \"fun fact\".  The Lisp generated for each binding is recorded for
 SML-LISP-SOURCE when *RECORD-SML-LISP-SOURCE* is true."
-  (let ((*sml-package* (ensure-sml-package (or package (current-sml-package)))))
-    (multiple-value-bind (normalized line-map)
-        (normalize-sml-type-declaration-continuations sml-text)
-      (let ((lines (make-sml-source-lines normalized
-                                          :source source-name
-                                          :line-map line-map)))
-        (multiple-value-bind (form ast recording positions)
-            (check-and-compile-sml-program normalized lines
-                                           :type-checker type-checker
-                                           :filename source-name)
-          (commit-sml-lisp-recording recording)
-          (values form
-                  (let ((*sml-declaration-positions* positions))
-                    (mapcar (lambda (dec)
-                              (cons (sml-declaration-line dec lines)
-                                    (sml-declaration-description dec)))
-                            (cdr ast)))))))))
+  (let* ((*sml-package* (ensure-sml-package (or package (current-sml-package))))
+         (lines (make-sml-source-lines sml-text :source source-name)))
+    (multiple-value-bind (form ast recording positions)
+        (check-and-compile-sml-program sml-text lines
+                                       :type-checker type-checker
+                                       :filename source-name)
+      (commit-sml-lisp-recording recording)
+      (values form
+              (let ((*sml-declaration-positions* positions))
+                (mapcar (lambda (dec)
+                          (cons (sml-declaration-line dec lines)
+                                (sml-declaration-description dec)))
+                        (cdr ast)))))))
 
 (defun check-and-compile-sml-program (text lines &key (type-checker *sml-type-checker*)
                                                       filename)
@@ -108,14 +54,18 @@ declaration positions."
          (*gensym-counter* 0)
          (*sml-declaration-positions* (make-sml-declaration-position-table)))
     (with-sml-static-facts (facts)
-      (let* ((ast (with-sml-phase (:parse)
-                    (esrap:parse 'sml-program text)))
-             (form (with-sml-phase (:compile)
-                     (with-sml-lisp-recording (recording)
-                       (compile-with-hoisted-sml-forms
-                        (lambda () (compile-program ast))
-                        :identity text)))))
-        (values form ast recording *sml-declaration-positions*)))))
+      (multiple-value-bind (ast scopes)
+          (with-sml-phase (:parse)
+            (parse-sml-program text :source-name filename))
+        (let ((form (with-sml-phase (:compile)
+                      (with-sml-lisp-recording (recording)
+                        (compile-with-hoisted-sml-forms
+                         (lambda () (compile-program ast))
+                         :identity text)))))
+          ;; Later programs in this package see the fixity and identifier
+          ;; status this one declared.
+          (setf (sml-package-parse-scopes *sml-package*) scopes)
+          (values form ast recording *sml-declaration-positions*))))))
 
 (defun static-facts-from-check (results)
   "The SML-STATIC-FACTS among the values a type checker returned, if any."
@@ -128,7 +78,7 @@ declaration positions."
   (let ((*sml-package* (ensure-sml-package (or package (current-sml-package)))))
     (compile-with-hoisted-sml-forms
      (lambda ()
-       (compile-expr (esrap:parse 'sml-expr sml-text)))
+       (compile-expr (parse-sml-expression sml-text)))
      :identity sml-text)))
 
 (defparameter *sml-checked-expression-prefix* "val it = ("
@@ -148,7 +98,7 @@ Returns the form and the expression's AST."
                                   sml-text ");")
                      :checker type-checker))))))
     (with-sml-static-facts (facts :offset (length *sml-checked-expression-prefix*))
-      (let ((ast (with-sml-phase (:parse) (esrap:parse 'sml-expr sml-text))))
+      (let ((ast (with-sml-phase (:parse) (parse-sml-expression sml-text))))
         (values (with-sml-phase (:compile)
                   (compile-with-hoisted-sml-forms
                    (lambda () (compile-expr ast))

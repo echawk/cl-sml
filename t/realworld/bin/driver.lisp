@@ -20,7 +20,7 @@
   ;; Frame name (symbol-name, upcased) -> phase, checked innermost first.
   '(("TYPE-CHECK-SML-STRING" . "CHECKER")
     ("HAMLET-TYPE-CHECK-STRING" . "CHECKER")
-    ("PARSE" . "PARSE")                 ; ESRAP:PARSE
+    ("PARSE-SML-PROGRAM" . "PARSE")
     ("COMPILE-PROGRAM" . "COMPILE")
     ("COMPILE-WITH-HOISTED-SML-FORMS" . "COMPILE")
     ("COMPILE-FILE" . "LISPCOMPILE")
@@ -44,10 +44,10 @@
     (let* ((s (name-string name))
            (hit (assoc s *phase-frames* :test #'string=)))
       (when (and hit
-                 ;; Only esrap's PARSE counts as the parser.
-                 (or (not (string= s "PARSE"))
+                 ;; Only cl-sml's PARSE-SML-PROGRAM counts as the parser.
+                 (or (not (string= s "PARSE-SML-PROGRAM"))
                      (and (symbolp name)
-                          (string= (package-name (symbol-package name)) "ESRAP"))))
+                          (string= (package-name (symbol-package name)) "CL-SML"))))
         (return (cdr hit))))))
 
 (defun interesting-frames (names &optional (limit 25))
@@ -57,7 +57,7 @@
                        ((and (consp name) (symbolp (second name)))
                         (symbol-package (second name))))))
         (when (and pkg (member (package-name pkg)
-                               '("CL-SML" "ESRAP") :test #'string=))
+                               '("CL-SML") :test #'string=))
           (unless (equal name (first out)) (push name out)))))
     (subseq (nreverse out) 0 (min limit (length out)))))
 
@@ -71,7 +71,7 @@
     (cond
       ((typep c 'rw-timeout) (values "TIMEOUT" phase))
       ((typep c 'cl-sml:sml-static-type-error) (values "CHECKER" "CHECKER"))
-      ((typep c 'esrap:esrap-parse-error) (values "PARSE" "PARSE"))
+      ((typep c 'cl-sml:sml-syntax-error) (values "PARSE" "PARSE"))
       ((typep c 'sb-kernel::control-stack-exhausted) (values "STACK" phase))
       ((typep c 'sb-kernel::heap-exhausted-error) (values "HEAP" phase))
       ((typep c 'storage-condition) (values "HEAP" phase))

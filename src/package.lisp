@@ -1,5 +1,5 @@
 (defpackage #:cl-sml
-  (:use #:cl #:esrap #:named-readtables #:trivia)
+  (:use #:cl #:named-readtables #:trivia)
   (:export #:sml-readtable
            #:sml-adt
            #:make-sml-adt
@@ -19,6 +19,9 @@
            #:type-check-sml-string
            #:with-sml-type-checker
            #:sml-static-type-error
+           #:sml-syntax-error
+           #:parse-sml-program
+           #:parse-sml-expression
            #:make-hamlet-type-checker
            #:hamlet-type-check-string
            #:hamlet-type-checker-last-description

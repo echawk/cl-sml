@@ -170,7 +170,7 @@
        "SML.REPL-EXPAND-TEST")
     (is (eq :quit result))
     (is (search "(defparameter |replGhost| 7)" output))
-    (is (search "(funcall (funcall #'cl-sml::sml-+ 1) 2)" output))
+    (is (search "(cl-sml::sml-+ 1 2)" output))
     (is (not (search "val it = 7" output)))
     (is (search "Error:" error-output))))
 
