@@ -417,7 +417,8 @@
                                             (:ctor-def "SOME" :has-args t :arg-type (:ty-var "'a")))))
                :withtype nil)
              (parse-dec "datatype 'a option = NONE | SOME of 'a")))
-  (is (equal '(:datatype-replication "list" "list") (parse-dec "datatype list = datatype list")))
+  (is (equal '(:datatype-replication "list" "list" :constructors (("c" . "nil") ("c1" . "::")))
+             (parse-dec "datatype list = datatype list")))
   ;; withtype bindings are kept, and constructor types span lines.
   (let ((dec (parse-dec "datatype a = A of b
                                 | B of int

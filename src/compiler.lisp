@@ -125,10 +125,12 @@ checker (signature matching included), or :UNKNOWN."
 
 (defun replicated-constructors (dec)
   "The (status . name) constructors that datatype replication DEC binds,
-according to the static checker, or NIL when unknown."
+according to the static checker, or else the parser, or NIL when unknown."
   (let ((fact (first (sml-static-facts-at (sml-ast-position dec) "dtrep"
                                           (second dec)))))
-    (and fact (parse-sml-structure-members (third fact)))))
+    (if fact
+        (parse-sml-structure-members (third fact))
+        (getf (cdddr dec) :constructors))))
 
 (defun compile-datatype-replication-constructors (dec)
   "Bind the constructors DEC = (:datatype-replication name source) brings
@@ -137,17 +139,26 @@ into scope to those of the replicated datatype."
          (dot (position #\. source-type :from-end t))
          (source-prefix (and dot (subseq source-type 0 dot))))
     (loop for (nil . name) in (replicated-constructors dec)
-          for source = (resolved-sml-symbol
-                        (if source-prefix
-                            (qualify-sml-name source-prefix name)
-                            name))
+          ;; A built-in such as `true' or `ref', compiled to a value.
+          for builtin = (and (null source-prefix)
+                             (not (compile-time-sml-env-symbol-shadowed-p name))
+                             (assoc name *sml-env* :test #'string=))
+          for source = (if builtin
+                           (cdr builtin)
+                           (resolved-sml-symbol
+                            (if source-prefix
+                                (qualify-sml-name source-prefix name)
+                                name)))
           for target = (target-sml-symbol name)
-          unless (eq source target)
-            collect (if (symbolp source)
+          unless (and (not builtin) (eq source target))
+            collect (if (and (symbolp source) (not builtin))
                         `(alias-sml-constructor ',target ',source)
-                        ;; A built-in such as `ref`, compiled to a function.
                         `(progn (defparameter ,target ,source)
                                 ,(compile-export-form (list target)))))))
+
+(defun compile-time-sml-env-symbol-shadowed-p (name)
+  "Is built-in NAME rebound by a declaration of the program being compiled?"
+  (assoc name *sml-binding-symbol-env* :test #'string=))
 
 (defun structure-declaration-members (dec &optional local-structures)
   "The members a (:structure name decs [:sigexp S]) declaration makes visible."
@@ -1204,11 +1215,13 @@ and the position of AST, the match's first pattern, are diagnostics."
           ,body)))
     ((eq (car dec) :datatype)
      (compile-local-datatype-bindings (third dec) body))
-    ((member (car dec) '(:type :infix :datatype-replication :expr :signature :open
-                         :structure-alias :structure-app :functor))
+    ((member (car dec) '(:type :infix :datatype-replication :expr :signature :open))
      body)
-    ((eq (car dec) :structure)
-     (compile-local-decls-into-body (third dec) body local-exceptions lexical-env))
+    ;; A structure declared by `local' or `let' is a module like any other;
+    ;; the scope of its name is the compiler's business.
+    ((member (car dec) '(:structure :structure-alias :structure-app :functor))
+     `(progn ,(compile-decl dec local-exceptions lexical-env)
+             ,body))
     ((eq (car dec) :exception)
      (let* ((name (sml-lexical-symbol (second dec)))
             (arg-type (getf (cddr dec) :arg-type)))
@@ -1855,11 +1868,20 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
        ,(current-qualified-sml-name (second ast))
        ,(resolve-structure-prefix (third ast))))
 	    ((eq (car ast) :structure-app)
-	     (let* ((argument-strexp (fourth ast))
+	     (let* ((argument-strexp (strip-sml-strexp-constraints (fourth ast)))
 	            (target-name (current-qualified-sml-name (second ast)))
-	            (argument (functor-argument-structure-name argument-strexp))
-	            ;; Any other argument is compiled as a module of its own.
-	            (argument-decs (and (not argument)
+	            ;; A functor application or `let' argument is bound to a
+	            ;; structure of its own first, as in `F (G (X))'.
+	            (nested-name (and (member (car argument-strexp) '(:str-app :str-let))
+	                              (format nil "~A.%ARG" (second ast))))
+	            (nested-form (and nested-name
+	                              (compile-decl (sml-structure-binding-node
+	                                             nested-name nil argument-strexp)
+	                                            local-exceptions lexical-env)))
+	            (argument (and (not nested-name)
+	                           (functor-argument-structure-name argument-strexp)))
+	            ;; A `struct' argument is compiled as a module of its own.
+	            (argument-decs (and (not argument) (not nested-name)
 	                                (sml-strexp-body-decs argument-strexp)))
 	            (argument-module
 	              (and argument-decs
@@ -1881,6 +1903,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
 	                                            local-exceptions
 	                                            lexical-env)))))
 	       `(progn
+	          ,@(and nested-form (list nested-form))
 	          ,@argument-forms
 	          ,@(when argument-module
 	              `((register-sml-structure-members
@@ -1892,11 +1915,21 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
 	           ,target-name
 	           ,(resolve-functor-name (third ast))
 	           :argument ,(or argument-module
+	                          (and nested-name (current-qualified-sml-name nested-name))
 	                          (and argument
 	                               (resolve-structure-prefix argument)))))))
 	    ((eq (car ast) :functor)
 	     (let* ((module-name (current-qualified-sml-name (second ast)))
 	            (param-name (getf (cdddr ast) :param))
+	            ;; The parameter's members, as its signature specifies them,
+	            ;; so that the body can `open' it.
+	            (*sml-local-structure-members*
+	              (let ((param-sigexp (getf (cdddr ast) :param-sigexp)))
+	                (multiple-value-bind (exports complete)
+	                    (and param-name param-sigexp (sml-signature-exports param-sigexp))
+	                  (if complete
+	                      (acons param-name exports *sml-local-structure-members*)
+	                      *sml-local-structure-members*))))
 	            (members (restrict-structure-members-to-signature
 	                      (declarations-bound-names (third ast))
 	                      (getf (cdddr ast) :result-sigexp)))

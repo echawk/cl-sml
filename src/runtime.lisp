@@ -1593,6 +1593,14 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
       (register-sml-binding-type some
                                  '(:fn :unknown (:option :unknown))))
     (export (list none some) package)
+    ;; The constructors of the initial basis's datatype order.
+    (dolist (name '("LESS" "EQUAL" "GREATER"))
+      (let ((symbol (sml-symbol-in-package-name name package)))
+        (unless (boundp symbol)
+          (setf (symbol-value symbol) symbol)
+          (register-sml-constructor symbol)
+          (register-sml-binding-type symbol "order"))
+        (export symbol package)))
     ;; The exceptions of the initial basis, raised by the run-time
     ;; primitives through SML-RAISE-NAMED-EXCEPTION.
     (dolist (name '("Bind" "Chr" "Div" "Domain" "Empty" "Match" "Option"

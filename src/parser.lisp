@@ -50,7 +50,7 @@
 ;;;   (:datatype name ctor-defs :datbinds ((tyvars name ctor-defs)...)
 ;;;              :withtype ((tyvars name ty)...))
 ;;;       ctor-def: (:ctor-def name :has-args bool :arg-type ty)
-;;;   (:datatype-replication name "longtycon")
+;;;   (:datatype-replication name "longtycon" [:constructors ((status . name)...)])
 ;;;   (:exception name :arg-type ty)  (:exception-alias name "longvid")
 ;;;   (:local decs decs [:abstype t])            abstype is a :local whose
 ;;;                                               first part is the datatype
@@ -1319,7 +1319,7 @@ the withtype bindings."
 
 (defun bind-sml-replicated-datatype (name name-start longtycon)
   "Bind the constructors that `datatype NAME = datatype LONGTYCON' brings
-into scope, when known."
+into scope, when known.  Returns them as (status . name) pairs."
   (let* ((fact (and *sml-static-facts*
                     (first (sml-static-facts-at name-start "dtrep" name))))
          (constructors
@@ -1331,13 +1331,16 @@ into scope, when known."
       ((listp constructors)
        (sml-scope-bind :tycons name constructors)
        (loop for (constructor . status) in constructors
-             do (sml-scope-bind :values constructor status)))
+             do (sml-scope-bind :values constructor status))
+       (mapcar (lambda (entry) (cons (cdr entry) (car entry))) constructors))
       ((eq constructors :plain)
-       (sml-scope-bind :tycons name :plain))
+       (sml-scope-bind :tycons name :plain)
+       nil)
       (t
        ;; Unknown constructors: names below become uncertain.
        (open-sml-environment :unknown)
-       (sml-scope-bind :tycons name :plain)))))
+       (sml-scope-bind :tycons name :plain)
+       nil))))
 
 (defun parse-sml-datatype-dec (keyword-token)
   (declare (ignore keyword-token))
@@ -1348,10 +1351,14 @@ into scope, when known."
              (name (sml-token-value name-token)))
         (next-sml-token)
         (next-sml-token)
-        (let ((longtycon (sml-token-value (expect-sml-long-id "a type constructor"))))
-          (bind-sml-replicated-datatype name (sml-token-start name-token) longtycon)
-          (list (note-sml-ast-position (list :datatype-replication name longtycon)
-                                       (sml-token-start name-token)))))
+        (let* ((longtycon (sml-token-value (expect-sml-long-id "a type constructor")))
+               (constructors (bind-sml-replicated-datatype
+                              name (sml-token-start name-token) longtycon)))
+          (list (note-sml-ast-position
+                 `(:datatype-replication ,name ,longtycon
+                                         ,@(and constructors
+                                                (list :constructors constructors)))
+                 (sml-token-start name-token)))))
       (multiple-value-bind (datbinds withtype) (parse-sml-datbinds)
         (bind-sml-datbinds datbinds withtype)
         (list (make-sml-datatype-node datbinds withtype)))))
