@@ -319,7 +319,7 @@
 
 (defvar *sml-builtin-scope* (make-sml-builtin-scope))
 
-(defvar *sml-package-scopes* (make-hash-table :test #'eq)
+(defvar *sml-package-scopes* (make-portable-weak-eq-hash-table)
   "SML package -> the environment its top-level declarations have built.")
 
 (defun sml-package-parse-scopes (package)
@@ -609,6 +609,9 @@ heuristic): capitalized names are constructors."
          (name (sml-vid-token-name token)))
     (make-sml-operator-item name (sml-token-start token) (sml-fixity name))))
 
+(defvar *sml-pattern-start* 0
+  "The offset of the pattern being read, for error messages.")
+
 (defvar *sml-last-infix-pattern* nil
   "The pattern most recently built by infix resolution, so that a fun clause
 can recognise the head `(x ++ y) z'.")
@@ -729,18 +732,15 @@ mixed without parentheses (Definition section 2.6)."
     (1 (sml-raw-pattern-atom (first atoms)))
     (2 (let ((head (first atoms)))
          (unless (sml-raw-id-p head)
-           (sml-syntax-error *sml-parse-text* (or (sml-ast-position-of head) 0)
+           (sml-syntax-error *sml-parse-text* *sml-pattern-start*
                              "only a constructor can be applied in a pattern"))
          (normalize-sml-constructor-pattern
           (make-sml-pattern-constructor (second head) (third head))
           (sml-raw-pattern-atom (second atoms)))))
     (t (let ((head (first atoms)))
          (sml-syntax-error *sml-parse-text*
-                           (if (sml-raw-id-p head) (third head) 0)
+                           (if (sml-raw-id-p head) (third head) *sml-pattern-start*)
                            "a constructor pattern takes exactly one argument")))))
-
-(defun sml-ast-position-of (node)
-  (sml-ast-position node))
 
 ;;;; Patterns
 
@@ -776,7 +776,8 @@ mixed without parentheses (Definition section 2.6)."
     (t (sml-parse-error-at as-token "only a variable may precede `as'"))))
 
 (defun parse-sml-infix-pat ()
-  (let ((items nil))
+  (let ((items nil)
+        (*sml-pattern-start* (sml-token-start (current-sml-token))))
     (loop
       (let ((token (current-sml-token)))
         (cond
@@ -1086,7 +1087,7 @@ the Common Lisp generated for a binding came from.")
       (:val (parse-sml-val-dec))
       (:fun (parse-sml-fun-dec))
       (:type (parse-sml-type-dec))
-      (:datatype (parse-sml-datatype-dec token))
+      (:datatype (parse-sml-datatype-dec))
       (:abstype (parse-sml-abstype-dec))
       (:exception (parse-sml-exception-dec))
       (:local (parse-sml-local-dec))
@@ -1339,8 +1340,7 @@ into scope, when known.  Returns them as (status . name) pairs."
        (sml-scope-bind :tycons name :plain)
        nil))))
 
-(defun parse-sml-datatype-dec (keyword-token)
-  (declare (ignore keyword-token))
+(defun parse-sml-datatype-dec ()
   (if (and (eq (sml-token-kind (current-sml-token)) :alnum)
            (sml-token-reserved-p (sml-token-ahead 1) :equals)
            (sml-token-reserved-p (sml-token-ahead 2) :datatype))
