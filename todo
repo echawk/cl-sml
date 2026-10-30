@@ -80,6 +80,10 @@
   stack that `build-hamlet` bakes in via `:save-runtime-options`).
 - [ ] Preload/cache the elaborated basis in the `cl-hamlet` image so startup
   does not re-elaborate `hamlet/basis` each time.
+- [ ] Portability (ECL, ABCL): self tail calls are compiled as jumps, but
+  other tail calls (`fun even ... and odd ...`, CPS) still take a stack
+  frame per call outside SBCL.  ABCL's interpreter (REPL, `:compile nil`)
+  overflows its fixed thread stack at around a thousand nested SML calls.
 - [ ] Evaluate `cl-iparse` as a future grammar implementation.
 - [ ] Evaluate `rewrite-cl` for typed normalization and backend rewrites.
 - [ ] Prototype an optional Coalton backend only after a backend-neutral typed

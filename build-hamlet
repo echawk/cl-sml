@@ -7,12 +7,22 @@ cd "$ROOT"
 SBCL="${SBCL:-sbcl}"
 PACKAGE="SML.HAMLET-IMAGE"
 OUTPUT="$ROOT/cl-hamlet"
+
+# The image is saved with sb-ext:save-lisp-and-die: SBCL only.
+if [ "$(basename "${LISP:-$SBCL}")" != sbcl ]; then
+    echo "$(basename "$0") builds an SBCL image; LISP/SBCL must name SBCL." >&2
+    exit 2
+fi
+
 # Loading HaMLet's generated parser needs a deep control stack; the
 # :save-runtime-options below bakes this size into the executable.
 STACK="${CL_HAMLET_STACK:-1GB}"
 
-"$SBCL" --control-stack-size "$STACK" --noinform --non-interactive \
+# Loading HaMLet peaks near 700MB of live heap; CL_SML_HEAP sets SBCL's heap.
+"$SBCL" --dynamic-space-size "${CL_SML_HEAP:-4GB}" \
+    --control-stack-size "$STACK" --noinform --non-interactive \
     --eval '(load "~/.sbclrc")' \
+    --eval "(push #p\"$ROOT/\" asdf:*central-registry*)" \
     --eval '(ql:quickload :cl-sml)' \
     --eval "(cl-sml:load-sml-file #P\"hamlet/basis/all.sml\" :package \"$PACKAGE\")" \
     --eval "(cl-sml:load-sml-file #P\"hamlet/hamlet.sml\" :package \"$PACKAGE\")" \

@@ -84,6 +84,19 @@
     (is (search "INVOKE-SML-CASE-ACTION"
                 (write-to-string form :pretty nil)))))
 
+(test compile-self-tail-calls-as-jumps
+  (flet ((compiled (source)
+           (write-to-string (cl-sml:compile-sml-declarations-string
+                             source :package "SML.COMPILER-TEST")
+                            :pretty nil)))
+    (let ((looping (compiled "fun loopDown 0 acc = acc
+                                | loopDown n acc = loopDown (n - 1) (acc + n);"))
+          (recursive (compiled "fun recurDown 0 = 0
+                                  | recurDown n = 1 + recurDown (n - 1);")))
+      (is (search "TAGBODY" looping))
+      (is (search "(GO " looping))
+      (is (not (search "TAGBODY" recursive))))))
+
 (test compile-large-tuple-case-hoists-branch-actions
   (let* ((source
            (with-output-to-string (stream)

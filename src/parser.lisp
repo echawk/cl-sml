@@ -382,16 +382,44 @@ looser than ::, while the standard arithmetic/list operators do not."
 (defrule sml-word-expr sml-word
   (:lambda (n &bounds start) (note-sml-ast-position (list :word n) start)))
 
-(defrule sml-real
-  (and (? "~") (+ (character-ranges (#\0 #\9))) "." (+ (character-ranges (#\0 #\9))))
-  (:destructure (neg whole dot frac)
+(defrule sml-real-exponent
+  (and (or "e" "E") (? "~") (+ (character-ranges (#\0 #\9))))
+  (:destructure (marker neg digits)
+    (declare (ignore marker))
+    (let ((exponent (parse-integer (text digits))))
+      (if neg (- exponent) exponent))))
+
+(defun sml-real-literal-value (negative whole-text fraction-text exponent)
+  "The double nearest to the real literal, the same on every host."
+  (let* ((mantissa (+ (parse-integer whole-text)
+                      (if (string= fraction-text "")
+                          0
+                          (/ (parse-integer fraction-text)
+                             (expt 10 (length fraction-text))))))
+         (value (cond ((zerop mantissa) 0d0)
+                      ((< exponent -10000) 0d0)
+                      ((> exponent 10000) nil)
+                      (t (portable-rational-to-double
+                          (* mantissa (expt 10 exponent)))))))
+    (unless value
+      (error "SML real constant out of range: ~:[~;~~~]~A.~AE~D"
+             negative whole-text fraction-text exponent))
+    (if negative (- value) value)))
+
+;;; [~]digits.digits[E[~]digits] and [~]digitsE[~]digits.
+(defrule sml-real-fraction
+  (and (? "~") (+ (character-ranges (#\0 #\9)))
+       "." (+ (character-ranges (#\0 #\9))) (? sml-real-exponent))
+  (:destructure (neg whole dot frac exponent)
     (declare (ignore dot))
-    (let* ((whole-part (parse-integer (text whole)))
-           (frac-text (text frac))
-           (frac-part (parse-integer frac-text))
-           (scale (expt 10 (length frac-text)))
-           (value (+ whole-part (/ frac-part scale))))
-      (coerce (if neg (- value) value) 'double-float))))
+    (sml-real-literal-value neg (text whole) (text frac) (or exponent 0))))
+
+(defrule sml-real-scientific
+  (and (? "~") (+ (character-ranges (#\0 #\9))) sml-real-exponent)
+  (:destructure (neg whole exponent)
+    (sml-real-literal-value neg (text whole) "" exponent)))
+
+(defrule sml-real (or sml-real-fraction sml-real-scientific))
 
 (defrule sml-string
   (and #\" (* (or (and #\\ (+ sml-format-char) #\\)

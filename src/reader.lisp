@@ -159,7 +159,8 @@ Returns the form and the expression's AST."
   "Compile the SML file PATHNAME to a Common Lisp form, without evaluating
 it.  Returns the form, the SML package, and the top-level declaration notes
 of COMPILE-SML-PROGRAM-STRING."
-  (with-open-file (stream pathname :direction :input)
+  (with-open-file (stream pathname :direction :input
+                                   :external-format *sml-external-format*)
     (let ((target-package (ensure-sml-package (or package (pathname->sml-package-name pathname)))))
       (multiple-value-bind (form declarations)
           (compile-sml-program-string
@@ -221,6 +222,10 @@ loadable Common Lisp file to STREAM.  Each top-level declaration becomes a
 top-level form, preceded by a comment with its SML source line when
 DECLARATIONS (see COMPILE-SML-PROGRAM-STRING) are given.  The output only
 depends on FORM and the source location."
+  ;; Standard I/O syntax first, so that no user printer setting (e.g. a
+  ;; pprint dispatch table) leaks into the artifact; the bindings below
+  ;; then choose how it is printed.
+  (with-standard-io-syntax
   (let* ((package-name (package-name target-package))
          (source-directory (sml-file-directory source-pathname))
          (*package* (find-package :cl-user))
@@ -275,7 +280,7 @@ depends on FORM and the source location."
                    (write `(cl-sml::with-sml-artifact-context (,source-directory)
                              ,declaration-form)
                           :stream stream)
-                   (terpri stream)))))))
+                   (terpri stream))))))))
 
 (defun emit-sml-file (pathname output-pathname
                       &key package (if-exists :supersede))
@@ -285,7 +290,8 @@ depends on FORM and the source location."
     (with-open-file (stream output-pathname
                             :direction :output
                             :if-exists if-exists
-                            :if-does-not-exist :create)
+                            :if-does-not-exist :create
+                            :external-format *sml-external-format*)
       (write-sml-lisp-artifact form target-package pathname stream declarations))
     (values (truename output-pathname) target-package)))
 
@@ -315,7 +321,9 @@ is discarded otherwise.")
 *SHOW-LISP-COMPILER-OUTPUT*."
   (flet ((compile-artifact ()
            (handler-bind ((style-warning #'muffle-warning))
-             (compile-file artifact))))
+             (with-standard-io-syntax
+               (compile-file artifact
+                             :external-format *sml-external-format*)))))
     (if *show-lisp-compiler-output*
         (compile-artifact)
         ;; Not kept in a string: for large programs it takes enough memory
@@ -339,7 +347,8 @@ is discarded otherwise.")
              (with-open-file (stream artifact
                                      :direction :output
                                      :if-exists :error
-                                     :if-does-not-exist :create)
+                                     :if-does-not-exist :create
+                                     :external-format *sml-external-format*)
                (write-sml-lisp-artifact form target-package source-pathname
                                         stream declarations)))
            (multiple-value-bind (output warnings-p failure-p)
