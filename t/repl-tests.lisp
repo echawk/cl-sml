@@ -150,7 +150,7 @@
        "SML.REPL-LISP-COMMAND-TEST")
     (is (eq :quit result))
     (is (search ";;; fun replSquare -- stdIn:2" output))
-    (is (search "(defparameter |replSquare|" output))
+    (is (search "(defparameter |replSquare;" output))
     (is (string= "" error-output))))
 
 (test repl-lisp-local-command-shows-enclosing-local
@@ -169,7 +169,7 @@
        (format nil ":expand val replGhost = 7~%replGhost;~%:expand 1 + 2~%:quit~%")
        "SML.REPL-EXPAND-TEST")
     (is (eq :quit result))
-    (is (search "(defparameter |replGhost| 7)" output))
+    (is (search "(defparameter |replGhost;1| 7)" output))
     (is (search "(cl-sml::sml-+ 1 2)" output))
     (is (not (search "val it = 7" output)))
     (is (search "Error:" error-output))))
@@ -180,8 +180,8 @@
        (format nil ":show-lisp on~%val replShown = 3;~%:show-lisp off~%val replHidden = 4;~%:quit~%")
        "SML.REPL-SHOW-LISP-TEST")
     (is (eq :quit result))
-    (is (search "(defparameter |replShown| 3)" output))
-    (is (not (search "(defparameter |replHidden|" output)))
+    (is (search "(defparameter |replShown;1| 3)" output))
+    (is (not (search "(defparameter |replHidden;" output)))
     (is (search "val replHidden = 4" output))
     (is (string= "" error-output))))
 

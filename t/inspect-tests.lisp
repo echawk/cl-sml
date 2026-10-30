@@ -26,11 +26,14 @@
                       (mentions-symbol-named-p name (cdr form))))))
 
 (defun defparameter-of-p (name form)
-  "Does FORM define NAME with DEFPARAMETER?"
+  "Does FORM define NAME with DEFPARAMETER, in a binding cell |NAME;k|?"
   (and (consp form)
        (or (and (eq (first form) 'defparameter)
                 (symbolp (second form))
-                (string= name (symbol-name (second form))))
+                (let ((defined (symbol-name (second form))))
+                  (and (< (length name) (length defined))
+                       (string= name defined :end2 (length name))
+                       (char= #\; (char defined (length name))))))
            (some (lambda (subform) (defparameter-of-p name subform))
                  (remove-if-not #'consp form)))))
 
@@ -128,7 +131,7 @@ val six = AddThree.addY 3;"
                      (show-sml-lisp "double" :package package :stream stream))))
       (is (search ";;; fun double -- inspect.sml:2" printed))
       ;; SML names print unqualified, with their case.
-      (is (search "(defparameter |double|" printed))
+      (is (search "(defparameter |double;" printed))
       (is (not (search "SML.INSPECT-SHOW-TEST::" printed))))
     (signals error
       (show-sml-lisp "missing" :package package :stream (make-broadcast-stream)))))
@@ -147,7 +150,7 @@ val six = AddThree.addY 3;"
     (let ((printed (with-output-to-string (stream)
                      (print-sml-lisp (sml->lisp "fun inc n = n + 1" :package package)
                                      :package package :stream stream))))
-      (is (search "(defparameter |inc|" printed)))))
+      (is (search "(defparameter |inc;" printed)))))
 
 (test with-sml-phase-timings-reports-each-phase
   (let* ((report (make-string-output-stream))
@@ -188,9 +191,9 @@ val six = AddThree.addY 3;"
     (is (search "large-dispatch.sml:17: val dispatch_result" text))
     ;; Each declaration is a top-level form of its own.
     (is (< (search "large-dispatch.sml:1: fun dispatch" text)
-           (search "(defparameter |dispatch|" text)
+           (search "(defparameter |dispatch;" text)
            (search "large-dispatch.sml:17: val dispatch_result" text)
-           (search "(defparameter |dispatch_result|" text)))))
+           (search "(defparameter |dispatch_result;" text)))))
 
 (test emitted-artifacts-load-into-a-fresh-package
   ;; An SML name that is also a CL symbol name is shadowed in its package;

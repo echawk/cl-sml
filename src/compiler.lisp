@@ -225,12 +225,114 @@ or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
 
 (defun resolved-sml-symbol (name &optional lexical-env)
   (or (lexical-symbol-for-name name lexical-env)
-      (compile-time-sml-env-symbol name)
-      (let ((resolved-name (if (sml-long-name-p name)
-                               (resolve-sml-long-name name)
-                               name)))
-        (or (compile-time-sml-env-symbol resolved-name)
-            (sml-symbol resolved-name)))))
+      (functor-body-symbol
+       (or (compile-time-sml-env-symbol name)
+           (let ((resolved-name (if (sml-long-name-p name)
+                                    (resolve-sml-long-name name)
+                                    name)))
+             (or (compile-time-sml-env-symbol resolved-name)
+                 (sml-bound-symbol resolved-name)))))))
+
+;;; Binding cells (see PUBLISH-SML-BINDING).  A program refers to the
+;;; bindings it makes itself through *SML-BINDING-SYMBOL-ENV* and
+;;; *SML-UNIT-CELLS*, and to those of earlier compilation units in its
+;;; package through the cells their symbols record.  Functor bodies are the
+;;; exception: they are instantiated by binding the package's symbols of
+;;; their parameter's members dynamically, so they bind and refer to the
+;;; package's symbols as before.
+
+(defvar *sml-unit-cells* nil
+  "While a program is compiled: qualified SML name -> the cell of the
+binding of that name the program made last, or :PLAIN when the program last
+bound it to the package's symbol itself (a datatype constructor, a member
+of a functor instance).")
+
+(defun sml-cell-symbol-p (symbol)
+  (and (symbolp symbol) (get symbol 'sml-cell-of)))
+
+(defun functor-body-symbol (symbol)
+  "SYMBOL, or in a functor body, the package's symbol for the name whose
+binding cell SYMBOL is."
+  (if (and *sml-compiling-functor* (sml-cell-symbol-p symbol))
+      (get symbol 'sml-cell-of)
+      symbol))
+
+(defun sml-bound-symbol (qualified-name)
+  "The symbol holding the binding of QUALIFIED-NAME in scope: the cell of
+its newest binding, or the package's symbol for it."
+  (let* ((symbol (sml-symbol qualified-name))
+         (unit-cell (and *sml-unit-cells*
+                         (gethash qualified-name *sml-unit-cells*))))
+    (cond
+      (*sml-compiling-functor* symbol)
+      ((eq unit-cell :plain) symbol)
+      (unit-cell)
+      ((sml-binding-cell symbol))
+      (t symbol))))
+
+(defun current-binding-symbol (name)
+  "The symbol holding the binding of NAME just declared in the current
+structure (or at top level)."
+  (sml-bound-symbol (current-qualified-sml-name name)))
+
+(defvar *sml-unit-cell-counts* nil
+  "While a program is compiled: qualified SML name -> the highest K of the
+cells |name;K| the program made for it.")
+
+(defvar *sml-reserved-cells* nil
+  "While programs are loaded (compiled and run) in a nest, e.g. a file that
+`use's another: an EQ hash table of the cells made for programs that have
+not run yet, which the nested ones must not reuse.")
+
+(defmacro with-sml-cell-reservations (&body body)
+  "Run BODY, which compiles and runs a program, with the cells of programs
+it compiles reserved until it returns."
+  `(let ((*sml-reserved-cells* (or *sml-reserved-cells*
+                                   (make-hash-table :test #'eq))))
+     ,@body))
+
+(defun new-sml-binding-cell (name)
+  "A fresh cell for a binding of NAME declared in the current structure (or
+at top level), which the rest of the program refers to.  In a functor body,
+the package's symbol for the name.  Cells are numbered after those
+published by the programs that ran before (and those of this program), so
+that compiling a program twice without running it gives the same code."
+  (let ((symbol (target-sml-symbol name))
+        (qualified (current-qualified-sml-name name)))
+    (if *sml-compiling-functor*
+        symbol
+        (let* ((start (max (published-sml-cell-count symbol)
+                           (if *sml-unit-cell-counts*
+                               (gethash qualified *sml-unit-cell-counts* 0)
+                               0)))
+               (cell (loop for k from (1+ start)
+                           for cell = (intern (format nil "~A;~D" (symbol-name symbol) k)
+                                              (symbol-package symbol))
+                           unless (and *sml-reserved-cells*
+                                       (gethash cell *sml-reserved-cells*))
+                             return cell)))
+          (setf (get cell 'sml-cell-of) symbol)
+          (when *sml-reserved-cells*
+            (setf (gethash cell *sml-reserved-cells*) t))
+          (when *sml-unit-cells*
+            (setf (gethash qualified *sml-unit-cells*) cell
+                  (gethash qualified *sml-unit-cell-counts*)
+                  (sml-cell-index cell symbol)))
+          cell))))
+
+(defun note-sml-plain-binding (qualified-name)
+  "The program binds QUALIFIED-NAME to the package's symbol itself."
+  (when *sml-unit-cells*
+    (setf (gethash qualified-name *sml-unit-cells*) :plain)))
+
+(defun compile-binding-publication (cell type)
+  "Forms that make CELL, of TYPE, the newest binding of its name.  In a
+functor body CELL is the package's symbol itself."
+  (let ((symbol (get cell 'sml-cell-of)))
+    (if symbol
+        `((publish-sml-binding ',symbol ',cell ',type))
+        `(,(compile-type-registration-form cell type)
+          ,(compile-export-form (list cell))))))
 
 (defun module-member-symbol-env (module-name members)
   (mapcar (lambda (member)
@@ -541,6 +643,8 @@ separated by blanks."
       (let* ((source (resolve-structure-prefix name))
              (members (lookup-sml-module-members-for-compiler name *sml-local-structure-members*)))
         (dolist (member members)
+          (note-sml-alias-binding (current-qualified-sml-name member)
+                                  (qualify-sml-name source member))
           (push `(alias-sml-module-member-to-name
                   ,(target-sml-package-name)
                   ,(current-qualified-sml-name member)
@@ -549,19 +653,45 @@ separated by blanks."
                 forms))))
     `(progn ,@(nreverse forms))))
 
+(defun note-sml-alias-binding (qualified-name source-name)
+  "The program binds QUALIFIED-NAME to what SOURCE-NAME denotes (`open',
+structure aliases)."
+  (when *sml-unit-cells*
+    (let ((source (sml-bound-symbol source-name)))
+      (setf (gethash qualified-name *sml-unit-cells*)
+            (if (sml-binding-cell-symbol-p source) source :plain)))))
+
+(defun sml-binding-cell-symbol-p (symbol)
+  "Is SYMBOL a binding cell, rather than a package's symbol for a name?"
+  (and (symbolp symbol)
+       (find #\; (symbol-name symbol))
+       t))
+
+(defun note-sml-instance-bindings (structure-name)
+  "The program binds the members of structure STRUCTURE-NAME, a functor
+instance, to the package's symbols (see ALIAS-SML-FUNCTOR-APPLICATION)."
+  (when *sml-unit-cells*
+    (let ((prefix (format nil "~A." structure-name)))
+      (maphash (lambda (name cell)
+                 (declare (ignore cell))
+                 (when (string-prefix-p prefix name)
+                   (setf (gethash name *sml-unit-cells*) :plain)))
+               *sml-unit-cells*))))
+
 (defun exception-alias-type (target)
   (or (lookup-sml-binding-type target *sml-package*) "exn"))
 
-(defun compile-top-level-exception-alias (name target)
-  (let ((symbol (target-sml-symbol name))
-        (target-symbol (resolved-sml-symbol target)))
+(defun compile-top-level-exception-alias (name target &optional lexical-env)
+  (let* ((target-symbol (resolved-sml-symbol target lexical-env))
+         (symbol (new-sml-binding-cell name)))
     `(progn
        (defparameter ,symbol
-         (if (boundp ',target-symbol)
-             (symbol-value ',target-symbol)
-             (make-sml-exception-constructor ,name)))
-       ,(compile-type-registration-form symbol (exception-alias-type target))
-       ,(compile-export-form (list symbol)))))
+         ,(if (lexical-symbol-for-name target lexical-env)
+              target-symbol
+              `(if (boundp ',target-symbol)
+                   (symbol-value ',target-symbol)
+                   (make-sml-exception-constructor ,name))))
+       ,@(compile-binding-publication symbol (exception-alias-type target)))))
 
 (defun record-fields-sorted-by-label (fields)
   (sort (remove :record-rest (copy-list fields))
@@ -1332,43 +1462,47 @@ declarations, those of later declarations first."
      (error "Unknown decl in let: ~A" dec))))
 
 (defun compile-top-level-val (pat expr &optional local-exceptions declared-type lexical-env)
+  ;; Each expression is compiled before the cells of the names it binds
+  ;; are made: it refers to the bindings in scope before the declaration.
   (let* ((expr-type (or declared-type
                         (infer-sml-ast-type expr :package *sml-package*)))
          (typed-bindings (pattern-type-bindings pat expr-type)))
     (cond
       ((and (listp pat) (member (car pat) '(:pat-var :var)))
-       (let* ((sym (target-sml-symbol (second pat)))
-              (declaim-form (compile-type-declaim-form sym expr-type))
-              (compiled-expr (compile-functor-member-initializer
+       (let* ((compiled-expr (compile-functor-member-initializer
                               (second pat)
-                              (compile-expr expr local-exceptions lexical-env))))
+                              (compile-expr expr local-exceptions lexical-env)))
+              (cell (new-sml-binding-cell (second pat))))
          `(progn
-            ,@(when declaim-form (list declaim-form))
-            (defparameter ,sym ,compiled-expr)
-            ,(compile-type-registration-form sym expr-type)
-            ,(compile-export-form (list sym)))))
+            (defparameter ,cell ,compiled-expr)
+            ,@(compile-binding-publication cell expr-type))))
       ((eq pat :wild)
        (compile-expr expr local-exceptions lexical-env))
       (t
-       (let ((tmp (gensym "MATCHED"))
-             (bound-symbols (remove-duplicates (pattern-bound-symbols pat) :test #'eq)))
-         `(let ((,tmp ,(compile-functor-member-initializer
-                        (format nil "~{~A~^,~}" (pattern-bound-names pat))
-                        (compile-expr expr local-exceptions lexical-env))))
+       (let* ((tmp (gensym "MATCHED"))
+              (var-map (pattern-variable-map pat local-exceptions))
+              (compiled-expr (compile-functor-member-initializer
+                              (format nil "~{~A~^,~}" (mapcar #'car var-map))
+                              (compile-expr expr local-exceptions lexical-env)))
+              (compiled-pat (compile-pat pat local-exceptions
+                                         (append var-map lexical-env)))
+              (cells (mapcar (lambda (entry) (new-sml-binding-cell (car entry)))
+                             var-map)))
+         `(let ((,tmp ,compiled-expr))
             (trivia:match ,tmp
-              (,(compile-pat pat local-exceptions lexical-env)
-               (progn
-                 ;; DEFparameter makes SYM special before evaluating its init
-                 ;; form.  Some implementations then resolve the RHS to the
-                 ;; global binding instead of the pattern variable.
-                 ,@(mapcar (lambda (sym)
-                             `(setf (symbol-value ',sym) ,sym))
-                           bound-symbols)
-                 ,@(mapcar (lambda (binding)
-                             (compile-type-registration-form (car binding) (cdr binding)))
-                           typed-bindings)
-                 ,(compile-export-form bound-symbols)
-                 ,tmp))
+              (,compiled-pat
+               ,@(mapcar (lambda (entry cell) `(defparameter ,cell ,(cdr entry)))
+                         var-map cells)
+               ,@(mapcan (lambda (entry cell)
+                           (compile-binding-publication
+                            cell
+                            (or (cdr (assoc (target-sml-symbol (car entry))
+                                            typed-bindings))
+                                (cdr (assoc (car entry) typed-bindings
+                                            :test #'equal))
+                                :unknown)))
+                         var-map cells)
+               ,tmp)
               (_ ,(compile-match-failure "Bind" "val" pat)))))))))
 
 (defun compile-exception-ctor-pattern (name &optional lexical-env)
@@ -1803,6 +1937,33 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
 
     (t (error "Unknown AST: ~A" ast))))
 
+(defun compile-top-level-val-rec (ast cell local-exceptions lexical-env)
+  "Forms that set CELL, already bound, to the value of `val rec' AST."
+  `((setf ,cell ,(let ((*sml-binding-symbol-env*
+                         (acons (second ast) cell *sml-binding-symbol-env*)))
+                   (compile-expr (third ast)
+                                 local-exceptions
+                                 (acons (second ast) cell lexical-env))))
+    ,@(compile-binding-publication
+       cell (infer-sml-ast-type (third ast) :package *sml-package*))))
+
+(defun compile-top-level-fun (ast cell local-exceptions lexical-env)
+  "Bind CELL to the function `fun' AST declares."
+  (let ((fun-type (loop repeat (length (first (first (third ast))))
+                        for result = :unknown then `(:fn :unknown ,result)
+                        finally (return result))))
+    `(progn
+       (declaim (special ,cell))
+       (defparameter ,cell ,(let ((*sml-binding-symbol-env*
+                                    (acons (second ast) cell *sml-binding-symbol-env*)))
+                              (compile-fn-clauses (third ast)
+                                                  local-exceptions
+                                                  (second ast)
+                                                  (acons (second ast)
+                                                         cell
+                                                         lexical-env))))
+       ,@(compile-binding-publication cell fun-type))))
+
 (defun compile-decl (ast &optional local-exceptions lexical-env)
   "Compiles top level declarations."
   (cond
@@ -1831,62 +1992,45 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
           ,@(mapcar (lambda (rec) (compile-decl rec local-exceptions lexical-env))
                     recs))))
     ((eq (car ast) :val-rec)
-     (let ((name (target-sml-symbol (second ast))))
+     (let ((cell (new-sml-binding-cell (second ast))))
        `(progn
-          (declaim (special ,name))
-          (defparameter ,name nil)
-          (setf ,name ,(let ((*sml-binding-symbol-env*
-                               (acons (second ast) name *sml-binding-symbol-env*)))
-                          (compile-expr (third ast)
-                                        local-exceptions
-                                        (acons (second ast) name lexical-env))))
-          ,(compile-type-registration-form name (infer-sml-ast-type (third ast) :package *sml-package*))
-          ,(compile-export-form (list name)))))
+          (defparameter ,cell nil)
+          ,@(compile-top-level-val-rec ast cell local-exceptions lexical-env))))
     ((eq (car ast) :val-recs)
      ;; `val rec f = ... and g = ...': every name is bound in every body.
-     (let ((*sml-binding-symbol-env*
-             (append (mapcar (lambda (val-rec)
-                               (cons (second val-rec) (target-sml-symbol (second val-rec))))
-                             (cdr ast))
-                     *sml-binding-symbol-env*)))
+     (let* ((cells (mapcar (lambda (val-rec) (new-sml-binding-cell (second val-rec)))
+                           (cdr ast)))
+            (*sml-binding-symbol-env*
+              (append (mapcar (lambda (val-rec cell) (cons (second val-rec) cell))
+                              (cdr ast) cells)
+                      *sml-binding-symbol-env*)))
        `(progn
-          ,@(mapcar (lambda (val-rec)
-                      `(defparameter ,(target-sml-symbol (second val-rec)) nil))
-                    (cdr ast))
-          ,@(mapcar (lambda (val-rec)
-                      (compile-decl val-rec local-exceptions lexical-env))
-                    (cdr ast)))))
+          ,@(mapcar (lambda (cell) `(defparameter ,cell nil)) cells)
+          ,@(mapcan (lambda (val-rec cell)
+                      (compile-top-level-val-rec val-rec cell
+                                                 local-exceptions lexical-env))
+                    (cdr ast) cells))))
     ((eq (car ast) :fun)
-     (let* ((name (target-sml-symbol (second ast)))
-            (fun-type (loop repeat (length (first (first (third ast))))
-                            for result = :unknown then `(:fn :unknown ,result)
-                            finally (return result))))
-	       `(progn
-	          (declaim (special ,name))
-	          (defparameter ,name ,(let ((*sml-binding-symbol-env*
-	                                       (acons (second ast) name *sml-binding-symbol-env*)))
-	                                  (compile-fn-clauses (third ast)
-	                                                       local-exceptions
-	                                                       (second ast)
-	                                                       (acons (second ast)
-	                                                              name
-	                                                              lexical-env))))
-	          ,(compile-type-registration-form name fun-type)
-	          ,(compile-export-form (list name)))))
+     (compile-top-level-fun ast (new-sml-binding-cell (second ast))
+                            local-exceptions lexical-env))
     ((eq (car ast) :funs)
-     (let ((*sml-binding-symbol-env*
-             (append (mapcar (lambda (fun-dec)
-                               (cons (second fun-dec)
-                                     (target-sml-symbol (second fun-dec))))
-                             (cdr ast))
-                     *sml-binding-symbol-env*)))
-       `(progn ,@(mapcar (lambda (fun-dec)
-                           (compile-decl fun-dec local-exceptions lexical-env))
-                         (cdr ast)))))
+     ;; `fun f ... and g ...': every name is bound in every body.
+     (let* ((cells (mapcar (lambda (fun-dec) (new-sml-binding-cell (second fun-dec)))
+                           (cdr ast)))
+            (*sml-binding-symbol-env*
+              (append (mapcar (lambda (fun-dec cell) (cons (second fun-dec) cell))
+                              (cdr ast) cells)
+                      *sml-binding-symbol-env*)))
+       `(progn ,@(mapcar (lambda (fun-dec cell)
+                           (compile-top-level-fun fun-dec cell
+                                                  local-exceptions lexical-env))
+                         (cdr ast) cells))))
 
     ;; Replace the :datatype block in compile-decl
     ((eq (car ast) :datatype)
      (let ((ctors (third ast)))
+       (dolist (c ctors)
+         (note-sml-plain-binding (current-qualified-sml-name (second c))))
        `(progn
           ,@(mapcar (lambda (c)
                       (let* ((cname (target-sml-symbol (second c)))
@@ -1917,6 +2061,8 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
                     (getf (cdddr ast) :withtype))
           ,(compile-export-form nil))))
     ((eq (car ast) :datatype-replication)
+     (dolist (name (declaration-direct-bound-names ast))
+       (note-sml-plain-binding (current-qualified-sml-name name)))
      `(progn
         ,(compile-type-alias-form (second ast) (third ast))
         ,@(compile-datatype-replication-constructors ast)))
@@ -1931,6 +2077,11 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
     ((eq (car ast) :open)
      (compile-open-form (second ast)))
     ((eq (car ast) :structure-alias)
+     (dolist (member (lookup-sml-module-members-for-compiler
+                      (third ast) *sml-local-structure-members*))
+       (note-sml-alias-binding
+        (qualify-sml-name (current-qualified-sml-name (second ast)) member)
+        (qualify-sml-name (resolve-structure-prefix (third ast)) member)))
      `(alias-sml-structure-alias
        ,(target-sml-package-name)
        ,(current-qualified-sml-name (second ast))
@@ -1970,6 +2121,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
 	                     (compile-program-decls argument-decs
 	                                            local-exceptions
 	                                            lexical-env)))))
+	       (note-sml-instance-bindings target-name)
 	       `(progn
 	          ,@(and nested-form (list nested-form))
 	          ,@argument-forms
@@ -2035,20 +2187,18 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
     ((eq (car ast) :expr)
      (compile-expr (second ast) local-exceptions))
     ((eq (car ast) :exception)
-     (let* ((name (target-sml-symbol (second ast)))
+     (let* ((name (new-sml-binding-cell (second ast)))
             (arg-type (getf (cddr ast) :arg-type)))
        (if arg-type
            `(progn
               (defparameter ,name (make-sml-exception-function ,(second ast)))
-              ,(compile-type-registration-form
-                name `(:fn ,(sml-type-ast->binding-type arg-type) "exn"))
-              ,(compile-export-form (list name)))
+              ,@(compile-binding-publication
+                 name `(:fn ,(sml-type-ast->binding-type arg-type) "exn")))
            `(progn
               (defparameter ,name (make-sml-exception-constructor ,(second ast)))
-              ,(compile-type-registration-form name "exn")
-              ,(compile-export-form (list name))))))
+              ,@(compile-binding-publication name "exn")))))
     ((eq (car ast) :exception-alias)
-     (compile-top-level-exception-alias (second ast) (third ast)))
+     (compile-top-level-exception-alias (second ast) (third ast) lexical-env))
     ((eq (car ast) :local)
      (let* ((local-decs (second ast))
             (body-decs (third ast))
@@ -2143,15 +2293,15 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
                             name
                             *sml-local-structure-members*))
              (push (cons member
-                         (sml-symbol (qualify-sml-name source member)))
+                         (sml-bound-symbol (qualify-sml-name source member)))
                    bindings))))))
     (:local
      (mapcar (lambda (name)
-               (cons name (target-sml-symbol name)))
+               (cons name (current-binding-symbol name)))
              (declarations-bound-names (third dec))))
     (otherwise
      (mapcar (lambda (name)
-               (cons name (target-sml-symbol name)))
+               (cons name (current-binding-symbol name)))
              (declaration-direct-bound-names dec)))))
 
 (defun declaration-constructor-symbol-bindings (dec)
@@ -2210,5 +2360,7 @@ environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
 
 (defun compile-program (ast)
   (if (eq (car ast) :program)
-      `(progn ,@(compile-program-decls (cdr ast)))
+      (let ((*sml-unit-cells* (make-hash-table :test #'equal))
+            (*sml-unit-cell-counts* (make-hash-table :test #'equal)))
+        `(progn ,@(compile-program-decls (cdr ast))))
       (error "Not a program AST.")))

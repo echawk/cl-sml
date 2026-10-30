@@ -320,6 +320,10 @@ is discarded otherwise.")
         (delete-file artifact)))))
 
 (defun load-sml-file (pathname &key package (compile t))
+  (with-sml-cell-reservations
+    (load-sml-file-1 pathname package compile)))
+
+(defun load-sml-file-1 (pathname package compile)
   (multiple-value-bind (form target-package declarations)
       (compile-sml-file pathname :package package)
     (values target-package
