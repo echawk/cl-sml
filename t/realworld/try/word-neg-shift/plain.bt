@@ -1,0 +1,8 @@
+RUNTIME
+TYPE-ERROR: The value
+              2
+            is not of type
+              LIST
+
+cl-sml frames (innermost first):
+  CL-SML::SML-TUPLE-FIRST

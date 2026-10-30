@@ -9,7 +9,7 @@
 (in-suite cl-sml-compiler-suite)
 
 (test compile-expression-string-emits-expected-cl
-  (is (equal '(funcall (funcall #'cl-sml::sml-+ 1) 2)
+  (is (equal '(cl-sml::sml-+ 1 2)
              (cl-sml:compile-sml-expression-string "1 + 2"
                                                    :package "SML.COMPILER-TEST"))))
 
@@ -67,10 +67,16 @@
               :filename filename
               :cause "rejected by test checker")))))
 
-(test compile-functor-argument-value-bindings-tolerate-whitespace
-  (is (equal '(("compare" . "TyName.compare"))
-             (cl-sml::functor-argument-value-bindings
-              "(type ord_key = TyName.TyName; val  compare = TyName.compare)"))))
+(test compile-functor-argument-structure-expressions
+  ;; A structure identifier is passed by name; other arguments become
+  ;; declarations of an argument module.
+  (is (equal "TyName"
+             (cl-sml::functor-argument-structure-name '(:str-id "TyName"))))
+  (is (null (cl-sml::functor-argument-structure-name
+             '(:struct ((:val (:pat-var "compare") (:var "TyName.compare")))))))
+  (is (equal '((:val (:pat-var "compare") (:var "TyName.compare")))
+             (cl-sml::sml-strexp-body-decs
+              '(:struct ((:val (:pat-var "compare") (:var "TyName.compare"))))))))
 
 (test compile-literal-case-uses-native-common-lisp-case
   (let ((form (cl-sml:compile-sml-expression-string
@@ -83,6 +89,19 @@
     (is (eq 'otherwise (first (fifth form))))
     (is (search "INVOKE-SML-CASE-ACTION"
                 (write-to-string form :pretty nil)))))
+
+(test compile-self-tail-calls-as-jumps
+  (flet ((compiled (source)
+           (write-to-string (cl-sml:compile-sml-declarations-string
+                             source :package "SML.COMPILER-TEST")
+                            :pretty nil)))
+    (let ((looping (compiled "fun loopDown 0 acc = acc
+                                | loopDown n acc = loopDown (n - 1) (acc + n);"))
+          (recursive (compiled "fun recurDown 0 = 0
+                                  | recurDown n = 1 + recurDown (n - 1);")))
+      (is (search "TAGBODY" looping))
+      (is (search "(GO " looping))
+      (is (not (search "TAGBODY" recursive))))))
 
 (test compile-large-tuple-case-hoists-branch-actions
   (let* ((source

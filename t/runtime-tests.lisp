@@ -1,7 +1,7 @@
 (defpackage #:cl-sml-runtime-tests
   (:use #:cl #:fiveam #:cl-sml)
   (:shadow #:sml-value)
-  (:import-from #:esrap #:parse))
+  )
 
 (in-package #:cl-sml-runtime-tests)
 
@@ -17,7 +17,7 @@
 
 (defun eval-sml-expr (source)
   (let ((cl-sml::*sml-package* (cl-sml::ensure-sml-package *test-sml-package*)))
-    (eval (cl-sml::compile-expr (parse 'cl-sml::sml-expr source)))))
+    (eval (cl-sml::compile-expr (cl-sml:parse-sml-expression source)))))
 
 (defun sml-symbol (name &optional (package *test-sml-package*))
   (find-symbol name package))
@@ -30,14 +30,14 @@
 
 (test runtime-list-and-equality-functions
   (is (equal '(1 2 3 4)
-             (funcall (funcall #'cl-sml::sml-@ '(1 2)) '(3 4))))
+             (cl-sml::sml-@ '(1 2) '(3 4))))
   (is (eql 10 (cl-sml::sml-hd '(10 20 30))))
   (is (equal '(20 30) (cl-sml::sml-tl '(10 20 30))))
   (is (eql 3 (cl-sml::sml-length '(a b c))))
   (is (eq t (cl-sml::sml-null nil)))
   (is (equal '(3 2 1) (cl-sml::sml-rev '(1 2 3))))
-  (is (eq t (funcall (funcall #'cl-sml::sml-= '(1 2)) '(1 2))))
-  (is (eq t (funcall (funcall #'cl-sml::sml-<> '(1 2)) '(2 1)))))
+  (is (eq t (cl-sml::sml-= '(1 2) '(1 2))))
+  (is (eq t (cl-sml::sml-<> '(1 2) '(2 1)))))
 
 (test runtime-pervasive-option-constructors
   (let* ((package (cl-sml::ensure-sml-package "SML.OPTION-BASIS-TEST"))
@@ -54,9 +54,9 @@
   (is (equal '(2 3 4)
              (funcall (cl-sml::sml-map (lambda (x) (+ x 1))) '(1 2 3))))
   (is (= 6
-         (funcall (funcall (cl-sml::sml-foldl #'cl-sml::sml-+) 0) '(1 2 3))))
+         (funcall (funcall (cl-sml::sml-foldl #'cl-sml::sml-op-+) 0) '(1 2 3))))
   (is (= 6
-         (funcall (funcall (cl-sml::sml-foldr #'cl-sml::sml-+) 0) '(1 2 3))))
+         (funcall (funcall (cl-sml::sml-foldr #'cl-sml::sml-op-+) 0) '(1 2 3))))
   (let ((tuple-step
           (lambda (pair)
             (+ (second pair) (* 10 (third pair))))))
@@ -72,12 +72,9 @@
                          (lambda (x) (+ x 1))
                          (lambda (x) (* x 2))))
                   10)))
-  (let ((wrapped (cl-sml::sml-tuple-or-curried-binary
-                  (lambda (x)
-                    (lambda (y)
-                      (+ x y))))))
-    (is (= 5 (funcall wrapped (list :tuple 2 3))))
-    (is (= 5 (funcall (funcall wrapped 2) 3)))))
+  ;; Binary operators are two-argument primitives and pair-taking values.
+  (is (= 5 (cl-sml::sml-+ 2 3)))
+  (is (= 5 (cl-sml::sml-op-+ (list :tuple 2 3)))))
 
 (test runtime-string-and-char-functions
   (is (string= "abcd" (cl-sml::sml-concat '("ab" "cd"))))
@@ -87,8 +84,8 @@
   (is (= 65 (cl-sml::sml-ord #\A)))
   (is (char= #\A (cl-sml::sml-chr 65)))
   (is (string= "Z" (cl-sml::sml-str #\Z)))
-  (is (eq t (funcall (funcall #'cl-sml::sml-< #\A) #\B)))
-  (is (eq t (funcall (funcall #'cl-sml::sml-< "ab") "ac")))
+  (is (eq t (cl-sml::sml-< #\A #\B)))
+  (is (eq t (cl-sml::sml-< "ab" "ac")))
   (is (= 7 (eval-sml-expr "#2 (\"\", 7)"))))
 
 (test runtime-sequence-subscript-raises-sml-exception
@@ -124,7 +121,7 @@
 (test runtime-reference-functions
   (let ((cell (cl-sml::sml-ref 10)))
     (is (= 10 (cl-sml::sml-deref cell)))
-    (is (equal '(:tuple) (funcall (cl-sml::sml-assign cell) 42)))
+    (is (equal '(:tuple) (cl-sml::sml-assign cell 42)))
     (is (= 42 (cl-sml::sml-deref cell)))))
 
 (test runtime-text-io-output-primitives
@@ -260,8 +257,9 @@
    "val appended = [1, 2] @ [3, 4];
     val same_list = [1, 2] = [1, 2];
     val different_list = [1, 2] <> [2, 1];
-    val folded_left = foldl (fn acc => fn x => acc + x) 0 [1, 2, 3, 4];
-    val folded_right = foldr (fn x => fn acc => x + acc) 0 [1, 2, 3, 4];
+    val folded_left = foldl (fn (x, acc) => acc + x) 0 [1, 2, 3, 4];
+    val folded_right = foldr (fn (x, acc) => x + acc) 0 [1, 2, 3, 4];
+    val folded_op = foldl (op +) 0 [1, 2, 3, 4];
     val reversed = rev [1, 2, 3];
     val mapped = map (fn x => x + 1) [1, 2, 3];
     val composed = (op o (fn x => x + 1, fn x => x * 2)) 10;
@@ -280,6 +278,7 @@
     val rounded = round 3.2;
     val realed = real 7;
     val pairPlus = fn (x, y) => x + y;
+    infix %%;
     val op%% = pairPlus;
     val tupled_infix_alias = 2 %% 3;
     val ref_result =
@@ -294,6 +293,7 @@
   (is (eq t (sml-value "different_list")))
   (is (= 10 (sml-value "folded_left")))
   (is (= 10 (sml-value "folded_right")))
+  (is (= 10 (sml-value "folded_op")))
   (is (equal '(3 2 1) (sml-value "reversed")))
   (is (equal '(2 3 4) (sml-value "mapped")))
   (is (= 21 (sml-value "composed")))
@@ -317,12 +317,16 @@
 (test integration-infix-fun-supports-prefix-tuple-call
   (let ((*test-sml-package* "SML.INFIX-FUN-PREFIX-TUPLE-TEST"))
     (eval-sml-program
-     "fun (a, b) plus (c, d) = (a + c, b + d);
+     "infix plus;
+      fun (a, b) plus (c, d) = (a + c, b + d);
       fun pickUpper (T, F, G, E) = E;
-      val prefix_tuple_sum = plus((1, 2), (3, 4));
+      val prefix_tuple_sum = op plus ((1, 2), (3, 4));
+      val infix_tuple_sum = (1, 2) plus (3, 4);
       val uppercase_tuple_var = pickUpper (1, 2, 3, 4);")
     (is (equal '(:tuple 4 6)
                (sml-value "prefix_tuple_sum" *test-sml-package*)))
+    (is (equal '(:tuple 4 6)
+               (sml-value "infix_tuple_sum" *test-sml-package*)))
     (is (= 4 (sml-value "uppercase_tuple_var" *test-sml-package*)))))
 
 (test integration-parenthesized-infix-fun-with-trailing-parameter
@@ -860,12 +864,175 @@
 
 (test word-literal-negation-is-modular
   (eval-sml-program "val maxWord = ~(0w1); val sixteen = 0w16;")
-  (is (= most-positive-fixnum (sml-value "maxWord")))
+  (is (= cl-sml::+sml-word-mask+ (sml-value "maxWord")))
   (is (= 16 (sml-value "sixteen"))))
 
 (test real-basis-primitives
   (is (equal "3.14" (cl-sml::sml-real-to-string 3.14d0)))
   (is (equal "1.0E10" (cl-sml::sml-real-to-string 1d10)))
   (is (equal "~2.5" (cl-sml::sml-real-to-string -2.5d0)))
+  (is (equal "0.1" (cl-sml::sml-real-to-string 0.1d0)))
+  (is (equal "~0.25" (cl-sml::sml-real-to-string -0.25d0)))
   (is (= 4 (funcall (cl-sml::sml-basis-primitive "Real.round") 3.5d0)))
   (is (= 2 (funcall (cl-sml::sml-basis-primitive "Real.round") 2.5d0))))
+
+;;; Results must not depend on the host Common Lisp.
+
+(test self-tail-calls-do-not-grow-the-stack
+  ;; ECL and ABCL do not merge tail calls: without the compiler's loop these
+  ;; recursions overflow their stacks.  ABCL interprets EVALed code, expanding
+  ;; macros on every call, so the counts are kept small: its interpreter runs
+  ;; out of stack at about a thousand nested SML calls.
+  (eval-sml-program
+   "fun tailCount 0 acc = acc | tailCount n acc = tailCount (n - 1) (acc + 1);
+    val tailCounted = tailCount 20000 0;
+    exception TailStop of int;
+    fun tailHandler n =
+      (raise TailStop n) handle TailStop 0 => 0 | TailStop k => tailHandler (k - 1);
+    val tailHandled = tailHandler 5000;
+    fun tailOrelse n = n = 0 orelse tailOrelse (n - 1);
+    val tailOrelseResult = tailOrelse 20000;")
+  (is (= 20000 (sml-value "tailCounted")))
+  (is (= 0 (sml-value "tailHandled")))
+  (is (eq t (sml-value "tailOrelseResult"))))
+
+(test self-tail-calls-in-compiled-files
+  (let ((package-name "SML.TAIL-CALL-TEST"))
+    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/tail-calls.sml")
+                          :package package-name)
+    (is (= 1000000 (sml-value "counted" package-name)))
+    (is (= 500000500000 (sml-value "summed" package-name)))
+    (is (string= "done" (sml-value "countedDown" package-name)))))
+
+(test self-tail-calls-keep-partial-applications-and-closures-apart
+  (eval-sml-program
+   "fun tailFrom 0 acc = acc | tailFrom n acc = tailFrom (n - 1) (acc + 1);
+    val tailFrom3 = tailFrom 3;
+    val tailPartial = (tailFrom3 0, tailFrom3 10);
+    fun tailThunks 0 acc = acc
+      | tailThunks n acc = tailThunks (n - 1) ((fn () => n) :: acc);
+    val tailThunkValues = map (fn f => f ()) (tailThunks 3 []);
+    fun tailShadow 0 = 0
+      | tailShadow n = let fun tailShadow m = m * 100 in tailShadow n end;
+    val tailShadowed = tailShadow 3;
+    fun tailGuarded 0 = 0 | tailGuarded n = tailGuarded (n - 1) handle Div => ~1;
+    val tailGuardedResult = tailGuarded 100;")
+  (is (equal '(:tuple 3 13) (sml-value "tailPartial")))
+  (is (equal '(1 2 3) (sml-value "tailThunkValues")))
+  (is (= 300 (sml-value "tailShadowed")))
+  (is (= 0 (sml-value "tailGuardedResult"))))
+
+(test word-and-int-limits-do-not-depend-on-the-host
+  (flet ((primitive (name &rest args)
+           (apply (cl-sml::sml-basis-primitive name) args)))
+    (is (= 62 (primitive "Word.wordSize")))
+    (is (= (1- (expt 2 62)) (cdr (primitive "Int.maxInt"))))
+    (is (= (- (expt 2 62)) (cdr (primitive "Int.minInt"))))
+    (is (= (1- (expt 2 62)) (primitive "Word.fromInt" -1)))
+    (is (= -1 (primitive "Word.toIntX" (1- (expt 2 62)))))
+    (is (= (1- (expt 2 62)) (primitive "Word.notb" 0)))
+    (is (= 0 (primitive "Word.<<" (list :tuple 1 62))))
+    (is (= (expt 2 61) (primitive "Word.<<" (list :tuple 1 61))))
+    (is (= 1 (primitive "Word.>>" (list :tuple (expt 2 61) 61))))
+    (is (= (1- (expt 2 62)) (primitive "Word.~>>" (list :tuple (expt 2 61) 61))))
+    (is (= -1 (primitive "Word8.toIntX" 255)))
+    (is (= (1- (expt 2 62)) (primitive "Word8.toLargeX" 255)))
+    (is (= #xfe (primitive "Word8.<<" (list :tuple #xff 1))))
+    (is (= #xc0 (primitive "Word8.~>>" (list :tuple #x80 1))))))
+
+(test char-chr-raises-chr-outside-8-bit-codes
+  (is (char= (code-char 255) (cl-sml::sml-chr 255)))
+  (dolist (code (list -1 256 #x10000))
+    (handler-case
+        (progn (cl-sml::sml-chr code)
+               (fail "chr ~D did not raise Chr" code))
+      (cl-sml::sml-raised-exception (condition)
+        (is (string= "Chr"
+                     (cl-sml::sml-exception-name
+                      (cl-sml::sml-exception-value condition))))))))
+
+(test real-arithmetic-is-ieee-on-every-host
+  ;; SBCL and ECL trap by default; ABCL traps only in EXP and EXPT.
+  (let ((nan (cl-sml::sml-nan))
+        (infinity (cl-sml::sml-real-infinity nil))
+        (negative-infinity (cl-sml::sml-real-infinity t)))
+    (is (cl-sml::sml-real-nan-p (cl-sml::sml-real-quotient 0d0 0d0)))
+    (is (eql infinity (cl-sml::sml-real-quotient 1d0 0d0)))
+    (is (eql negative-infinity (cl-sml::sml-real-quotient 1d0 -0d0)))
+    (is (eql infinity (cl-sml::sml-* most-positive-double-float 2d0)))
+    (is (eql negative-infinity
+             (cl-sml::sml-- (- most-positive-double-float) most-positive-double-float)))
+    (is (cl-sml::sml-real-nan-p (cl-sml::sml-sqrt -1d0)))
+    (is (eql negative-infinity (cl-sml::sml-ln 0d0)))
+    (is (eql infinity (cl-sml::sml-exp 1000d0)))
+    (is (eql infinity (funcall (cl-sml::sml-basis-primitive "Math.pow")
+                               (list :tuple 10d0 400d0))))
+    (is (eql infinity (cl-sml::sml-real (expt 10 400))))
+    ;; Comparisons with a NaN are false.
+    (is (null (cl-sml::sml-< nan 1d0)))
+    (is (null (cl-sml::sml->= nan 1d0)))
+    (is (null (cl-sml::sml-<= 1d0 nan)))
+    (is (null (cl-sml::sml-real->= nan 1d0)))
+    (eval-sml-program "val nanOrdered = let val n = 0.0 / 0.0
+                                        in n < 1.0 orelse n >= 1.0 end;")
+    (is (null (sml-value "nanOrdered")))
+    (is (null (funcall (cl-sml::sml-basis-primitive "Real.==") (list :tuple nan nan))))
+    (is (eq t (funcall (cl-sml::sml-basis-primitive "Real.?=") (list :tuple nan 1d0))))
+    (is (string= "nan" (cl-sml::sml-real-to-string nan)))
+    (flet ((raised (function value)
+             (handler-case (progn (funcall (cl-sml::sml-basis-primitive function) value) nil)
+               (cl-sml::sml-raised-exception (condition)
+                 (cl-sml::sml-exception-name (cl-sml::sml-exception-value condition))))))
+      (is (equal "Domain" (raised "Real.trunc" nan)))
+      (is (equal "Overflow" (raised "Real.floor" infinity))))
+    (is (string= "~inf" (cl-sml::sml-real-to-string negative-infinity)))))
+
+(test real-to-string-digits-are-exact-and-host-independent
+  ;; The digits come from integer arithmetic, not from the host's FORMAT or
+  ;; reader, whose float conversions differ between implementations.
+  (flet ((digits (q)
+           ;; Not literals: ECL's reader is off by an ulp for some of them.
+           (multiple-value-list
+            (cl-sml::portable-flonum-to-digits
+             (if (floatp q) q (cl-sml::portable-rational-to-double q))))))
+    (is (equal '(0 "1") (digits 1/10)))
+    (is (equal '(0 "3333333333333333") (digits 1/3)))
+    (is (equal '(23 "1") (digits (expt 10 22))))
+    (is (equal '(24 "1") (digits (expt 10 23))))
+    (is (equal '(-323 "5") (digits least-positive-double-float)))
+    (is (equal '(-307 "22250738585072014") (digits least-positive-normalized-double-float)))
+    (is (equal '(309 "17976931348623157") (digits most-positive-double-float))))
+  (is (equal "5.0E~324" (cl-sml::sml-real-to-string least-positive-double-float)))
+  ;; Each result lies within half an ulp of the value, so it reads back as
+  ;; the same double.
+  (let ((state 42)
+        (misses 0))
+    (dotimes (i 2000)
+      (setf state (ldb (byte 64 0) (+ (* state 6364136223846793005) 1442695040888963407)))
+      (let* ((exponent (ldb (byte 11 52) state))
+             (fraction (ldb (byte 52 0) state)))
+        (unless (= exponent 2047)
+          (let* ((exact (if (zerop exponent)
+                            (* fraction (expt 2 -1074))
+                            (* (+ fraction (expt 2 52)) (expt 2 (- exponent 1075)))))
+                 (value (coerce exact 'double-float))
+                 (ulp (expt 2 (max -1074 (nth-value 1 (integer-decode-float value))))))
+            (when (plusp exact)
+              (multiple-value-bind (k digits) (cl-sml::portable-flonum-to-digits value)
+                (let ((decimal (* (parse-integer digits)
+                                  (expt 10 (- k (length digits))))))
+                  (unless (<= (abs (- decimal (rational value))) (/ ulp 2))
+                    (incf misses)))))))))
+    (is (= 0 misses))))
+
+(test rational-to-double-rounds-exactly
+  (flet ((exact (q) (rational (cl-sml::portable-rational-to-double q))))
+    (is (= 3602879701896397/36028797018963968 (exact 1/10)))
+    (is (= 99999999999999991611392 (exact (expt 10 23))))
+    (is (= (* 2024 (expt 2 -1074)) (exact (/ 1 (expt 10 320)))))
+    (is (= -1/2 (exact -1/2)))
+    ;; Ties go to the even neighbour.
+    (is (= (expt 2 53) (exact (1+ (expt 2 53)))))
+    (is (= (+ (expt 2 53) 4) (exact (+ (expt 2 53) 3))))
+    (is (null (cl-sml::portable-rational-to-double (expt 10 400))))
+    (is (eql (cl-sml::sml-real-infinity t) (cl-sml::sml-real (- (expt 10 400)))))))

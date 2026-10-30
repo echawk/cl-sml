@@ -1,0 +1,1 @@
+PARSE	PARSE	0.01		0	ESRAP-PARSE-ERROR: At end of input    val _ = print (Bool.toString (F.x = F.x) ^ "\n")      ^ (Line 4, Column 0, Position 130)  In context SML-FUNCTOR:  While parsing SML-FUNCTOR. Expected:       the character = (EQUALS_SIGN)   or any character   or <end of input>

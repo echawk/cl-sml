@@ -1,0 +1,42 @@
+program	ref	ref_s	plain-shim	p_comp_s	p_run_s	p_first_error	checked-shim	c_comp_s	c_run_s	c_first_error
+bm-aobench	poly	3.68	RUNTIME	0.19		UNBOUND-VARIABLE: The variable SML.RW::|Unsafe.Array.sub| is unbound.	CHECKER	0.21		HaMLet: 5.24-5.33: unknown structure RealArray
+bm-barnes-hut	none!	0.13	PARSE/noref	0.37		ESRAP-PARSE-ERROR: At      (* evaluate grav field at a given particle. *)       fun hackGrav {body as S.Body{p	CHECKER/noref	7.48		HaMLet: 152.27-152.41: unknown identifier Real.realFloor
+bm-binary-trees	poly	0.14	PASS	0.06	0.03		PASS	2.64	0.03	
+bm-black-scholes	poly	2.37	PARSE	0.12		ESRAP-PARSE-ERROR: At           datatype option_ty = Put | Call                                   ^ (Line 118,	PARSE	3.29		ESRAP-PARSE-ERROR: At           datatype option_ty = Put | Call                                   ^ (Line 118,
+bm-boyer	poly	0.36	PARSE	0.03		ESRAP-PARSE-ERROR: At           type head = { name: stri       ^ (Line 144, Column 4, Position 3880)  In conte	PARSE	16.77		ESRAP-PARSE-ERROR: At           type head = { name: stri       ^ (Line 144, Column 4, Position 3880)  In conte
+bm-cml-sieve	mlton	0.15	RUNTIME	0.10		UNBOUND-VARIABLE: The variable SML.RW::|SMLofNJ.Cont.callcc| is unbound.	CHECKER	2.57		HaMLet: 175.22-175.39: unknown type SMLofNJ.Cont.cont
+bm-count-graphs	poly	0.99	PARSE	0.06		ESRAP-PARSE-ERROR: At     *)   fun 'a foldOverPermutations        ^ (Line 177, Column 4, Position 5476)  In co	PARSE	11.11		ESRAP-PARSE-ERROR: At     *)   fun 'a foldOverPermutations        ^ (Line 177, Column 4, Position 5476)  In co
+bm-delta-blue	poly!	0.24	PARSE	0.12		ESRAP-PARSE-ERROR: At           val new : unit -> t          ^ (Line 407, Column 4, Position 12791)  In contex	PARSE	33.59		ESRAP-PARSE-ERROR: At           val new : unit -> t          ^ (Line 407, Column 4, Position 12791)  In contex
+bm-dlx	none!	0.25	RUNTIME/noref	5.87	0.02	UNBOUND-VARIABLE: The variable SML.RW::|MEM.InitMemory| is unbound.	CHECKER/noref	6.96		HaMLet: 2871.10-2873.7: syntax error: deleting  END FUN
+bm-f-arith	poly	1.44	TIMEOUT/runtime	0.04	120.49	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.	TIMEOUT/runtime	1.04	118.95	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
+bm-fannkuch	poly	0.14	PASS	0.06	12.40		PASS	1.40	9.27	
+bm-fft	poly	100.85	RUNTIME	0.13		UNBOUND-VARIABLE: The variable SML.RW::|R.Math.pi| is unbound.	CHECKER	0.16		HaMLet: 5.24-5.33: unknown structure RealArray
+bm-id-ray	mlton	0.91	RUNTIME	0.18		SIMPLE-TYPE-ERROR: Value of 1.0d0 in                    (SB-KERNEL:%COERCE-CALLABLE-FOR-CALL 1.0d0)           	CHECKER	17.47		HaMLet: 365.30-365.44: warning: pattern not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-
+bm-iter-pidigits	poly	0.21	RUNTIME	0.04	0.01	UNBOUND-VARIABLE: The variable SML.RW::|IntInf.quot| is unbound.	CHECKER	0.19		HaMLet: 124.24-124.35: unknown identifier IntInf.quot
+bm-kcfa	poly	1.11	PARSE	0.02		ESRAP-PARSE-ERROR: At      exception Impossible of string     fun failure {module : string, func : string,    	PARSE	67.15		ESRAP-PARSE-ERROR: At      exception Impossible of string     fun failure {module : string, func : string,    
+bm-knuth-bendix	poly	0.28	PASS	0.30	0.01		PASS	31.61	0.04	
+bm-lexgen	poly	0.46	PARSE	0.03		ESRAP-PARSE-ERROR: At      let fun f empty = tree(key,RED,empty,empty)           | f (tree(k,BLACK,l,r)) =    	CHECKER	7.81		UNBOUND-VARIABLE: The variable SML.HAMLET-TYPE-CHECKER::|recbind| is unbound.
+bm-life	poly	0.14	PARSE	0.06		ESRAP-PARSE-ERROR: At         in         abstype generation = GEN         ^ (Line 196, Column 6, Position 5745	PARSE	8.73		ESRAP-PARSE-ERROR: At         in         abstype generation = GEN         ^ (Line 196, Column 6, Position 5745
+bm-logic	poly	0.47	PASS	0.28	33.31		PASS	15.01	21.66	
+bm-mandelbrot	poly	29.98	TIMEOUT/runtime	0.05	120.01	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.	TIMEOUT/runtime	0.72	119.31	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
+bm-mandelbrot-rat	poly	7.08	RUNTIME	0.06		TYPE-ERROR: The value               -2             is not of type               (OR FUNCTION SYMBOL)	RUNTIME	4.60		TYPE-ERROR: The value               -2             is not of type               (OR FUNCTION SYMBOL)
+bm-mazefun	poly	0.14	PASS	0.12	0.03		PASS	8.39	3.27	
+bm-mc-ray	poly	25.87	PARSE	0.07		ESRAP-PARSE-ERROR: At           val fromRGB : RGB.t -> t       ^ (Line 257, Column 4, Position 6593)  In conte	CHECKER	29.81		HaMLet: 839.25-839.33: type mismatch on application
+bm-minimax	poly	1.19	PARSE	0.08		ESRAP-PARSE-ERROR: At           datatype player = X | O                              ^ (Line 124, Column 24, P	PARSE	4.97		ESRAP-PARSE-ERROR: At           datatype player = X | O                              ^ (Line 124, Column 24, P
+bm-mlyacc	poly	0.89	PARSE	0.10		ESRAP-PARSE-ERROR: At     type rhsData = {rhs:symbol list,code:string, prec:symbol option} list    datatype ru	TIMEOUT/checker	120.76		RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
+bm-nbody	poly	0.14	RUNTIME	0.08		UNBOUND-VARIABLE: The variable SML.RW::|e| is unbound.	CHECKER	3.13		HaMLet: 131.17-131.20: warning: pattern not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-
+bm-nucleic	mlton	0.15	PASS	29.93	0.13		CHECKER	43.62		HaMLet: 133.6-133.51: type mismatch on application
+bm-pidigits	poly	0.15	PARSE	0.04		ESRAP-PARSE-ERROR: At        fun stream {               next : 'b -> 'c,                       ^ (Line 148, Co	CHECKER	0.96		HaMLet: 166.16-166.26: unknown type IntInf.int
+bm-pingpong	mlton	0.14	RUNTIME	0.08		UNBOUND-VARIABLE: The variable SML.RW::|SMLofNJ.Cont.callcc| is unbound.	CHECKER	2.63		HaMLet: 175.22-175.39: unknown type SMLofNJ.Cont.cont
+bm-plclub-ray	mlton	0.14	PARSE	0.26		ESRAP-PARSE-ERROR: At          bool           (* Isometry? *)     | OUnion of obj * obj        ^ (Line 964, Co	CHECKER	17.65		HaMLet: 6.26-6.37: unknown type Word64.word
+bm-ratio-regions	poly	0.26	TIMEOUT/runtime	0.53	119.63	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.	TIMEOUT/runtime	29.03	91.82	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
+bm-ray	mlton	0.15	PARSE	0.11		ESRAP-PARSE-ERROR: At      (* normal vector to sphere *)       fun normalSphere (Visible{h, s as Sphere{c, ...	CHECKER	5.96		HaMLet: 274.29-274.45: unknown identifier TextIO.lookahead
+bm-safe-for-space	poly	0.16	PASS	0.04	0.04		PASS	1.14	0.07	
+bm-sat	mlton	0.16	PASS	0.08	0.01		CHECKER	0.08		TYPE-ERROR: The value               #S(CL-SML::SML-EXCEPTION-TAG :NAME "Subscript")             is not of type
+bm-simple	mlton	8.34	TIMEOUT/runtime	11.41	108.57	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.	CHECKER	39.07		HaMLet: 382.38-382.58: type mismatch on application
+bm-smith-nf	poly	5.33	RUNTIME	0.28		UNBOUND-VARIABLE: The variable SML.RW::|IntInf.fromInt| is unbound.	CHECKER	19.21		HaMLet: 378.11-378.25: unknown identifier IntInf.fromInt
+bm-stream-sieve	poly	0.16	PASS	0.07	0.01		PASS	0.96	0.03	
+bm-tsp	poly	0.26	PARSE	4.11		ESRAP-PARSE-ERROR: At           datatype axis = X_AXIS | Y_AXIS                                 ^ (Line 474, C	CHECKER	7.11		HaMLet: 175.16-175.48: warning: match not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-sm
+bm-twenty-four	poly	0.15	PASS	0.14	0.01		PASS	7.62	0.19	
+bm-tyan	poly	0.26	RUNTIME	0.09		SIMPLE-ERROR: All clauses in a fun binding must name the same function: (("~"                                 	RUNTIME	54.57		SIMPLE-ERROR: All clauses in a fun binding must name the same function: (("~"                                 
+bm-vliw	poly	1.54	PARSE	0.74		ESRAP-PARSE-ERROR: At            datatype codetypes =               ASSIGNMENT of operation                   	CHECKER	34.89		UNBOUND-VARIABLE: The variable SML.HAMLET-TYPE-CHECKER::|recbind| is unbound.

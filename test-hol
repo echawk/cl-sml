@@ -5,8 +5,35 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$ROOT"
 
 export XDG_CACHE_HOME="${CL_SML_CACHE_HOME:-$ROOT/.cache}"
-"${SBCL:-sbcl}" --eval '(handler-case (load #P"t/hol-smoke.lisp") (error (condition) (format *error-output* "HOL smoke failure: ~A~%" condition) (sb-ext:exit :code 1)))' --eval "(quit)"
+
+# Test this checkout's cl-sml.  Set LISP=ecl or LISP=abcl to use another Lisp.
+LISP=${LISP:-${SBCL:-sbcl}}
+REGISTER="(push #p\"$ROOT/\" asdf:*central-registry*)"
+
+run () {
+    FORM="(handler-case (load #P\"$1\") (error (condition) (format *error-output* \"$2 failure: ~A~%\" condition) (uiop:quit 1)))"
+    case "$(basename "$LISP")" in
+        sbcl)
+            "$LISP" --dynamic-space-size 4GB --control-stack-size 1GB \
+                --non-interactive \
+                --eval '(load "~/.sbclrc")' --eval "$REGISTER" --eval "$FORM"
+            ;;
+        ecl)
+            "$LISP" --c-stack 1073741824 --lisp-stack 16777216 \
+                --frame-stack 1048576 \
+                -eval "$REGISTER" -eval "$FORM" -eval '(quit)'
+            ;;
+        abcl)
+            "$LISP" --batch --eval "$REGISTER" --eval "$FORM" --eval '(quit)'
+            ;;
+        *)
+            echo "Unsupported Common Lisp implementation: $LISP" >&2
+            exit 2
+            ;;
+    esac
+}
+
+run t/hol-smoke.lisp "HOL smoke"
 
 # The same and more HOL sources, checked by HaMLet (needs a deep stack).
-exec "${SBCL:-sbcl}" --control-stack-size 1GB --non-interactive \
-    --eval '(handler-case (load #P"t/hol-checked.lisp") (error (condition) (format *error-output* "HOL checked failure: ~A~%" condition) (sb-ext:exit :code 1)))'
+run t/hol-checked.lisp "HOL checked"

@@ -1,0 +1,119 @@
+bm-aobench                         poly   4.73  | RUNTIME         0.52         | CHECKER         0.72         | RUNTIME        | CHECKER         0.21         
+bm-barnes-hut                      none!  0.27  | PARSE/noref     0.62         | CHECKER/noref   8.45         | PARSE/noref    | CHECKER/noref   7.48         
+bm-binary-trees                    poly   0.17  | PASS            0.06   0.01  | CHECKER         0.33         | PASS           | PASS            2.64   0.03  
+bm-black-scholes                   poly   4.32  | PARSE           0.26         | CHECKER         0.46         | PARSE          | PARSE           3.29         
+bm-boyer                           poly   0.48  | PARSE           0.05         | CHECKER         12.14        | PARSE          | PARSE           16.77        
+bm-cml-sieve                       mlton  0.16  | RUNTIME         0.10         | CHECKER         0.68         | RUNTIME        | CHECKER         2.57         
+bm-count-graphs                    poly   1.33  | PARSE           0.09         | CHECKER         3.79         | PARSE          | PARSE           11.11        
+bm-delta-blue                      poly!  0.27  | PARSE           0.29         | CHECKER         5.81         | PARSE          | PARSE           33.59        
+bm-dlx                             none!  0.26  | RUNTIME/noref   5.03   0.01  | CHECKER/noref   11.28        | RUNTIME/noref  | CHECKER/noref   6.96         
+bm-f-arith                         poly   1.53  | TIMEOUT/runtime 0.15   127.34| CHECKER         0.20         | TIMEOUT/runtime| TIMEOUT/runtime 1.04   118.95
+bm-fannkuch                        poly   0.15  | PASS            0.13   19.01 | CHECKER         0.30         | PASS           | PASS            1.40   9.27  
+bm-fft                             poly   65.53 | RUNTIME         0.21         | CHECKER         0.32         | RUNTIME        | CHECKER         0.16         
+bm-id-ray                          mlton  0.91  | RUNTIME         0.42         | CHECKER         6.18         | RUNTIME        | CHECKER         17.47        
+bm-iter-pidigits                   poly   0.15  | RUNTIME         0.07   0.02  | CHECKER         0.36         | RUNTIME        | CHECKER         0.19         
+bm-kcfa                            poly   1.01  | PARSE           0.03         | CHECKER         14.50        | PARSE          | PARSE           67.15        
+bm-knuth-bendix                    poly   0.31  | PASS            0.80   0.04  | CHECKER         6.86         | PASS           | PASS            31.61  0.04  
+bm-lexgen                          poly   0.37  | PARSE           0.07         | CHECKER         6.49         | PARSE          | CHECKER         7.81         
+bm-life                            poly   0.15  | PARSE           0.13         | CHECKER         0.47         | PARSE          | PARSE           8.73         
+bm-logic                           poly   0.50  | PASS            0.68   33.49 | CHECKER         5.28         | PASS           | PASS            15.01  21.66 
+bm-mandelbrot                      poly   22.56 | TIMEOUT/runtime 0.07   120.12| CHECKER         0.30         | TIMEOUT/runtime| TIMEOUT/runtime 0.72   119.31
+bm-mandelbrot-rat                  poly   7.10  | RUNTIME         0.12         | CHECKER         0.43         | RUNTIME        | RUNTIME         4.60         
+bm-mazefun                         poly   0.22  | PASS            0.17   0.05  | CHECKER         0.34         | PASS           | PASS            8.39   3.27  
+bm-mc-ray                          poly   23.37 | PARSE           0.09         | CHECKER         8.82         | PARSE          | CHECKER         29.81        
+bm-minimax                         poly   0.78  | PARSE           0.28         | CHECKER         0.77         | PARSE          | PARSE           4.97         
+bm-mlyacc                          poly   1.23  | PARSE           0.28         | CHECKER         22.04        | PARSE          | TIMEOUT/checker 120.76       
+bm-nbody                           poly   0.26  | RUNTIME         0.19         | CHECKER         0.49         | RUNTIME        | CHECKER         3.13         
+bm-nucleic                         mlton  0.15  | PASS            25.80  0.22  | CHECKER         20.83        | PASS           | CHECKER         43.62        
+bm-pidigits                        poly   0.16  | PARSE           0.05         | CHECKER         0.44         | PARSE          | CHECKER         0.96         
+bm-pingpong                        mlton  0.15  | RUNTIME         0.11         | CHECKER         0.39         | RUNTIME        | CHECKER         2.63         
+bm-plclub-ray                      mlton  0.15  | PARSE           0.30         | CHECKER         14.47        | PARSE          | CHECKER         17.65        
+bm-ratio-regions                   poly   0.26  | TIMEOUT/runtime 0.53   120.84| CHECKER         5.43         | TIMEOUT/runtime| TIMEOUT/runtime 29.03  91.82 
+bm-ray                             mlton  0.15  | PARSE           0.14         | CHECKER         4.38         | PARSE          | CHECKER         5.96         
+bm-safe-for-space                  poly   0.15  | PASS            0.06   0.05  | CHECKER         0.22         | PASS           | PASS            1.14   0.07  
+bm-sat                             mlton  0.14  | PASS            0.17   0.02  | CHECKER         0.11         | PASS           | CHECKER         0.08         
+bm-simple                          mlton  6.19  | TIMEOUT/runtime 9.40   112.51| CHECKER         5.03         | TIMEOUT/runtime| CHECKER         39.07        
+bm-smith-nf                        poly   5.15  | RUNTIME         0.54         | CHECKER         3.10         | RUNTIME        | CHECKER         19.21        
+bm-stream-sieve                    poly   0.16  | PASS            0.12   0.02  | CHECKER         0.26         | PASS           | PASS            0.96   0.03  
+bm-tsp                             poly   0.25  | PARSE           3.87         | CHECKER         0.58         | PARSE          | CHECKER         7.11         
+bm-twenty-four                     poly   0.26  | PASS            0.31   0.03  | CHECKER         0.33         | PASS           | PASS            7.62   0.19  
+bm-tyan                            poly   0.38  | RUNTIME         0.12         | CHECKER         5.31         | RUNTIME        | RUNTIME         54.57        
+bm-vliw                            poly   1.51  | PARSE           0.87         | CHECKER         19.13        | PARSE          | CHECKER         34.89        
+ln-core-abstype                    poly   0.15  | PARSE           0.01         | PARSE           0.18         | -              | -                            
+ln-core-capture                    poly   10.62 | PASS            78.49        | PASS            114.63       | -              | -                            
+ln-core-datatype-equality          poly   0.15  | WRONG/stdout    0.02         | WRONG/stdout    0.18         | -              | -                            
+ln-core-deephandle                 poly   0.15  | PASS            0.03         | PASS            0.17         | -              | -                            
+ln-core-equality                   mlton  0.16  | PARSE           0.06         | CHECKER         0.07         | -              | -                            
+ln-core-exception                  poly   0.15  | PASS            0.03         | PASS            0.07         | -              | -                            
+ln-core-exception2                 poly   0.15  | PASS            0.02         | PASS            0.07         | -              | -                            
+ln-core-fib_linear                 poly   0.14  | PASS            0.02         | CHECKER         0.03         | -              | -                            
+ln-core-fib_monoid                 poly   0.15  | PASS            0.06         | PASS            0.36         | -              | -                            
+ln-core-fib_slow                   poly   0.15  | PASS            0.03         | PASS            0.12         | -              | -                            
+ln-core-fix_by_datatype            poly   0.15  | PASS            0.03         | PASS            0.13         | -              | -                            
+ln-core-fix_by_ref                 poly   0.16  | PASS            0.09         | PASS            0.15         | -              | -                            
+ln-core-fizzbuzz                   poly   0.16  | PASS            0.04         | CHECKER         0.03         | -              | -                            
+ln-core-fun                        poly   0.15  | RUNTIME         0.01         | RUNTIME         0.20         | -              | -                            
+ln-core-functor1                   poly   0.15  | RUNTIME         0.02         | RUNTIME         0.20         | -              | -                            
+ln-core-functor2                   poly   0.15  | PASS            0.05         | PASS            0.20         | -              | -                            
+ln-core-functor3                   poly   0.16  | PARSE           0.01         | PARSE           0.07         | -              | -                            
+ln-core-functor_exception          poly   0.15  | PASS            0.05         | PASS            0.06         | -              | -                            
+ln-core-functor_exception_2        poly   0.16  | WRONG/stdout    0.04         | WRONG/stdout    0.11         | -              | -                            
+ln-core-listrev                    poly   0.17  | PARSE           0.02         | PARSE           0.36         | -              | -                            
+ln-core-local_datatype             mlton  0.14  | RUNTIME         0.05         | CHECKER         0.02         | -              | -                            
+ln-core-local_exception            poly   0.16  | PASS            0.02         | PASS            0.05         | -              | -                            
+ln-core-opaque1                    poly   0.16  | PASS            0.04         | PASS            0.09         | -              | -                            
+ln-core-opaque2                    poly   0.14  | PASS            0.02         | PASS            0.15         | -              | -                            
+ln-core-open                       poly   0.15  | RUNTIME         0.03         | RUNTIME         0.09         | -              | -                            
+ln-core-parser_combinator          poly   0.14  | RUNTIME         0.40         | CHECKER         5.11         | -              | -                            
+ln-core-prime_as_typevar           poly   0.15  | PARSE           0.02         | PARSE           0.08         | -              | -                            
+ln-core-prime_eratos               poly   0.15  | PASS            0.08         | PASS            0.22         | -              | -                            
+ln-core-prime_trialdiv             poly   0.14  | PASS            0.03         | PASS            0.11         | -              | -                            
+ln-core-signature1                 poly   0.14  | PARSE           0.02         | PARSE           0.11         | -              | -                            
+ln-core-signature2                 poly   0.15  | PARSE           0.02         | PARSE           0.04         | -              | -                            
+ln-core-signature3                 poly   0.15  | PARSE           0.01         | PARSE           0.05         | -              | -                            
+ln-core-signature4                 poly   0.15  | RUNTIME/exn     0.07         | PASS            0.08         | -              | -                            
+ln-core-signature5                 poly   0.15  | PARSE           0.04         | PARSE           0.11         | -              | -                            
+ln-core-val-rec                    poly   0.16  | PASS            0.03         | PASS            0.07         | -              | -                            
+ln-core-val_projection             poly   0.15  | PASS            0.04         | PASS            0.05         | -              | -                            
+ln-core-xorshift64                 poly!  0.16  | RUNTIME/exn     0.02         | RUNTIME/exn     0.18         | -              | -                            
+ln-mlbasis-char                    poly   0.15  | WRONG/stdout    0.04         | WRONG/stdout    0.14         | -              | -                            
+ln-mlbasis-exn-name                poly   0.17  | PASS            0.02         | PASS            0.06         | -              | -                            
+ln-mlbasis-general                 poly   0.15  | RUNTIME         0.13         | RUNTIME         0.26         | -              | -                            
+ln-mlbasis-int-inf                 none!  0.15  | PARSE           0.13         | CHECKER         0.16         | -              | -                            
+ln-mlbasis-int-inf-factorial       poly   1.00  | RUNTIME         0.04         | CHECKER         0.02         | -              | -                            
+ln-mlbasis-int-inf-factorial-hex   poly   1.09  | RUNTIME         0.02         | CHECKER         0.02         | -              | -                            
+ln-mlbasis-int-inf-fib             poly   0.15  | RUNTIME         0.02         | CHECKER         0.03         | -              | -                            
+ln-mlbasis-int-inf-fib-hex         poly   0.14  | RUNTIME         0.02         | CHECKER         0.03         | -              | -                            
+ln-mlbasis-int-inf-fib-monoid      poly   0.14  | RUNTIME         0.08         | CHECKER         0.11         | -              | -                            
+ln-mlbasis-int-inf-rand            poly   0.47  | RUNTIME         1.30         | CHECKER         1.94         | -              | -                            
+ln-mlbasis-int-inf-wilson          poly   0.14  | RUNTIME         0.04         | CHECKER         0.01         | -              | -                            
+ln-mlbasis-int16                   mlton  0.26  | RUNTIME         2.65         | CHECKER         4.02         | -              | -                            
+ln-mlbasis-int32                   poly   0.26  | RUNTIME         2.71         | CHECKER         6.07         | -              | -                            
+ln-mlbasis-int54                   none!  0.17  | RUNTIME         2.16         | CHECKER         6.04         | -              | -                            
+ln-mlbasis-int64                   mlton  0.25  | RUNTIME         0.92         | CHECKER         4.70         | -              | -                            
+ln-mlbasis-int8                    mlton  0.26  | RUNTIME         0.81         | CHECKER         2.40         | -              | -                            
+ln-mlbasis-overflow                poly   0.15  | RUNTIME         0.12         | RUNTIME         0.92         | -              | -                            
+ln-mlbasis-real                    none!  0.15  | PARSE           0.01         | CHECKER         0.01         | -              | -                            
+ln-mlbasis-real-intinf             none!  0.15  | PARSE           0.02         | CHECKER         0.27         | -              | -                            
+ln-mlbasis-scan-real               poly   0.16  | RUNTIME         0.06         | RUNTIME         0.06         | -              | -                            
+ln-mlbasis-scan-word               poly   0.15  | RUNTIME/exn     0.19         | CHECKER         0.16         | -              | -                            
+ln-mlbasis-seki-bernoulli          poly   0.15  | PARSE           0.07         | CHECKER         0.07         | -              | -                            
+ln-mlbasis-string                  poly   0.15  | PASS            0.09         | PASS            0.58         | -              | -                            
+ln-mlbasis-string-issubstring      poly   0.14  | RUNTIME/exn     0.08         | RUNTIME/exn     0.14         | -              | -                            
+ln-mlbasis-string_fields           poly   0.15  | PASS            0.04         | PASS            0.04         | -              | -                            
+ln-mlbasis-substring               poly   0.18  | PASS            0.11         | PASS            0.39         | -              | -                            
+ln-mlbasis-vector                  poly   0.17  | PASS            0.10         | PASS            0.09         | -              | -                            
+ln-mlbasis-widestring-issubstring  mlton  0.13  | RUNTIME         0.08         | CHECKER         0.03         | -              | -                            
+ln-mlbasis-widestring-sub          mlton  0.14  | RUNTIME         0.08         | CHECKER         0.02         | -              | -                            
+ln-mlbasis-word                    poly   0.14  | RUNTIME         0.02         | PASS            0.07         | -              | -                            
+ln-mlbasis-word16                  poly   0.26  | RUNTIME         0.85         | CHECKER         3.65         | -              | -                            
+ln-mlbasis-word16-law              poly   0.15  | RUNTIME         0.06         | CHECKER         0.08         | -              | -                            
+ln-mlbasis-word32                  poly   0.26  | RUNTIME         0.90         | CHECKER         3.75         | -              | -                            
+ln-mlbasis-word32-law              poly   0.15  | RUNTIME         0.09         | CHECKER         0.06         | -              | -                            
+ln-mlbasis-word64                  poly   0.35  | RUNTIME         0.65         | CHECKER         3.56         | -              | -                            
+ln-mlbasis-word64-law              poly   0.16  | RUNTIME         0.11         | CHECKER         0.06         | -              | -                            
+ln-mlbasis-word8                   poly   0.26  | TIMEOUT/runtime 120.41       | TIMEOUT/runtime 120.30       | -              | -                            
+ln-mlbasis-word8-law               poly   0.14  | RUNTIME         0.17         | CHECKER         0.30         | -              | -                            
+ln-mlbasis-word_law                poly   0.16  | RUNTIME         0.34         | CHECKER         0.20         | -              | -                            
+ln-mlbasis-word_shift              poly   0.14  | RUNTIME         0.01         | RUNTIME         0.07         | -              | -                            
+ln-mlbasis-xorshift64-word64       poly   0.16  | RUNTIME         0.04         | CHECKER         0.02         | -              | -                            

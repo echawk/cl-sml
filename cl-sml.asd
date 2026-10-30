@@ -1,15 +1,17 @@
 (asdf:defsystem #:cl-sml
   :description "A compiler for SML syntax into Common Lisp"
   :license "See LICENSE"
-  :depends-on (#:esrap #:named-readtables #:trivia)
+  :depends-on (#:named-readtables #:trivia)
   :pathname "src/"
   :serial t
   :components ((:file "package")
                (:file "portability")
                (:file "runtime")
                (:file "static-facts")
+               (:file "lexer")
                (:file "parser")
                (:file "compiler")
+               (:file "inspect")
                (:file "reader")
                (:file "type-checker")
                (:file "repl")
@@ -28,6 +30,7 @@
                (:file "compiler-tests")
                (:file "runtime-tests")
                (:file "repl-tests")
+               (:file "inspect-tests")
                (:file "hamlet-tests")
                (:file "semantics-tests")
                (:file "run"))

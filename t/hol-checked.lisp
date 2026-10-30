@@ -2,7 +2,6 @@
 ;;; HaMLet's elaboration drives code generation, then run some of the code.
 ;;; Run through ./test-hol.
 
-(load "~/.sbclrc")
 (ql:quickload :cl-sml)
 
 (defpackage #:cl-sml-hol-checked

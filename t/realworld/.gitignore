@@ -1,0 +1,9 @@
+__pycache__/
+work/
+nb/
+cache/
+tmp/
+upstream/
+hamlet-ref/
+*.core
+*.log

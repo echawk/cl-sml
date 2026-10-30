@@ -1,0 +1,1 @@
+CHECKER	CHECKER	0.01		0	UNBOUND-VARIABLE: The variable SML.HAMLET-TYPE-CHECKER::|recbind| is unbound.

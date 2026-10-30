@@ -170,6 +170,25 @@
   (is (eq t (checked-value "val stringLess = \"abc\" < \"abd\";" "stringLess")))
   (is (eq t (checked-value "val charGreater = #\"z\" > #\"a\";" "charGreater"))))
 
+(test hamlet-overloading-resolution-keeps-reals-ieee
+  ;; Real-typed operators are compiled to CL arithmetic, which traps on SBCL
+  ;; and ECL unless the traps are masked.
+  (let ((big (format nil "~D.0" (expt 10 200))))
+    (is (eq t (checked-value
+               (format nil "fun realSquare (x : real) = x * x;
+                            val realOverflowed = realSquare ~A > realSquare 1.0;"
+                       big)
+               "realOverflowed"))))
+  (is (null (checked-value "val realNanOrdered = let val n = 0.0 / 0.0
+                                                 in n < 1.0 orelse n >= 1.0 end;"
+                           "realNanOrdered"))))
+
+(test hamlet-checked-self-tail-calls-loop
+  (is (= 1000000 (checked-value "fun checkedCount 0 acc = acc
+                                   | checkedCount n acc = checkedCount (n - 1) (acc + 1);
+                                 val checkedCounted = checkedCount 1000000 0;"
+                                "checkedCounted"))))
+
 (test hamlet-accepts-programs-without-final-semicolon
   (is (= 3 (checked-value "val noSemicolon = 1 + 2" "noSemicolon"))))
 
@@ -221,3 +240,30 @@
   (compile-checked "val stillInA = sessionOnlyInA + 1;" "SML.HAMLET-SESSION-A")
   (is (search "val stillInA : int"
               (hamlet-type-checker-last-description *checker*))))
+
+(test repl-generates-code-with-hamlet-facts
+  ;; REPL phrases are compiled like files: with what HaMLet learned, so
+  ;; overloaded operators are specialized and word arithmetic is modular.
+  (let* ((output (make-string-output-stream))
+         (result (with-sml-type-checker (*checker*)
+                   (repl :input (make-string-input-stream
+                                 (format nil "val replWordWrap = 0w0 - 0w1;~%(0w5 : Word8.word) * 0w100;~%:quit~%"))
+                         :output output
+                         :error-output (make-broadcast-stream)
+                         :prompt nil
+                         :package "SML.HAMLET-REPL-FACTS-TEST")))
+         (printed (get-output-stream-string output)))
+    (is (eq :quit result))
+    (is (search (format nil "val replWordWrap = ~D : word"
+                        (1- (expt 2 cl-sml::+sml-word-size+)))
+                printed))
+    (is (search "val it = 244 : word8" printed))))
+
+(test sml->lisp-uses-hamlet-without-extending-its-session
+  (let ((package "SML.HAMLET-EXPAND-TEST"))
+    (is (search "LDB"
+                (write-to-string
+                 (sml->lisp "fun expandByte (x : Word8.word) = x + 0w1"
+                            :package package :type-checker *checker*))))
+    (signals sml-static-type-error
+      (compile-checked "val afterExpand = expandByte;" package))))

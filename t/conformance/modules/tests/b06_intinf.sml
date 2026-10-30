@@ -1,0 +1,7 @@
+fun p s = print (s ^ "\n")
+val big = IntInf.pow (2, 100)
+val _ = p (IntInf.toString big)
+val _ = p (IntInf.toString (IntInf.* (big, IntInf.fromInt ~3)))
+val _ = p (Int.toString (IntInf.toInt (IntInf.fromInt 12345)))
+val _ = p (IntInf.toString (IntInf.div (big, IntInf.fromInt 7)) ^ " " ^ IntInf.toString (IntInf.mod (big, IntInf.fromInt 7)))
+val _ = p (case IntInf.fromString "123456789012345678901234567890" of SOME n => IntInf.toString (IntInf.+ (n, 1)) | NONE => "NONE")

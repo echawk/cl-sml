@@ -1,0 +1,59 @@
+PARSE
+ESRAP-PARSE-ERROR: At
+
+  fun 'a id (x : 'a) = x
+  
+      ^ (Line 1, Column 4, Position 4)
+
+In context SML-FUN:
+
+While parsing SML-FUN-CLAUSE. Problem:
+
+  The production
+  
+    #\'
+  
+  does not satisfy the predicate ALPHA-CHAR-P.
+
+Expected:
+
+     the character " (QUOTATION_MARK)
+  or the character # (NUMBER_SIGN)
+  or the character ( (LEFT_PARENTHESIS)
+  or the string "0w"
+  or the string "0x"
+  or the character _ (LOW_LINE)
+  or the string "op"
+  or the character { (LEFT_CURLY_BRACKET)
+  or the character ~ (TILDE)
+  or the character ! (EXCLAMATION_MARK)
+  or the character $ (DOLLAR_SIGN)
+  or the character % (PERCENT_SIGN)
+  or the character & (AMPERSAND)
+  or the character * (ASTERISK)
+  or the character + (PLUS_SIGN)
+  or the character - (HYPHEN-MINUS)
+  or the character / (SOLIDUS)
+  or the character : (COLON)
+  or the character < (LESS-THAN_SIGN)
+  or the character = (EQUALS_SIGN)
+  or the character > (GREATER-THAN_SIGN)
+  or the character ? (QUESTION_MARK)
+  or the character @ (COMMERCIAL_AT)
+  or the character \ (REVERSE_SOLIDUS)
+  or the character ^ (CIRCUMFLEX_ACCENT)
+  or the character ` (GRAVE_ACCENT)
+  or the character | (VERTICAL_LINE)
+  or any character satisfying ALPHA-CHAR-P
+  or a character in [0-9]
+  or <end of input>
+
+While parsing WS. Expected:
+
+     the character Tab
+  or the character Newline
+  or the character Space
+  or the string "(*"
+
+cl-sml frames (innermost first):
+  ESRAP:ESRAP-PARSE-ERROR

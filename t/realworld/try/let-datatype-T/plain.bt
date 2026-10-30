@@ -1,0 +1,103 @@
+PARSE
+ESRAP-PARSE-ERROR: At end of input
+
+  val _ = print (Int.toString (f 42) ^ "\n")
+  
+  ^ (Line 3, Column 0, Position 113)
+
+In context SML-LET:
+
+While parsing SML-LET. Expected:
+
+     the character Tab
+  or the character Newline
+  or the character Space
+  or the character ! (EXCLAMATION_MARK)
+  or the character " (QUOTATION_MARK)
+  or the character # (NUMBER_SIGN)
+  or the character ( (LEFT_PARENTHESIS)
+  or the string "(*"
+  or the string "0w"
+  or the string "0x"
+  or the string "::"
+  or the string ":="
+  or the character ; (SEMICOLON)
+  or the string "<="
+  or the string "<>"
+  or the string ">="
+  or the character [ (LEFT_SQUARE_BRACKET)
+  or the string "and"
+  or the string "andalso"
+  or the string "before"
+  or the string "case"
+  or the string "datatype"
+  or the string "div"
+  or the string "exception"
+  or the string "fn"
+  or the string "fun"
+  or the string "functor"
+  or the string "handle"
+  or the string "IBplusI"
+  or the string "if"
+  or the string "in"
+  or the string "infix"
+  or the string "infixr"
+  or the string "let"
+  or the string "local"
+  or the string "mod"
+  or the string "nonfix"
+  or the character o (LATIN_SMALL_LETTER_O)
+  or the string "op"
+  or the string "open"
+  or the string "oplus"
+  or the string "oplusE"
+  or the string "oplusF"
+  or the string "oplusG"
+  or the string "oplusSE"
+  or the string "oplusTE"
+  or the string "oplusVEandTE"
+  or the string "orelse"
+  or the string "plus"
+  or the string "plusE"
+  or the string "plusF"
+  or the string "plusG"
+  or the string "plusI"
+  or the string "plusSE"
+  or the string "plusT"
+  or the string "plusTE"
+  or the string "plusU"
+  or the string "plusVE"
+  or the string "plusVEandTE"
+  or the string "raise"
+  or the string "signature"
+  or the string "structure"
+  or the string "sub"
+  or the string "TEplus"
+  or the string "type"
+  or the string "val"
+  or the string "while"
+  or the character { (LEFT_CURLY_BRACKET)
+  or the character ~ (TILDE)
+  or the character $ (DOLLAR_SIGN)
+  or the character % (PERCENT_SIGN)
+  or the character & (AMPERSAND)
+  or the character * (ASTERISK)
+  or the character + (PLUS_SIGN)
+  or the character - (HYPHEN-MINUS)
+  or the character / (SOLIDUS)
+  or the character : (COLON)
+  or the character < (LESS-THAN_SIGN)
+  or the character = (EQUALS_SIGN)
+  or the character > (GREATER-THAN_SIGN)
+  or the character ? (QUESTION_MARK)
+  or the character @ (COMMERCIAL_AT)
+  or the character \ (REVERSE_SOLIDUS)
+  or the character ^ (CIRCUMFLEX_ACCENT)
+  or the character ` (GRAVE_ACCENT)
+  or the character | (VERTICAL_LINE)
+  or any character satisfying ALPHA-CHAR-P
+  or <end of input>
+  or a character in [0-9]
+
+cl-sml frames (innermost first):
+  ESRAP:ESRAP-PARSE-ERROR

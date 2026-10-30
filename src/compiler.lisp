@@ -41,57 +41,78 @@
                   (incf *sml-hoisted-form-counter*))
           (ensure-sml-package *sml-package*)))
 
-(defparameter *sml-binary-infix-value-names*
-  '("+" "-" "*" "/" "div" "mod" "^" "@" "::" ":=" "=" "<>" "<" "<=" ">" ">="
-    "o" "before" "-->" "|->" "@@" "$$" "oplus" "plus" "plusVE" "plusTE" "plusSE"
-    "plusVEandTE" "plusG" "plusF" "plusE" "plusT" "plusU" "plusI"
-    "IBplusI" "TEplus" "oplusVEandTE" "oplusTE" "oplusSE" "oplusG"
-    "oplusF" "oplusE"))
+;;; Signatures.  Without the static checker, a structure ascribed a
+;;; signature exports only the values the signature specifies, computed from
+;;; the specification AST (including `include'd specifications).  Hidden
+;;; members (helpers, constructors of abstract types, names brought in by
+;;; `open' in the body) would otherwise leak into every scope that later
+;;; `open's the structure.
 
-(defun sml-binary-infix-value-name-p (name)
-  (or (member name *sml-binary-infix-value-names* :test #'string=)
-      (and (some (lambda (ch)
-                   (find ch "!%&$#+-/:<=>?@\\~`^|*" :test #'char=))
-                 name)
-           (not (string= name "~")))))
-
-(defvar *sml-signature-texts* (make-hash-table :test #'equal)
-  "Source text of the signatures compiled so far, by name.")
-
-(defun sml-word-in-text-p (word text)
-  (flet ((identifier-char-p (ch)
-           (or (alphanumericp ch) (char= ch #\_) (char= ch #\'))))
-    (loop for start = (search word text) then (search word text :start2 (1+ start))
-          while start
-          thereis (let ((end (+ start (length word))))
-                    (and (or (zerop start)
-                             (not (identifier-char-p (char text (1- start)))))
-                         (or (= end (length text))
-                             (not (identifier-char-p (char text end)))))))))
-
-(defun restrict-sealed-structure-members (members signature-name)
-  "Restrict the registered members of a structure ascribed SIGNATURE-NAME to
-the names that signature mentions.  Hidden members (helpers, constructors of
-abstract types, names brought in by `open` in the body) otherwise leak into
-every scope that later `open`s the structure.  The check is textual, so a
-signature using `include` is not restricted."
-  (let ((text (and signature-name
-                   (gethash signature-name *sml-signature-texts*))))
-    (if (or (null text) (sml-word-in-text-p "include" text))
-        members
-        (remove-if-not (lambda (name)
-                         (sml-word-in-text-p
-                          (subseq name 0 (or (position #\. name) (length name)))
-                          text))
-                       members))))
+(defvar *sml-signature-expressions* (make-hash-table :test #'equal)
+  "(package-name signature-name) -> the signature expression of the
+signatures compiled so far.")
 
 (defun note-signature-declaration (dec)
-  "Record a signature's text as soon as its declaration is seen, so that member
+  "Record a signature as soon as its declaration is seen, so that member
 lists computed ahead of compilation can already honour it."
   (when (and (consp dec) (eq (car dec) :signature))
-    (let ((text (getf (cddr dec) :text)))
-      (when text
-        (setf (gethash (second dec) *sml-signature-texts*) text)))))
+    (setf (gethash (list (target-sml-package-name) (second dec))
+                   *sml-signature-expressions*)
+          (third dec))))
+
+(defun sml-signature-exports (sigexp &optional (depth 0))
+  "The value members signature expression SIGEXP specifies, as names such as
+\"x\" or \"S.y\" (\"S.\" stands for every member of a substructure S whose
+signature is unknown), and whether the list is complete."
+  (if (> depth 100)
+      (values nil nil)
+      (ecase (car sigexp)
+        (:sig-id
+         (let ((found (gethash (list (target-sml-package-name) (second sigexp))
+                               *sml-signature-expressions*)))
+           (if found
+               (sml-signature-exports found (1+ depth))
+               (values nil nil))))
+        (:sig-where (sml-signature-exports (second sigexp) depth))
+        (:sig
+         (let ((names nil)
+               (complete t))
+           (dolist (spec (second sigexp) (values names complete))
+             (case (car spec)
+               ((:spec-val :spec-exception) (push (second spec) names))
+               (:spec-datatype
+                (dolist (datbind (second spec))
+                  (dolist (ctor (third datbind))
+                    (push (second ctor) names))))
+               ;; The replicated constructors are not known here.
+               (:spec-datatype-replication (setf complete nil))
+               (:spec-structure
+                (multiple-value-bind (members members-complete)
+                    (sml-signature-exports (third spec) (1+ depth))
+                  (if members-complete
+                      (dolist (member members)
+                        (push (qualify-sml-name (second spec) member) names))
+                      (push (format nil "~A." (second spec)) names))))
+               (:spec-include
+                (multiple-value-bind (members members-complete)
+                    (sml-signature-exports (second spec) (1+ depth))
+                  (setf names (append members names))
+                  (unless members-complete
+                    (setf complete nil)))))))))))
+
+(defun restrict-structure-members-to-signature (members sigexp)
+  "MEMBERS of a structure ascribed SIGEXP, restricted to those it specifies."
+  (multiple-value-bind (exports complete) (and sigexp (sml-signature-exports sigexp))
+    (if (not complete)
+        members
+        (remove-if-not
+         (lambda (member)
+           (or (member member exports :test #'string=)
+               (some (lambda (export)
+                       (and (char= (char export (1- (length export))) #\.)
+                            (string-prefix-p export member)))
+                     exports)))
+         members))))
 
 (defun static-structure-members (dec)
   "The value members of structure declaration DEC according to the static
@@ -104,10 +125,12 @@ checker (signature matching included), or :UNKNOWN."
 
 (defun replicated-constructors (dec)
   "The (status . name) constructors that datatype replication DEC binds,
-according to the static checker, or NIL when unknown."
+according to the static checker, or else the parser, or NIL when unknown."
   (let ((fact (first (sml-static-facts-at (sml-ast-position dec) "dtrep"
                                           (second dec)))))
-    (and fact (parse-sml-structure-members (third fact)))))
+    (if fact
+        (parse-sml-structure-members (third fact))
+        (getf (cdddr dec) :constructors))))
 
 (defun compile-datatype-replication-constructors (dec)
   "Bind the constructors DEC = (:datatype-replication name source) brings
@@ -116,34 +139,38 @@ into scope to those of the replicated datatype."
          (dot (position #\. source-type :from-end t))
          (source-prefix (and dot (subseq source-type 0 dot))))
     (loop for (nil . name) in (replicated-constructors dec)
-          for source = (resolved-sml-symbol
-                        (if source-prefix
-                            (qualify-sml-name source-prefix name)
-                            name))
+          ;; A built-in such as `true' or `ref', compiled to a value.
+          for builtin = (and (null source-prefix)
+                             (not (compile-time-sml-env-symbol-shadowed-p name))
+                             (assoc name *sml-env* :test #'string=))
+          for source = (if builtin
+                           (cdr builtin)
+                           (resolved-sml-symbol
+                            (if source-prefix
+                                (qualify-sml-name source-prefix name)
+                                name)))
           for target = (target-sml-symbol name)
-          unless (eq source target)
-            collect (if (symbolp source)
+          unless (and (not builtin) (eq source target))
+            collect (if (and (symbolp source) (not builtin))
                         `(alias-sml-constructor ',target ',source)
-                        ;; A built-in such as `ref`, compiled to a function.
                         `(progn (defparameter ,target ,source)
                                 ,(compile-export-form (list target)))))))
 
+(defun compile-time-sml-env-symbol-shadowed-p (name)
+  "Is built-in NAME rebound by a declaration of the program being compiled?"
+  (assoc name *sml-binding-symbol-env* :test #'string=))
+
 (defun structure-declaration-members (dec &optional local-structures)
-  "The members a (:structure name decs [:sig S]) declaration makes visible."
+  "The members a (:structure name decs [:sigexp S]) declaration makes visible."
   (let ((members (declarations-bound-names (third dec) local-structures))
         (static-members (static-structure-members dec)))
     (if (eq static-members :unknown)
-        (restrict-sealed-structure-members members (getf (cdddr dec) :sig))
+        (restrict-structure-members-to-signature members (getf (cdddr dec) :sigexp))
         ;; Exactly the members the elaborated (and possibly ascribed)
         ;; structure has.
         (remove-if-not (lambda (name)
                          (member name static-members :test #'string=))
                        members))))
-
-(defun maybe-wrap-infix-value-initializer (name form)
-  (if (sml-binary-infix-value-name-p name)
-      `(sml-tuple-or-curried-binary ,form)
-      form))
 
 (defun qualify-sml-name (prefix name)
   (if (and prefix (not (string= prefix "")))
@@ -162,7 +189,7 @@ into scope to those of the replicated datatype."
   "A fresh variable for the let-bound SML identifier NAME.  The package's
 symbol for NAME may have been proclaimed special by a top-level binding,
 or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
-  (gensym name))
+  (make-symbol name))
 
 (defun resolve-structure-prefix (name)
   (or (cdr (assoc name *sml-local-structure-prefixes* :test #'string=))
@@ -214,98 +241,16 @@ or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
   (or (cdr (assoc name prefixes :test #'string=))
       (resolve-structure-prefix name)))
 
-(defun trim-sml-functor-arg-text (text)
-  (let ((trimmed (and text
-                      (string-trim '(#\Space #\Tab #\Newline #\Return) text))))
-    (if (and trimmed
-             (>= (length trimmed) 2)
-             (char= (char trimmed 0) #\()
-             (char= (char trimmed (1- (length trimmed))) #\)))
-        (string-trim '(#\Space #\Tab #\Newline #\Return)
-                     (subseq trimmed 1 (1- (length trimmed))))
-        trimmed)))
+(defun functor-argument-structure-name (argument)
+  "The structure that ARGUMENT, a functor's argument structure expression,
+names, if it is a (long) structure identifier."
+  (let ((core (strip-sml-strexp-constraints argument)))
+    (and (eq (car core) :str-id) (second core))))
 
-(defun simple-sml-id-text-p (text)
-  (and text
-       (plusp (length text))
-       (every (lambda (ch)
-                (or (alphanumericp ch)
-                    (member ch '(#\_ #\') :test #'char=)))
-              text)))
-
-(defun functor-argument-structure-name (args-text)
-  (let ((inner (trim-sml-functor-arg-text args-text)))
-    (when (simple-sml-id-text-p inner)
-      inner)))
-
-(defun read-functor-argument-target-name (text start)
-  (let* ((limit (or (position-if (lambda (ch)
-                                   (member ch '(#\; #\) #\Space #\Tab
-                                                #\Newline #\Return)
-                                           :test #'char=))
-                                 text
-                                 :start start)
-                    (length text))))
-    (subseq text start limit)))
-
-(defun functor-argument-value-bindings (args-text)
-  (let ((inner (trim-sml-functor-arg-text args-text))
-        (bindings nil))
-    (when inner
-      (loop with search-start = 0
-            for pos = (search "val" inner :start2 search-start)
-            while pos
-            do (let ((after-val (+ pos 3)))
-                 (if (and (< after-val (length inner))
-                          (member (char inner after-val)
-                                  '(#\Space #\Tab #\Newline #\Return)
-                                  :test #'char=))
-                     (let* ((name-start
-                              (position-if-not
-                               (lambda (ch)
-                                 (member ch '(#\Space #\Tab #\Newline #\Return)
-                                         :test #'char=))
-                               inner
-                               :start after-val))
-                            (name-end
-                              (and name-start
-                                   (position-if-not
-                                    (lambda (ch)
-                                      (or (alphanumericp ch)
-                                          (member ch '(#\_ #\') :test #'char=)))
-                                    inner
-                                    :start name-start)))
-                            (name (and name-start name-end
-                                       (subseq inner name-start name-end)))
-                            (eq-pos (and name-end
-                                         (position #\= inner :start name-end))))
-                       (when (and name (plusp (length name)) eq-pos)
-                         (let* ((target-start
-                                  (position-if-not
-                                   (lambda (ch)
-                                     (member ch '(#\Space #\Tab #\Newline #\Return)
-                                             :test #'char=))
-                                   inner
-                                   :start (1+ eq-pos)))
-                                (target (and target-start
-                                             (read-functor-argument-target-name
-                                              inner
-                                              target-start))))
-                           (when (and target (plusp (length target)))
-                             (push (cons name target) bindings))))
-                       (setf search-start (or eq-pos after-val)))
-                     (setf search-start after-val)))))
-    (nreverse bindings)))
-
-(defun functor-argument-declarations (args-text)
-  (let ((inner (trim-sml-functor-arg-text args-text)))
-    (unless (simple-sml-id-text-p inner)
-      (without-sml-static-facts (esrap:parse 'sml-decs inner)))))
-
-(defun functor-argument-module-name (target-name args-text)
-  (format nil "~A.%ARG-~36R"
-          target-name
-          (sxhash args-text)))
+(defun functor-argument-module-name (target-name)
+  "The module that holds the argument structure of the functor application
+bound to TARGET-NAME, when the argument is not a structure identifier."
+  (format nil "~A.%ARG" target-name))
 
 (defun module-local-structure-prefixes (decs module-name)
   (let ((prefixes nil))
@@ -367,8 +312,10 @@ or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
       (sml-constructor-symbol-p (resolved-sml-symbol name lexical-env))))
 
 (defun pattern-node-status (pat)
-  "The static checker's identifier status for pattern node PAT, if known."
-  (sml-node-fact-info pat "pat"))
+  "The identifier status of pattern node PAT: the static checker's if it has
+one, else the parser's (the :STATUS of a :pat-ctor node), or NIL."
+  (or (sml-node-fact-info pat "pat")
+      (and (consp pat) (getf (cddr pat) :status))))
 
 (defun pattern-node-constructor-p (pat &optional local-exceptions lexical-env)
   (let ((status (pattern-node-status pat)))
@@ -408,9 +355,10 @@ or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
   `(register-sml-binding-type ',symbol ',type))
 
 (defun compile-type-alias-form (name target)
+  "Register type NAME as TARGET, a type AST or a type constructor name."
   `(register-sml-type-alias ,(target-sml-package-name)
                             ,(current-qualified-sml-name name)
-                            ,target))
+                            ,(if (consp target) (sml-type-ast->string target) target)))
 
 (defun compile-type-declaim-form (symbol type)
   (declare (ignore symbol type))
@@ -481,6 +429,7 @@ or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
     (:val-rec (list (second dec)))
     (:fun (list (second dec)))
     (:funs (mapcan #'declaration-direct-bound-names (cdr dec)))
+    (:val-recs (mapcan #'declaration-direct-bound-names (cdr dec)))
     (:datatype (mapcar #'second (third dec)))
     (:datatype-replication (mapcar #'cdr (replicated-constructors dec)))
     (:exception (list (second dec)))
@@ -489,6 +438,13 @@ or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
     (otherwise nil)))
 
 (defun split-sml-module-names (names)
+  "The structure names of an `open' declaration: a list, or a string of names
+separated by blanks."
+  (if (listp names)
+      names
+      (split-sml-module-names-text names)))
+
+(defun split-sml-module-names-text (names)
   (let ((current (make-string-output-stream))
         (result nil))
     (labels ((emit ()
@@ -672,12 +628,12 @@ source order although the value is laid out in label order."
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
      (list (cons (target-sml-symbol (second pat)) type)))
     ((and (listp pat) (eq (car pat) :pat-typed))
-     (pattern-type-bindings (second pat) (third pat)))
+     (pattern-type-bindings (second pat) (sml-type-ast->binding-type (third pat))))
     ((and (listp pat) (eq (car pat) :pat-as))
      (append (pattern-type-bindings (second pat) type)
              (pattern-type-bindings (third pat) type)))
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
-     (unless (pattern-constructor-name-p (second pat))
+     (unless (pattern-node-constructor-p pat)
        (list (cons (second pat) type))))
     ((and (listp pat) (member (car pat) '(:pat-unit :pat-nil)))
      nil)
@@ -715,6 +671,8 @@ source order although the value is laid out in label order."
   (cond
     ((or (numberp pat) (stringp pat) (characterp pat) (eq pat :wild))
      nil)
+    ((and (listp pat) (eq (car pat) :word))
+     nil)
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
      (list (target-sml-symbol (second pat))))
     ((and (listp pat) (eq (car pat) :pat-typed))
@@ -723,7 +681,7 @@ source order although the value is laid out in label order."
      (append (pattern-bound-symbols (second pat))
              (pattern-bound-symbols (third pat))))
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor)))
-     (unless (pattern-constructor-name-p (second pat))
+     (unless (pattern-node-constructor-p pat)
        (list (target-sml-symbol (second pat)))))
     ((and (listp pat) (eq (car pat) :pat-app))
      (pattern-bound-symbols (third pat)))
@@ -751,6 +709,8 @@ source order although the value is laid out in label order."
   (cond
     ((or (integerp pat) (characterp pat))
      (values pat t))
+    ((and (listp pat) (eq (car pat) :word))
+     (values (second pat) t))
     ((and (listp pat) (eq (car pat) :pat-typed))
      (literal-case-pattern-value (second pat)))
     ((and (listp pat) (member (car pat) '(:pat-ctor :ctor) :test #'eq))
@@ -891,29 +851,150 @@ source order although the value is laid out in label order."
   "A one-argument lambda; named on SBCL so that backtraces show SML names."
   (portable-sml-lambda-form name arg body))
 
+;;; Self tail calls.  SML programs loop by tail recursion, and only SBCL
+;;; merges tail calls; on ECL and ABCL every iteration would take a stack
+;;; frame.  So a function's calls to itself with all of its curried
+;;; arguments, in tail position, are compiled as assignments to the
+;;; function's parameters and a jump back to its pattern match.
+
+(defun sml-application-spine (ast)
+  "The head and the arguments of AST, a curried application `f a1 ... an`."
+  (let ((args nil))
+    (loop while (and (consp ast) (eq (car ast) :app))
+          do (push (third ast) args)
+             (setf ast (second ast)))
+    (values ast args)))
+
+(defun sml-declarations-may-bind-name-p (decs name)
+  "Could DECS bind the value identifier NAME?  Declarations whose bindings
+are not known here (`open`, structures) are assumed to."
+  (some (lambda (dec)
+          (case (car dec)
+            ((:val :vals :val-rec :val-recs :fun :funs :datatype :datatype-replication
+              :exception :exception-alias)
+             (member name (declaration-direct-bound-names dec) :test #'equal))
+            ((:type :infix :expr :signature) nil)
+            (:local (or (sml-declarations-may-bind-name-p (second dec) name)
+                        (sml-declarations-may-bind-name-p (third dec) name)))
+            (otherwise t)))
+        decs))
+
+(defun mark-sml-self-tail-calls (ast name arity target)
+  "AST with each call of function NAME with ARITY arguments in tail position
+replaced by (:self-tail-call TARGET . arguments).  A second value is true
+when there was such a call.  Scopes that may rebind NAME are left alone, as
+are function bodies and case actions that are hoisted out of the function."
+  (let ((found nil))
+    (labels ((binds-name-p (pat)
+               (member name (pattern-bound-names pat) :test #'equal))
+             (branch (branch)
+               (if (binds-name-p (first branch))
+                   branch
+                   `(,(first branch) ,(tail (second branch)) ,@(cddr branch))))
+             (tail (ast)
+               (if (atom ast)
+                   ast
+                   (case (car ast)
+                     (:app
+                      (multiple-value-bind (head args) (sml-application-spine ast)
+                        (if (and (consp head)
+                                 (eq (car head) :var)
+                                 (equal (second head) name)
+                                 (= (length args) arity))
+                            (progn (setf found t)
+                                   `(:self-tail-call ,target ,@args))
+                            ast)))
+                     (:if `(:if ,(second ast) ,(tail (third ast)) ,(tail (fourth ast))))
+                     ((:andalso :orelse)
+                      `(,(car ast) ,(second ast) ,(tail (third ast))))
+                     (:typed `(:typed ,(tail (second ast)) ,@(cddr ast)))
+                     (:seq `(:seq ,@(butlast (cdr ast)) ,(tail (car (last ast)))))
+                     (:let
+                      (if (sml-declarations-may-bind-name-p (second ast) name)
+                          ast
+                          `(:let ,(second ast)
+                                 (,@(butlast (third ast)) ,(tail (car (last (third ast)))))
+                                 ,@(cdddr ast))))
+                     (:case
+                      (if (tuple-dispatch-case-branches-p (cddr ast))
+                          ast
+                          `(:case ,(second ast) ,@(mapcar #'branch (cddr ast)))))
+                     ;; The handled expression is not in tail position, but
+                     ;; the handlers run after it has been unwound.
+                     (:handle
+                      `(:handle ,(second ast) ,(mapcar #'branch (third ast))
+                                ,@(cdddr ast)))
+                     (otherwise ast)))))
+      (values (tail ast) found))))
+
+(defun compile-self-tail-call (target args local-exceptions lexical-env)
+  (destructuring-bind (tag &rest variables) target
+    `(progn
+       (psetq ,@(mapcan (lambda (variable arg)
+                          (list variable
+                                (compile-expr arg local-exceptions lexical-env)))
+                        variables args))
+       (go ,tag))))
+
 (defun compile-fn-clauses (clauses &optional local-exceptions function-name outer-lexical-env)
-  (let* ((arity (length (first (first clauses))))
-         (tmp-args (loop repeat arity collect (gensym "ARG"))))
+  (let ((arity (length (first (first clauses)))))
     (unless (every (lambda (clause) (= (length (first clause)) arity)) clauses)
       (error "All fun clauses must have the same arity: ~A" clauses))
+    (compile-fn-clauses-of-arity clauses arity local-exceptions function-name
+                                 outer-lexical-env)))
+
+(defun compile-fn-clauses-of-arity (clauses arity local-exceptions function-name
+                                    outer-lexical-env)
+  (let* ((tmp-args (loop repeat arity collect (gensym "ARG")))
+         ;; Fresh variables for the loop: the curried parameters are closed
+         ;; over by partial applications, so they must not be assigned.
+         (loop-args (loop repeat arity collect (gensym "LOOP-ARG")))
+         ;; Not a gensym: ABCL's pretty printer loses the identity of an
+         ;; uninterned TAGBODY tag in emitted artifacts.  An inner function's
+         ;; loop shadows the tag, and only its own body jumps to it.
+         (loop-tag '%self-tail-call)
+         (looping nil)
+         (bodies
+           (mapcar (lambda (clause)
+                     (if (and (stringp function-name)
+                              (notany (lambda (pat)
+                                        (member function-name (pattern-bound-names pat)
+                                                :test #'equal))
+                                      (first clause)))
+                         (multiple-value-bind (body found)
+                             (mark-sml-self-tail-calls (second clause) function-name
+                                                       arity (cons loop-tag loop-args))
+                           (when found (setf looping t))
+                           body)
+                         (second clause)))
+                   clauses))
+         (args (if looping loop-args tmp-args))
+         (scrutinee (if (= arity 1) (first args) `(list :tuple ,@args)))
+         (match
+           `(trivia:match ,scrutinee
+              ,@(mapcar (lambda (clause body)
+                          (let* ((pat (compile-clause-pattern (first clause)))
+                                 (var-map (pattern-variable-map pat local-exceptions))
+                                 (branch-env (append var-map outer-lexical-env)))
+                            `(,(compile-pat pat local-exceptions branch-env)
+                              ,(compile-expr body
+                                             local-exceptions
+                                             branch-env))))
+                        clauses bodies)
+              (_ ,(compile-match-failure "Match" (or function-name "fn")
+                                         (first (first clauses)))))))
     (reduce (lambda (arg body) (sml-lambda-form function-name arg body))
             tmp-args
             :from-end t
             :initial-value
-            `(trivia:match ,(if (= arity 1)
-                                (first tmp-args)
-                                `(list :tuple ,@tmp-args))
-               ,@(mapcar (lambda (clause)
-                           (let* ((pat (compile-clause-pattern (first clause)))
-                                  (var-map (pattern-variable-map pat local-exceptions))
-                                  (branch-env (append var-map outer-lexical-env)))
-                             `(,(compile-pat pat local-exceptions branch-env)
-                               ,(compile-expr (second clause)
-                                              local-exceptions
-                                             branch-env))))
-                         clauses)
-               (_ ,(compile-match-failure "Match" (or function-name "fn")
-                                          (first (first clauses))))))))
+            (if looping
+                (let ((block (gensym "SELF")))
+                  `(let ,(mapcar #'list loop-args tmp-args)
+                     (block ,block
+                       (tagbody
+                          ,loop-tag
+                          (return-from ,block ,match)))))
+                match))))
 
 (defun first-positioned-sml-node (tree)
   "The source offset of the first node of AST TREE whose position is known."
@@ -934,7 +1015,7 @@ PAT to their symbols (see LOCAL-DECLARATION-LEXICAL-BINDINGS)."
   (cond
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
      `(let ((,(local-binding-symbol (second pat) bindings)
-              ,(maybe-wrap-infix-value-initializer (second pat) expr)))
+              ,expr))
         ,body))
     ((eq pat :wild)
      (let ((tmp (gensym "IGNORED")))
@@ -1013,12 +1094,18 @@ variables that hold them."
                  append (local-declaration-lexical-bindings nested-dec))))
     (case (car dec)
       (:val (mapcar #'fresh (pattern-bound-names (second dec))))
-      ((:vals :funs) (nested (cdr dec)))
+      ((:vals :funs :val-recs) (nested (cdr dec)))
       ((:val-rec :fun :exception :exception-alias)
        (list (fresh (second dec))))
       (:datatype (mapcar (lambda (ctor) (fresh (second ctor))) (third dec)))
       (:local (nested (third dec)))
       (otherwise nil))))
+
+(defun declarations-lexical-bindings (decs)
+  "The lexical bindings of the local declarations DECS, as one fresh alist
+(the memoized lists must not be destructively joined)."
+  (loop for dec in decs
+        append (local-declaration-lexical-bindings dec)))
 
 (defun local-binding-symbol (name bindings)
   "The symbol BINDINGS (from LOCAL-DECLARATION-LEXICAL-BINDINGS) gives NAME."
@@ -1044,7 +1131,11 @@ variables that hold them."
   (mapcan #'local-open-symbol-bindings decs))
 
 (defun declarations-local-open-constructor-bindings (decs)
-  (mapcan #'local-open-constructor-bindings decs))
+  "The constructors local DECS bring into scope by `open' and by datatype
+declarations, those of later declarations first."
+  (loop for dec in (reverse decs)
+        append (local-datatype-constructor-bindings dec)
+        append (local-open-constructor-bindings dec)))
 
 (defun compile-local-decls-into-body (decs body &optional (local-exceptions nil) lexical-env)
   (if (null decs)
@@ -1073,7 +1164,7 @@ variables that hold them."
          (structure-prefixes (module-local-structure-prefixes
                               decs
                               (or *sml-module-prefix* "")))
-         (body-env (append (mapcan #'local-declaration-lexical-bindings decs)
+         (body-env (append (declarations-lexical-bindings decs)
                            lexical-env))
          (body-exceptions (append (declarations-exposed-exceptions decs)
                                   local-exceptions))
@@ -1109,29 +1200,32 @@ variables that hold them."
                                 lexical-env))
     ((eq (car dec) :vals)
      ;; `val p1 = e1 and p2 = e2` evaluates every expression before binding
-     ;; anything, like `val (p1, p2) = (e1, e2)`.
-     (compile-local-val-binding
-      `(:pat-tuple ,@(mapcar #'second (cdr dec)))
-      `(list :tuple ,@(mapcar (lambda (val-dec)
-                                (compile-expr (third val-dec)
-                                              local-exceptions lexical-env))
-                              (cdr dec)))
-      body
-      (local-declaration-lexical-bindings dec)
-      local-exceptions
-      lexical-env))
+     ;; anything, like `val (p1, p2) = (e1, e2)`.  `val rec` bindings joined
+     ;; to them come last.
+     (let ((vals (remove :val (cdr dec) :key #'car :test-not #'eq))
+           (recs (remove :val (cdr dec) :key #'car)))
+       (compile-local-val-binding
+        `(:pat-tuple ,@(mapcar #'second vals))
+        `(list :tuple ,@(mapcar (lambda (val-dec)
+                                  (compile-expr (third val-dec)
+                                                local-exceptions lexical-env))
+                                vals))
+        (if recs
+            (compile-local-decls-into-body recs body local-exceptions lexical-env)
+            body)
+        (local-declaration-lexical-bindings dec)
+        local-exceptions
+        lexical-env)))
 	    ((eq (car dec) :fun)
 	     (let ((name (local-binding-symbol
                          (second dec) (local-declaration-lexical-bindings dec))))
 	       `(let ((,name nil))
-	          (setf ,name ,(maybe-wrap-infix-value-initializer
-	                        (second dec)
-	                        (compile-fn-clauses (third dec)
+	          (setf ,name ,(compile-fn-clauses (third dec)
 	                                            local-exceptions
 	                                            (second dec)
 	                                            (acons (second dec)
 	                                                   name
-	                                                   lexical-env))))
+	                                                   lexical-env)))
 	          ,body)))
     ((eq (car dec) :funs)
      ;; `fun f ... and g ...` is mutually recursive: bind every name before
@@ -1142,12 +1236,10 @@ variables that hold them."
        `(let ,(mapcar (lambda (binding) `(,(cdr binding) nil)) bindings)
           ,@(mapcar (lambda (fun-dec)
                       `(setf ,(cdr (assoc (second fun-dec) bindings :test #'equal))
-                             ,(maybe-wrap-infix-value-initializer
-                               (second fun-dec)
-                               (compile-fn-clauses (third fun-dec)
+                             ,(compile-fn-clauses (third fun-dec)
                                                    local-exceptions
                                                    (second fun-dec)
-                                                   extended-env))))
+                                                   extended-env)))
                     funs)
           ,body)))
     ((eq (car dec) :val-rec)
@@ -1158,14 +1250,26 @@ variables that hold them."
                                      local-exceptions
                                      (acons (second dec) name lexical-env)))
           ,body)))
+    ((eq (car dec) :val-recs)
+     ;; Like `fun ... and ...': bind every name before the closures.
+     (let* ((bindings (local-declaration-lexical-bindings dec))
+            (extended-env (append bindings lexical-env)))
+       `(let ,(mapcar (lambda (binding) `(,(cdr binding) nil)) bindings)
+          ,@(mapcar (lambda (val-rec)
+                      `(setf ,(cdr (assoc (second val-rec) bindings :test #'equal))
+                             ,(compile-expr (third val-rec) local-exceptions extended-env)))
+                    (cdr dec))
+          ,body)))
     ((eq (car dec) :datatype)
      (compile-local-datatype-bindings (third dec) body
                                       (local-declaration-lexical-bindings dec)))
-    ((member (car dec) '(:type :infix :datatype-replication :expr :signature :open
-                         :structure-alias :structure-app :functor))
+    ((member (car dec) '(:type :infix :datatype-replication :expr :signature :open))
      body)
-    ((eq (car dec) :structure)
-     (compile-local-decls-into-body (third dec) body local-exceptions lexical-env))
+    ;; A structure declared by `local' or `let' is a module like any other;
+    ;; the scope of its name is the compiler's business.
+    ((member (car dec) '(:structure :structure-alias :structure-app :functor))
+     `(progn ,(compile-decl dec local-exceptions lexical-env)
+             ,body))
     ((eq (car dec) :exception)
      (let* ((name (local-binding-symbol
                    (second dec) (local-declaration-lexical-bindings dec)))
@@ -1197,9 +1301,9 @@ variables that hold them."
             (structure-prefixes (module-local-structure-prefixes
                                  local-decs
                                  (or *sml-module-prefix* "")))
-            (local-bindings (mapcan #'local-declaration-lexical-bindings
+            (local-bindings (declarations-lexical-bindings
                                     local-decs))
-            (body-bindings (mapcan #'local-declaration-lexical-bindings body-decs))
+            (body-bindings (declarations-lexical-bindings body-decs))
             (open-symbol-bindings
               (declarations-local-open-symbol-bindings local-decs))
             (open-constructor-bindings
@@ -1237,9 +1341,7 @@ variables that hold them."
               (declaim-form (compile-type-declaim-form sym expr-type))
               (compiled-expr (compile-functor-member-initializer
                               (second pat)
-                              (maybe-wrap-infix-value-initializer
-                               (second pat)
-                               (compile-expr expr local-exceptions lexical-env)))))
+                              (compile-expr expr local-exceptions lexical-env))))
          `(progn
             ,@(when declaim-form (list declaim-form))
             (defparameter ,sym ,compiled-expr)
@@ -1313,6 +1415,7 @@ also be matched against a tuple."
 (defun compile-pat (pat &optional local-exceptions lexical-env)
   (cond
     ((numberp pat) pat)
+    ((and (listp pat) (eq (car pat) :word)) (second pat))
     ((stringp pat) pat)
     ((characterp pat) pat)
     ((eq pat :wild) '_)
@@ -1434,7 +1537,11 @@ Returns NIL for combinations without a specialization."
                                        ("<=" . <=) (">=" . >=))
                                 :test #'string=))))
     (flet ((wrap (form)
-             (if bits `(ldb (byte ,bits 0) ,form) form)))
+             (cond (bits `(ldb (byte ,bits 0) ,form))
+                   ;; IEEE results (infinities, NaNs) rather than traps.
+                   ((string= tyname "real")
+                    `(with-portable-float-traps-masked ,form))
+                   (t form))))
       (cond
         ((= (length args) 1)
          (let ((x (first args)))
@@ -1454,6 +1561,10 @@ Returns NIL for combinations without a specialization."
                                               (<= . string<=) (>= . string>=))))
                     ,x ,y)
                    t nil))
+             ((string= tyname "real")
+              `(,(cdr (assoc comparison '((< . sml-real-<) (> . sml-real->)
+                                          (<= . sml-real-<=) (>= . sml-real->=))))
+                ,x ,y))
              (t `(,comparison ,x ,y)))))
         ((member name '("+" "-" "*") :test #'string=)
          (destructuring-bind (x y) args
@@ -1462,14 +1573,19 @@ Returns NIL for combinations without a specialization."
         ((string= name "mod") `(sml-int-mod ,@args))))))
 
 (defun compile-overloaded-identifier-value (name tyname)
-  "A curried function value for overloaded identifier NAME at TYNAME, or NIL."
+  "The function value of overloaded identifier NAME at TYNAME, or NIL.  A
+binary operator takes a pair, e.g. `op +' in `foldl (op +) 0 xs'."
   (let ((x (gensym "X"))
-        (y (gensym "Y")))
+        (y (gensym "Y"))
+        (pair (gensym "PAIR")))
     (if (member name '("~" "abs") :test #'string=)
         (let ((body (compile-overloaded-operation name tyname (list x))))
           (and body `(lambda (,x) ,body)))
         (let ((body (compile-overloaded-operation name tyname (list x y))))
-          (and body `(lambda (,x) (lambda (,y) ,body)))))))
+          (and body `(lambda (,pair)
+                       (let ((,x (sml-tuple-first ,pair))
+                             (,y (sml-tuple-second ,pair)))
+                         ,body)))))))
 
 (defun compile-overloaded-application (ast local-exceptions lexical-env)
   "Specialized code for AST, an application of an overloaded identifier, or
@@ -1486,45 +1602,37 @@ NIL when AST is not one or the static checker did not resolve it."
                            asts)
                    (return-from compile-overloaded-application nil))))
         (multiple-value-bind (name tyname) (overloaded-identifier-instance head)
-          (if name
-              (cond
-                ;; Unary application, or `op +` applied to a pair.
-                ((and (eq (car head) :var)
-                      (member name '("~" "abs") :test #'string=))
-                 (compile-overloaded-operation name tyname (compile-args name tyname arg)))
-                ((and (consp arg) (eq (car arg) :tuple) (= (length arg) 3))
-                 (compile-overloaded-operation
-                  name tyname (compile-args name tyname (second arg) (third arg)))))
-              ;; Curried infix application: (:app (:app op x) y).
-              (when (and (consp head) (eq (car head) :app))
-                (multiple-value-bind (name tyname)
-                    (overloaded-identifier-instance (second head))
-                  (when name
-                    (compile-overloaded-operation
-                     name tyname (compile-args name tyname (third head) arg)))))))))))
+          (when name
+            (cond
+              ;; Unary application.
+              ((and (eq (car head) :var)
+                    (member name '("~" "abs") :test #'string=))
+               (compile-overloaded-operation name tyname (compile-args name tyname arg)))
+              ;; An infix application `x + y' is `op + (x, y)'.
+              ((and (consp arg) (eq (car arg) :tuple) (= (length arg) 3))
+               (compile-overloaded-operation
+                name tyname (compile-args name tyname (second arg) (third arg)))))))))))
 
-(defun compile-checked-infix-application (ast local-exceptions lexical-env)
-  "Compile `x op y`, parsed as the curried (:app (:app (:var op) x) y), as
-the application of OP to the pair (x, y) when the static checker confirms OP
-is a variable (and not overloaded).  Infix values are wrapped by
-SML-TUPLE-OR-CURRIED-BINARY, which otherwise has to guess from the shape of
-X: a pair X was taken for both arguments.  Returns NIL otherwise."
+(defun builtin-binary-primitive (head lexical-env)
+  "When HEAD is the unshadowed built-in binary operator, e.g. `+' or `::',
+the two-argument function to call for its application to a pair."
+  (when (and (consp head) (member (car head) '(:var :ctor)) (stringp (second head)))
+    (let ((primitive (assoc (second head) *sml-binary-primitives* :test #'string=)))
+      (when (and primitive
+                 (equal (resolved-sml-symbol (second head) lexical-env)
+                        (cdr (assoc (second head) *sml-env* :test #'string=))))
+        (cdr primitive)))))
+
+(defun compile-binary-primitive-application (ast local-exceptions lexical-env)
+  "A direct two-argument call for `x op y' (or `op op (x, y)') when OP is an
+unshadowed built-in operator: no pair is allocated.  NIL otherwise."
   (when (and (consp ast) (eq (car ast) :app)
-             (consp (second ast)) (eq (car (second ast)) :app))
-    (let ((op (second (second ast))))
-      (when (and (consp op) (eq (car op) :var)
-                 (sml-binary-infix-value-name-p (second op))
-                 (equal (sml-node-fact-info op "id") "v")
-                 (not (sml-overloaded-instance op)))
-        (let ((function (resolved-sml-symbol (second op) lexical-env)))
-          ;; Built-in primitives are plain curried functions.
-          (when (symbolp function)
-            `(funcall ,function
-                      (list :tuple
-                            ,(compile-expr (third (second ast))
-                                           local-exceptions lexical-env)
-                            ,(compile-expr (third ast)
-                                           local-exceptions lexical-env)))))))))
+             (consp (third ast)) (eq (car (third ast)) :tuple)
+             (= (length (third ast)) 3))
+    (let ((primitive (builtin-binary-primitive (second ast) lexical-env)))
+      (when primitive
+        `(,primitive ,(compile-expr (second (third ast)) local-exceptions lexical-env)
+                     ,(compile-expr (third (third ast)) local-exceptions lexical-env))))))
 
 (defun compile-expr (ast &optional local-exceptions lexical-env)
   "Compiles an SML expression AST into a Common Lisp form."
@@ -1542,10 +1650,7 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
      (second ast))
 
     ((and (listp ast) (eq (car ast) :op-var))
-     `(sml-tuple-or-curried-binary
-       ,(multiple-value-bind (name tyname) (overloaded-identifier-instance ast)
-          (or (and name (compile-overloaded-identifier-value name tyname))
-              (compile-expr `(:var ,(second ast)) local-exceptions lexical-env)))))
+     (compile-expr `(:var ,(second ast)) local-exceptions lexical-env))
 
     ((and (listp ast) (eq (car ast) :ctor))
      (cond
@@ -1575,10 +1680,10 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
           (equal (second ast) '(:var "~"))
           (consp (third ast))
           (eq (car (third ast)) :word))
-     (logand most-positive-fixnum (- (second (third ast)))))
+     (logand +sml-word-mask+ (- (second (third ast)))))
 
     ((compile-overloaded-application ast local-exceptions lexical-env))
-    ((compile-checked-infix-application ast local-exceptions lexical-env))
+    ((compile-binary-primitive-application ast local-exceptions lexical-env))
 
     ;; Replace the :app block in compile-expr
     ((and (listp ast) (eq (car ast) :app))
@@ -1678,19 +1783,23 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
                                (compile-expr expr local-exceptions lexical-env))
                              (cdr ast))))
 
+    ((and (listp ast) (eq (car ast) :self-tail-call))
+     (compile-self-tail-call (second ast) (cddr ast) local-exceptions lexical-env))
+
     ((and (listp ast) (eq (car ast) :fn))
      (let ((clauses (second ast))
            (tmp-arg (gensym "ARG")))
-       `(lambda (,tmp-arg)
-          (trivia:match ,tmp-arg
-            ,@(mapcar (lambda (branch)
-	                        (let* ((var-map (pattern-variable-map (first branch)
-	                                                              local-exceptions))
-                               (branch-env (append var-map lexical-env)))
-                          `(,(compile-pat (first branch) local-exceptions branch-env)
-                            ,(compile-expr (second branch) local-exceptions branch-env))))
-                      clauses)
-            (_ ,(compile-match-failure "Match" "fn" (first (first clauses))))))))
+       (sml-lambda-form
+        nil tmp-arg
+        `(trivia:match ,tmp-arg
+           ,@(mapcar (lambda (branch)
+                       (let* ((var-map (pattern-variable-map (first branch)
+                                                             local-exceptions))
+                              (branch-env (append var-map lexical-env)))
+                         `(,(compile-pat (first branch) local-exceptions branch-env)
+                           ,(compile-expr (second branch) local-exceptions branch-env))))
+                     clauses)
+           (_ ,(compile-match-failure "Match" "fn" (first (first clauses))))))))
 
     (t (error "Unknown AST: ~A" ast))))
 
@@ -1699,19 +1808,28 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
   (cond
     ((eq (car ast) :val)
      (compile-top-level-val (second ast) (third ast) local-exceptions
-                            (getf (cdddr ast) :type) lexical-env))
+                            (sml-type-ast->binding-type (getf (cdddr ast) :type))
+                            lexical-env))
     ((eq (car ast) :vals)
      ;; `val p1 = e1 and p2 = e2` evaluates every expression before binding
-     ;; anything, like `val (p1, p2) = (e1, e2)`.
-     (compile-top-level-val
-      `(:pat-tuple ,@(mapcar #'second (cdr ast)))
-      `(:tuple ,@(mapcar (lambda (val-dec)
-                           (let ((type (getf (cdddr val-dec) :type)))
-                             (if type
-                                 `(:typed ,(third val-dec) ,type)
-                                 (third val-dec))))
-                         (cdr ast)))
-      local-exceptions nil lexical-env))
+     ;; anything, like `val (p1, p2) = (e1, e2)`.  `val rec` bindings joined
+     ;; to them come last.
+     (let ((vals (remove :val (cdr ast) :key #'car :test-not #'eq))
+           (recs (remove :val (cdr ast) :key #'car)))
+       `(progn
+          ,(compile-top-level-val
+            `(:pat-tuple ,@(mapcar #'second vals))
+            `(:tuple ,@(mapcar #'third vals))
+            local-exceptions
+            `(:tuple ,@(mapcar (lambda (val-dec)
+                                 (or (sml-type-ast->binding-type
+                                      (getf (cdddr val-dec) :type))
+                                     (infer-sml-ast-type (third val-dec)
+                                                         :package *sml-package*)))
+                               vals))
+            lexical-env)
+          ,@(mapcar (lambda (rec) (compile-decl rec local-exceptions lexical-env))
+                    recs))))
     ((eq (car ast) :val-rec)
      (let ((name (target-sml-symbol (second ast))))
        `(progn
@@ -1724,6 +1842,20 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
                                         (acons (second ast) name lexical-env))))
           ,(compile-type-registration-form name (infer-sml-ast-type (third ast) :package *sml-package*))
           ,(compile-export-form (list name)))))
+    ((eq (car ast) :val-recs)
+     ;; `val rec f = ... and g = ...': every name is bound in every body.
+     (let ((*sml-binding-symbol-env*
+             (append (mapcar (lambda (val-rec)
+                               (cons (second val-rec) (target-sml-symbol (second val-rec))))
+                             (cdr ast))
+                     *sml-binding-symbol-env*)))
+       `(progn
+          ,@(mapcar (lambda (val-rec)
+                      `(defparameter ,(target-sml-symbol (second val-rec)) nil))
+                    (cdr ast))
+          ,@(mapcar (lambda (val-rec)
+                      (compile-decl val-rec local-exceptions lexical-env))
+                    (cdr ast)))))
     ((eq (car ast) :fun)
      (let* ((name (target-sml-symbol (second ast)))
             (fun-type (loop repeat (length (first (first (third ast))))
@@ -1733,14 +1865,12 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
 	          (declaim (special ,name))
 	          (defparameter ,name ,(let ((*sml-binding-symbol-env*
 	                                       (acons (second ast) name *sml-binding-symbol-env*)))
-	                                  (maybe-wrap-infix-value-initializer
-	                                   (second ast)
-	                                   (compile-fn-clauses (third ast)
+	                                  (compile-fn-clauses (third ast)
 	                                                       local-exceptions
 	                                                       (second ast)
 	                                                       (acons (second ast)
 	                                                              name
-	                                                              lexical-env)))))
+	                                                              lexical-env))))
 	          ,(compile-type-registration-form name fun-type)
 	          ,(compile-export-form (list name)))))
     ((eq (car ast) :funs)
@@ -1768,7 +1898,12 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
 	                               (defun ,cname (payload) (cons ',keyword payload))
 	                               (defparameter ,cname #',cname)
 	                               (register-sml-constructor ',cname)
-	                               ,(compile-type-registration-form cname `(:fn ,(or (getf (cddr c) :arg-type) :unknown) ,(second ast)))
+	                               ,(compile-type-registration-form
+                                         cname
+                                         `(:fn ,(or (sml-type-ast->binding-type
+                                                     (getf (cddr c) :arg-type))
+                                                    :unknown)
+                                               ,(second ast)))
 	                               ,(compile-export-form (list cname)))
 	                            ;; If no args, it's just the keyword constant
 	                            `(progn
@@ -1777,6 +1912,9 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
 	                               ,(compile-type-registration-form cname (second ast))
 	                               ,(compile-export-form (list cname))))))
                     ctors)
+          ,@(mapcar (lambda (binding)
+                      (compile-type-alias-form (second binding) (third binding)))
+                    (getf (cdddr ast) :withtype))
           ,(compile-export-form nil))))
     ((eq (car ast) :datatype-replication)
      `(progn
@@ -1798,13 +1936,24 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
        ,(current-qualified-sml-name (second ast))
        ,(resolve-structure-prefix (third ast))))
 	    ((eq (car ast) :structure-app)
-	     (let* ((args-text (fourth ast))
+	     (let* ((argument-strexp (strip-sml-strexp-constraints (fourth ast)))
 	            (target-name (current-qualified-sml-name (second ast)))
-	            (argument (functor-argument-structure-name args-text))
-	            (argument-decs (functor-argument-declarations args-text))
+	            ;; A functor application or `let' argument is bound to a
+	            ;; structure of its own first, as in `F (G (X))'.
+	            (nested-name (and (member (car argument-strexp) '(:str-app :str-let))
+	                              (format nil "~A.%ARG" (second ast))))
+	            (nested-form (and nested-name
+	                              (compile-decl (sml-structure-binding-node
+	                                             nested-name nil argument-strexp)
+	                                            local-exceptions lexical-env)))
+	            (argument (and (not nested-name)
+	                           (functor-argument-structure-name argument-strexp)))
+	            ;; A `struct' argument is compiled as a module of its own.
+	            (argument-decs (and (not argument) (not nested-name)
+	                                (sml-strexp-body-decs argument-strexp)))
 	            (argument-module
 	              (and argument-decs
-	                   (functor-argument-module-name target-name args-text)))
+	                   (functor-argument-module-name target-name)))
 	            (argument-members
 	              (and argument-decs
 	                   (declarations-bound-names argument-decs)))
@@ -1820,11 +1969,9 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
 	                                   *sml-local-structure-prefixes*)))
 	                     (compile-program-decls argument-decs
 	                                            local-exceptions
-	                                            lexical-env))))
-	            (value-bindings
-	              (unless argument-decs
-	                (functor-argument-value-bindings args-text))))
+	                                            lexical-env)))))
 	       `(progn
+	          ,@(and nested-form (list nested-form))
 	          ,@argument-forms
 	          ,@(when argument-module
 	              `((register-sml-structure-members
@@ -1836,13 +1983,24 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
 	           ,target-name
 	           ,(resolve-functor-name (third ast))
 	           :argument ,(or argument-module
+	                          (and nested-name (current-qualified-sml-name nested-name))
 	                          (and argument
-	                               (resolve-structure-prefix argument)))
-	           :value-bindings ',value-bindings))))
+	                               (resolve-structure-prefix argument)))))))
 	    ((eq (car ast) :functor)
 	     (let* ((module-name (current-qualified-sml-name (second ast)))
 	            (param-name (getf (cdddr ast) :param))
-	            (members (declarations-bound-names (third ast)))
+	            ;; The parameter's members, as its signature specifies them,
+	            ;; so that the body can `open' it.
+	            (*sml-local-structure-members*
+	              (let ((param-sigexp (getf (cdddr ast) :param-sigexp)))
+	                (multiple-value-bind (exports complete)
+	                    (and param-name param-sigexp (sml-signature-exports param-sigexp))
+	                  (if complete
+	                      (acons param-name exports *sml-local-structure-members*)
+	                      *sml-local-structure-members*))))
+	            (members (restrict-structure-members-to-signature
+	                      (declarations-bound-names (third ast))
+	                      (getf (cdddr ast) :result-sigexp)))
 	            (structure-prefixes (module-local-structure-prefixes (third ast) module-name))
 	            (forms (let ((*sml-module-prefix* module-name)
                          (*sml-compiling-functor* t)
@@ -1882,7 +2040,8 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
        (if arg-type
            `(progn
               (defparameter ,name (make-sml-exception-function ,(second ast)))
-              ,(compile-type-registration-form name `(:fn ,arg-type "exn"))
+              ,(compile-type-registration-form
+                name `(:fn ,(sml-type-ast->binding-type arg-type) "exn"))
               ,(compile-export-form (list name)))
            `(progn
               (defparameter ,name (make-sml-exception-constructor ,(second ast)))
@@ -1897,7 +2056,7 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
                                       local-exceptions))
             (module-bindings (declarations-local-module-member-bindings local-decs))
             (local-symbol-bindings
-              (mapcan #'local-declaration-lexical-bindings local-decs))
+              (declarations-lexical-bindings local-decs))
             (open-symbol-bindings
               (declarations-local-open-symbol-bindings local-decs))
             (open-constructor-bindings
@@ -2018,11 +2177,22 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
     (otherwise
      nil)))
 
+(defvar *sml-declaration-compiled-hook* nil
+  "When non-NIL, a function called with each declaration-level AST node and
+the CL form compiled for it, while the declaration's compile-time
+environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
+
+(defun note-compiled-sml-declaration (dec form)
+  (when *sml-declaration-compiled-hook*
+    (funcall *sml-declaration-compiled-hook* dec form))
+  form)
+
 (defun compile-program-decls (decs &optional (local-exceptions nil) lexical-env)
   (if (null decs)
       nil
       (let* ((dec (first decs))
-             (form (compile-decl dec local-exceptions lexical-env))
+             (form (note-compiled-sml-declaration
+                    dec (compile-decl dec local-exceptions lexical-env)))
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
              (module-bindings (declaration-local-module-member-bindings dec))
              (symbol-bindings (declaration-binding-symbol-bindings dec))

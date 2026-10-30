@@ -1,0 +1,8 @@
+RUNTIME
+TYPE-ERROR: The value
+              42
+            is not of type
+              SEQUENCE
+
+cl-sml frames (innermost first):
+  CL-SML::EXECUTE-COMPILED-SML-FILE

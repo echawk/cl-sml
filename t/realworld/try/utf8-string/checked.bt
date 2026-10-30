@@ -1,0 +1,8 @@
+CHECKER
+TYPE-ERROR: The value
+              #S(CL-SML::SML-EXCEPTION-TAG :NAME "Subscript")
+            is not of type
+              LIST
+
+cl-sml frames (innermost first):
+  CL-SML::CALL-WITH-SML-FUNCTOR-BINDINGS

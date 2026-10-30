@@ -1,0 +1,4 @@
+program	mode	class	phase	compile_s	run_s	warnings	message
+bm-f-arith	plain-long	OK		0.02	120.88	17	
+bm-ratio-regions	plain-long	OK		0.32	213.55	101	
+bm-simple	plain-long	LISPCOMPILE	LISPCOMPILE	5.55	160.85	342	COMPILED-PROGRAM-ERROR: Execution of a form compiled with errors. Form:   (LET ((T        (FUNCALL SML.RW::|Simple.array2|                 (LIST :TUPLE SML.RW::|Simple.dimension_all_zones|                       SML.RW::|Simple.constant_heat_source|))))   (PROG

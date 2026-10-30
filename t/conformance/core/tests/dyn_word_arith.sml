@@ -1,0 +1,10 @@
+(* word arithmetic is modulo 2^Word.wordSize (Definition App. E, Basis WORD) *)
+fun b x = print ((if x then "true" else "false") ^ "\n")
+val w = 0w0 - 0w1
+val _ = b (w > 0w0)
+val _ = b (w + 0w1 = 0w0)
+val _ = b (0w5 div 0w2 = 0w2)
+val _ = b (0w5 mod 0w2 = 0w1)
+val _ = b (0wxFF + 0w1 = 0w256)
+val _ = b (w * w = 0w1)
+val _ = b ((0w1 div 0w0 = 0w0) handle Div => true)

@@ -1,0 +1,1 @@
+RUNTIME	RUNTIME	0.01		7	SIMPLE-TYPE-ERROR: Value of 1.5d0 in                    (SB-KERNEL:%COERCE-CALLABLE-FOR-CALL 1.5d0)                    is                      1.5d0,                    not a                      (OR FUNCTION SYMBOL).
