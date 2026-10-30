@@ -31,7 +31,7 @@ struct
                               foldli'(f, f(i, sub(vec, i), x), vec, i + 1)
   fun foldri f init vec     = foldri'(f, init, vec, length vec)
   and foldri'(f, x, vec, i) = if i = 0 then x else
-                              foldli'(f, f(i - 1, sub(vec, i-1), x), vec, i - 1)
+                              foldri'(f, f(i - 1, sub(vec, i-1), x), vec, i - 1)
 
   fun mapi f vec            = fromList
                                 (foldri (fn (i, x, l) => f(i, x)::l) [] vec)

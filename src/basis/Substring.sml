@@ -17,14 +17,17 @@ struct
   fun base ss                 = ss : substring
   val string                  = String.substring o base
   val size                    = #3 o base
-  fun sub((s, i, n), j)       = String.sub(s, i+j)
+  fun sub((s, i, n), j)       = if j < 0 orelse j >= n then raise Subscript
+                                else String.sub(s, i+j)
 
   fun substring(s, i, j)      = (if i < 0 orelse j < 0 orelse
                                    String.size s < i + j
                                  then raise Subscript
                                  else (s, i, j)
                                 ) handle Overflow => raise Subscript
-  fun extract(s, i, NONE)     = substring(s, i, String.size s - i)
+  fun extract(s, i, NONE)     = if i < 0 orelse i > String.size s
+                                then raise Subscript
+                                else substring(s, i, String.size s - i)
     | extract(s, i, SOME j)   = substring(s, i, j)
   fun full s                  = substring(s, 0, String.size s)
 
@@ -99,14 +102,14 @@ struct
       then raise Span
       else (s, i, (i' + n') - i)
 
-  fun fields f (s, i, n) = fields'(f, s, i, i, n)
-  and fields'(f, s, i, j, n) =
-      if j = i + n then
+  fun fields f (s, i, n) = fields'(f, s, i, i, i + n)
+  and fields'(f, s, i, j, e) =
+      if j = e then
         (s, i, j - i)::nil
       else if f(String.sub(s, j)) then
-        (s, i, j - i)::fields'(f, s, j + 1, j + 1, n - 1)
+        (s, i, j - i)::fields'(f, s, j + 1, j + 1, e)
       else
-        fields'(f, s, i, j + 1, n - 1)
+        fields'(f, s, i, j + 1, e)
 
   fun tokens f s = List.filter (fn(s, i, n) => Bool.not(n = 0)) (fields f s)
 

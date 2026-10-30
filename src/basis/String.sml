@@ -31,12 +31,16 @@ struct
   and explode'(s, i, l)       = if i < 0 then l else
                                 explode'(s, i - 1, sub(s, i)::l)
 
-  fun substring(s, i, j)      = substring'(s, i, i - 1 + j, nil)
-                                handle Overflow => raise Subscript
+  fun substring(s, i, j)      = (if i < 0 orelse j < 0 orelse size s < i + j
+                                 then raise Subscript
+                                 else substring'(s, i, i - 1 + j, nil)
+                                ) handle Overflow => raise Subscript
   and substring'(s, i, j, cs) = if i > j then implode cs else
                                 substring'(s, i, j - 1, sub(s, j)::cs)
 
-  fun extract(s, i, NONE)     = substring(s, i, size s - i)
+  fun extract(s, i, NONE)     = if i < 0 orelse i > size s
+                                then raise Subscript
+                                else substring(s, i, size s - i)
     | extract(s, i, SOME j)   = substring(s, i, j)
 
   fun map f s                 = implode(List.map f (explode s))
@@ -69,12 +73,12 @@ struct
 
   fun isSubstring s1 s2 = isSubstring'(s1, s2, 0)
   and isSubstring'(s1, s2, i) =
-      i + size s1 < size s2 andalso
+      i + size s1 <= size s2 andalso
         (isSubstring''(s1, s2, i, 0) orelse
          isSubstring'(s1, s2, i + 1))
   and isSubstring''(s1, s2, i, j) =
       j = size s1 orelse
-        sub(s1, i) = sub(s2, i + j) andalso
+        sub(s1, j) = sub(s2, i + j) andalso
         isSubstring''(s1, s2, i, j + 1)
 
   fun collate f (s, t) = collate'(f, s, t, 0)

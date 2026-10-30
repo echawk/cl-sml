@@ -39,7 +39,7 @@ struct
                              foldli'(f, f(i, sub(sl, i), x), sl, i + 1)
   fun foldri f init sl     = foldri'(f, init, sl, length sl)
   and foldri'(f, x, sl, i) = if i = 0 then x else
-                             foldli'(f, f(i - 1, sub(sl, i - 1), x), sl, i - 1)
+                             foldri'(f, f(i - 1, sub(sl, i - 1), x), sl, i - 1)
 
   fun mapi f sl            = let fun ff(i, a, l) = f(i, a)::l
                              in Vector.fromList(List.rev (foldli ff [] sl)) end

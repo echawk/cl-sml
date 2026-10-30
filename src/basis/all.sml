@@ -6,6 +6,17 @@
  * Notes:
  * - We only implement required structures (and their signatures).
  * - Modules commented out are not yet implemented.
+ *
+ * cl-sml: this directory is cl-sml's Basis Library.  It is derived from
+ * HaMLet's (https://github.com/rossberg/hamlet, directory basis/, commit
+ * 37275b9), under HaMLet's license (LICENSE.txt here), with cl-sml's fixes
+ * and additions.  cl-sml compiles these files once into the package
+ * SML.BASIS, which every SML package sees (src/basis.lisp), and HaMLet's
+ * checker elaborates the same files as the initial basis of the programs it
+ * checks (src/type-checker.lisp).  `use{b = "Name"}' is the primitive Name
+ * of cl-sml's run time (SML-BASIS-PRIMITIVE in src/runtime.lisp).  HaMLet
+ * evaluates this basis when a checker starts, so primitives HaMLet does not
+ * know may only be applied inside functions, never at load time.
  *)
 
 local val use : string -> unit = use in val _ = let in
