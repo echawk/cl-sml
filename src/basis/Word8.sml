@@ -30,11 +30,12 @@ struct
   val <<                  = use{b = "Word8.<<"}   : word * Word.word -> word
   val >>                  = use{b = "Word8.>>"}   : word * Word.word -> word
   val ~>>                 = use{b = "Word8.~>>"}  : word * Word.word -> word
-  val op+                 = op+ : word * word -> word
-  val op-                 = op- : word * word -> word
-  val op*                 = op* : word * word -> word
-  val op div              = op div : word * word -> word
-  val op mod              = op mod : word * word -> word
+  (* cl-sml: primitives; see Word.sml *)
+  val op+                 = use{b = "Word8.+"} : word * word -> word
+  val op-                 = use{b = "Word8.-"} : word * word -> word
+  val op*                 = use{b = "Word8.*"} : word * word -> word
+  val op div              = use{b = "Word8.div"} : word * word -> word
+  val op mod              = use{b = "Word8.mod"} : word * word -> word
   fun ~w                  = notb(w - 0w1)
 
   val op>                 = op>  : word * word -> bool

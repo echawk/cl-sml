@@ -42,8 +42,10 @@ struct
       Char.ord(Char.toUpper c) -
         (if c < #"A" then Char.ord #"0" else Char.ord #"A" - 10)
 
-  fun fmt radix 0w0    = "0"
-    | fmt radix i      = fmt'(base radix, i, [])
+  (* cl-sml: reduced first, as unchecked code may pass any integer *)
+  fun fmt radix w      = fmt0(radix, fromInt(toInt w))
+  and fmt0(radix, 0w0) = "0"
+    | fmt0(radix, i)   = fmt'(base radix, i, [])
   and fmt'(b, 0w0, cs) = String.implode cs
     | fmt'(b, i, cs)   = fmt'(b, i div b, digit(toInt(i mod b)) :: cs)
 
@@ -97,11 +99,13 @@ struct
   val <<     = use{b = "Word.<<"}   : word * word -> word
   val >>     = use{b = "Word.>>"}   : word * word -> word
   val ~>>    = use{b = "Word.~>>"}  : word * word -> word
-  val op+    = op+ : word * word -> word
-  val op-    = op- : word * word -> word
-  val op*    = op* : word * word -> word
-  val op div = op div : word * word -> word
-  val op mod = op mod : word * word -> word
+  (* cl-sml: primitives, which reduce modulo 2^wordSize whether or not the
+   * program was checked (overloaded operators are only resolved then). *)
+  val op+    = use{b = "Word.+"} : word * word -> word
+  val op-    = use{b = "Word.-"} : word * word -> word
+  val op*    = use{b = "Word.*"} : word * word -> word
+  val op div = use{b = "Word.div"} : word * word -> word
+  val op mod = use{b = "Word.mod"} : word * word -> word
   fun ~w     = notb(w - 0w1)
 
   val op>    = op>  : word * word -> bool

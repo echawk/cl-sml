@@ -1787,10 +1787,20 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
   (when (and (consp ast) (eq (car ast) :app)
              (consp (third ast)) (eq (car (third ast)) :tuple)
              (= (length (third ast)) 3))
-    (let ((primitive (builtin-binary-primitive (second ast) lexical-env)))
+    (let ((primitive (builtin-binary-primitive (second ast) lexical-env))
+          (x (second (third ast)))
+          (y (third (third ast))))
       (when primitive
-        `(,primitive ,(compile-expr (second (third ast)) local-exceptions lexical-env)
-                     ,(compile-expr (third (third ast)) local-exceptions lexical-env))))))
+        (let ((args (list (compile-expr x local-exceptions lexical-env)
+                          (compile-expr y local-exceptions lexical-env)))
+              (word-operation (cdr (assoc primitive '((sml-+ . +) (sml-- . -) (sml-* . *))))))
+          (if (and word-operation
+                   (or (and (consp x) (eq (car x) :word))
+                       (and (consp y) (eq (car y) :word))))
+              ;; Without the checker's resolution, an operand that is a
+              ;; word literal still makes this word arithmetic.
+              `(ldb (byte +sml-word-size+ 0) (,word-operation ,@args))
+              `(,primitive ,@args)))))))
 
 (defun compile-expr (ast &optional local-exceptions lexical-env)
   "Compiles an SML expression AST into a Common Lisp form."

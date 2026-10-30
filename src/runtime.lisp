@@ -1519,7 +1519,7 @@ beyond Int's range Overflow."
 ;;; Real.fmt.  The digits are computed from the double's exact rational
 ;;; value with integer arithmetic, rounded to nearest even, so that every
 ;;; host prints the same; the layout is C's printf (%e, %f, %G) with SML's
-;;; `~' for minus and no `+' in exponents, as in SML/NJ, MLton and Poly/ML.
+;;; `~' for minus and unpadded exponents without `+', as Poly/ML has it.
 
 (defun sml-decimal-exponent (q)
   "The E with 10^E <= Q < 10^(E+1), for a positive rational Q."
@@ -1547,8 +1547,9 @@ the point (and no point when DECIMALS is 0)."
         (format nil "~D.~V,'0D" whole decimals fraction))))
 
 (defun sml-exponent-string (e)
-  "An exponent as C writes it, with at least two digits, and `~'."
-  (format nil "E~:[~;~~~]~2,'0D" (minusp e) (abs e)))
+  "An exponent, with `~', unpadded as Poly/ML writes it (C pads it to two
+digits)."
+  (format nil "E~:[~;~~~]~D" (minusp e) (abs e)))
 
 (defun sml-real-fixed (q decimals)
   (sml-digits-with-point (round (* q (expt 10 decimals))) decimals))
@@ -1679,8 +1680,63 @@ beyond the doubles."
   (finish-output)
   (uiop:quit (if (integerp status) status 0)))
 
+(defun sml-word-primitives (structure bits)
+  "The primitives of the word structure STRUCTURE, whose words have BITS
+bits.  Unchecked code may have computed their arguments with integer
+arithmetic (see SML-ARITHMETIC), so they reduce them modulo 2^BITS first."
+  (flet ((name (operation) (format nil "~A.~A" structure operation))
+         (w (x) (ldb (byte bits 0) x)))
+    (flet ((binary (function)
+             (lambda (tuple)
+               (w (funcall function (w (sml-tuple-first tuple))
+                           (w (sml-tuple-second tuple))))))
+           (shift (function)
+             (lambda (tuple)
+               (funcall function (w (sml-tuple-first tuple))
+                        (ldb (byte +sml-word-size+ 0) (sml-tuple-second tuple)))))
+           (division (function)
+             (lambda (tuple)
+               (let ((divisor (w (sml-tuple-second tuple))))
+                 (if (zerop divisor)
+                     (sml-raise-named-exception "Div")
+                     (values (funcall function (w (sml-tuple-first tuple)) divisor)))))))
+      `((,(name "wordSize") . ,(sml-constant-primitive bits))
+        (,(name "toInt") . ,(lambda (x) (sml-check-int (w x))))
+        (,(name "toIntX") . ,(lambda (x) (sml-check-int (sml-word-to-int-x bits (w x)))))
+        (,(name "fromInt") . ,(lambda (x) (w x)))
+        ;; LargeWord is Word.
+        (,(name "toLarge") . ,(lambda (x) (ldb (byte +sml-word-size+ 0) (w x))))
+        (,(name "toLargeX") . ,(lambda (x)
+                                 (sml-word-from-int +sml-word-size+
+                                                    (sml-word-to-int-x bits (w x)))))
+        (,(name "fromLarge") . ,(lambda (x) (w x)))
+        (,(name "notb") . ,(lambda (x) (w (lognot x))))
+        (,(name "orb") . ,(binary #'logior))
+        (,(name "xorb") . ,(binary #'logxor))
+        (,(name "andb") . ,(binary #'logand))
+        (,(name "<<") . ,(shift (lambda (word count) (sml-word-shift bits word count))))
+        (,(name ">>") . ,(shift (lambda (word count) (sml-word-shift bits word (- count)))))
+        (,(name "~>>") . ,(shift (lambda (word count)
+                                   (sml-word-arithmetic-shift-right bits word count))))
+        (,(name "+") . ,(binary #'+))
+        (,(name "-") . ,(binary #'-))
+        (,(name "*") . ,(binary #'*))
+        (,(name "div") . ,(division #'floor))
+        (,(name "mod") . ,(division #'mod))))))
+
+(defparameter *sml-word-structures*
+  `(("Word" . ,+sml-word-size+) ("Word8" . 8))
+  "The word structures whose primitives SML-WORD-PRIMITIVES makes.")
+
 (defun sml-basis-primitive (name)
-  (or (cdr (assoc name
+  (or (let ((dot (position #\. name :from-end t)))
+        (and dot
+             (let ((bits (cdr (assoc (subseq name 0 dot) *sml-word-structures*
+                                     :test #'string=))))
+               (and bits
+                    (cdr (assoc name (sml-word-primitives (subseq name 0 dot) bits)
+                                :test #'string=))))))
+      (cdr (assoc name
                   `(("General.exnName" . ,#'sml-exn-name-primitive)
                     ("String.maxSize" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("String.size" . ,#'sml-size)
@@ -1697,49 +1753,6 @@ beyond the doubles."
                                       (sml-int-quot (second tuple) (third tuple))))
                     ("Int.rem" . ,(lambda (tuple)
                                      (sml-int-rem (second tuple) (third tuple))))
-                    ("Word.wordSize" . ,(sml-constant-primitive +sml-word-size+))
-                    ("Word.toInt" . ,#'identity)
-                    ("Word.toIntX" . ,(lambda (word)
-                                        (sml-word-to-int-x +sml-word-size+ word)))
-                    ("Word.fromInt" . ,(lambda (value)
-                                         (sml-word-from-int +sml-word-size+ value)))
-                    ("Word.notb" . ,#'sml-word-not)
-                    ("Word.orb" . ,(lambda (tuple)
-                                     (logior (sml-tuple-first tuple) (sml-tuple-second tuple))))
-                    ("Word.xorb" . ,(lambda (tuple)
-                                      (logxor (sml-tuple-first tuple) (sml-tuple-second tuple))))
-                    ("Word.andb" . ,(lambda (tuple)
-                                      (logand (sml-tuple-first tuple) (sml-tuple-second tuple))))
-                    ("Word.<<" . ,#'sml-word-shift-left)
-                    ("Word.>>" . ,#'sml-word-shift-right)
-                    ("Word.~>>" . ,(lambda (tuple)
-                                     (sml-word-arithmetic-shift-right
-                                      +sml-word-size+
-                                      (sml-tuple-first tuple)
-                                      (sml-tuple-second tuple))))
-                    ("Word8.toLarge" . ,#'identity)
-                    ("Word8.toLargeX" . ,(lambda (word)
-                                           (sml-word-from-int +sml-word-size+
-                                                              (sml-word-to-int-x 8 word))))
-                    ("Word8.fromLarge" . ,(lambda (value) (logand value #xff)))
-                    ("Word8.toInt" . ,#'identity)
-                    ("Word8.toIntX" . ,(lambda (word) (sml-word-to-int-x 8 word)))
-                    ("Word8.fromInt" . ,(lambda (value) (logand value #xff)))
-                    ("Word8.notb" . ,(lambda (value) (logand #xff (lognot value))))
-                    ("Word8.orb" . ,(lambda (tuple)
-                                      (logand #xff (logior (sml-tuple-first tuple)
-                                                           (sml-tuple-second tuple)))))
-                    ("Word8.xorb" . ,(lambda (tuple)
-                                       (logand #xff (logxor (sml-tuple-first tuple)
-                                                            (sml-tuple-second tuple)))))
-                    ("Word8.andb" . ,(lambda (tuple)
-                                       (logand #xff (logand (sml-tuple-first tuple)
-                                                            (sml-tuple-second tuple)))))
-                    ("Word8.<<" . ,(lambda (tuple) (sml-word-shift-left tuple 8)))
-                    ("Word8.>>" . ,(lambda (tuple) (sml-word-shift-right tuple 8)))
-                    ("Word8.~>>" . ,(lambda (tuple)
-                                      (sml-word-arithmetic-shift-right
-                                       8 (sml-tuple-first tuple) (sml-tuple-second tuple))))
                     ("Vector.maxLen" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("Vector.length" . ,#'length)
                     ("Vector.sub" . ,(lambda (tuple)
