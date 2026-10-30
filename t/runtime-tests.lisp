@@ -257,8 +257,9 @@
    "val appended = [1, 2] @ [3, 4];
     val same_list = [1, 2] = [1, 2];
     val different_list = [1, 2] <> [2, 1];
-    val folded_left = foldl (fn acc => fn x => acc + x) 0 [1, 2, 3, 4];
-    val folded_right = foldr (fn x => fn acc => x + acc) 0 [1, 2, 3, 4];
+    val folded_left = foldl (fn (x, acc) => acc + x) 0 [1, 2, 3, 4];
+    val folded_right = foldr (fn (x, acc) => x + acc) 0 [1, 2, 3, 4];
+    val folded_op = foldl (op +) 0 [1, 2, 3, 4];
     val reversed = rev [1, 2, 3];
     val mapped = map (fn x => x + 1) [1, 2, 3];
     val composed = (op o (fn x => x + 1, fn x => x * 2)) 10;
@@ -277,6 +278,7 @@
     val rounded = round 3.2;
     val realed = real 7;
     val pairPlus = fn (x, y) => x + y;
+    infix %%;
     val op%% = pairPlus;
     val tupled_infix_alias = 2 %% 3;
     val ref_result =
@@ -291,6 +293,7 @@
   (is (eq t (sml-value "different_list")))
   (is (= 10 (sml-value "folded_left")))
   (is (= 10 (sml-value "folded_right")))
+  (is (= 10 (sml-value "folded_op")))
   (is (equal '(3 2 1) (sml-value "reversed")))
   (is (equal '(2 3 4) (sml-value "mapped")))
   (is (= 21 (sml-value "composed")))
@@ -314,12 +317,16 @@
 (test integration-infix-fun-supports-prefix-tuple-call
   (let ((*test-sml-package* "SML.INFIX-FUN-PREFIX-TUPLE-TEST"))
     (eval-sml-program
-     "fun (a, b) plus (c, d) = (a + c, b + d);
+     "infix plus;
+      fun (a, b) plus (c, d) = (a + c, b + d);
       fun pickUpper (T, F, G, E) = E;
-      val prefix_tuple_sum = plus((1, 2), (3, 4));
+      val prefix_tuple_sum = op plus ((1, 2), (3, 4));
+      val infix_tuple_sum = (1, 2) plus (3, 4);
       val uppercase_tuple_var = pickUpper (1, 2, 3, 4);")
     (is (equal '(:tuple 4 6)
                (sml-value "prefix_tuple_sum" *test-sml-package*)))
+    (is (equal '(:tuple 4 6)
+               (sml-value "infix_tuple_sum" *test-sml-package*)))
     (is (= 4 (sml-value "uppercase_tuple_var" *test-sml-package*)))))
 
 (test integration-parenthesized-infix-fun-with-trailing-parameter

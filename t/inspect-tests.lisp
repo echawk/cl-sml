@@ -140,7 +140,7 @@ val six = AddThree.addY 3;"
     (let ((symbol (find-symbol "notEvaluated" package)))
       (is (or (null symbol) (not (boundp symbol)))))
     (is (null (sml-lisp-source "notEvaluated" :package package)))
-    (is (equal '(funcall (funcall #'cl-sml::sml-+ 1) 2)
+    (is (equal '(cl-sml::sml-+ 1 2)
                (sml->lisp "1 + 2" :package package)))
     (is (equal (sml->lisp "1 + 2" :package package)
                (sml->lisp "1 + 2;" :package package)))
