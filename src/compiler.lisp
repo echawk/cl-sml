@@ -1219,9 +1219,7 @@ variables that hold them."
 
 (defun compute-local-declaration-lexical-bindings (dec)
   (flet ((fresh (name) (cons name (sml-lexical-symbol name)))
-         (nested (decs)
-           (loop for nested-dec in decs
-                 append (local-declaration-lexical-bindings nested-dec))))
+         (nested (decs) (declarations-lexical-bindings decs)))
     (case (car dec)
       (:val (mapcar #'fresh (pattern-bound-names (second dec))))
       ((:vals :funs :val-recs) (nested (cdr dec)))
@@ -1233,8 +1231,9 @@ variables that hold them."
 
 (defun declarations-lexical-bindings (decs)
   "The lexical bindings of the local declarations DECS, as one fresh alist
-(the memoized lists must not be destructively joined)."
-  (loop for dec in decs
+(the memoized lists must not be destructively joined), those of later
+declarations first: they shadow the earlier ones."
+  (loop for dec in (reverse decs)
         append (local-declaration-lexical-bindings dec)))
 
 (defun local-binding-symbol (name bindings)
@@ -1431,9 +1430,7 @@ declarations, those of later declarations first."
             (structure-prefixes (module-local-structure-prefixes
                                  local-decs
                                  (or *sml-module-prefix* "")))
-            (local-bindings (declarations-lexical-bindings
-                                    local-decs))
-            (body-bindings (declarations-lexical-bindings body-decs))
+            (local-bindings (declarations-lexical-bindings local-decs))
             (open-symbol-bindings
               (declarations-local-open-symbol-bindings local-decs))
             (open-constructor-bindings
@@ -1452,7 +1449,9 @@ declarations, those of later declarations first."
                  body-decs
                  body
                  inner-exceptions
-                 (append local-bindings body-bindings lexical-env)))))
+                 ;; Each body declaration's bindings come into scope
+                 ;; after it.
+                 (append local-bindings lexical-env)))))
        (let ((*sml-local-structure-members* (append module-bindings
                                                     *sml-local-structure-members*))
              (*sml-local-structure-prefixes* (append structure-prefixes

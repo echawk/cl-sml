@@ -308,3 +308,41 @@ val _ = print (Int.toString x ^ \"\\n\")"))))
   (loop for start = (search needle haystack) then (search needle haystack :start2 (1+ start))
         while start
         count t))
+
+;;; SML identifiers named like COMMON-LISP symbols
+
+(defparameter *common-lisp-named-identifiers*
+  "val T = 1
+fun list x = x
+val nil' = 2
+structure S = struct val car = 3 val NIL = 4 val PI = 5 end
+datatype d = CAR | LIST of int
+fun f CAR = 0 | f (LIST n) = n
+val _ = print (Int.toString (T + list 10 + nil' + S.car + S.NIL + S.PI + f (LIST 100) + f CAR) ^ \"\\n\")
+val t = let val T = 7 val NIL = 8 in T + NIL end
+val _ = print (Int.toString t ^ \"\\n\")
+fun g () = let val T = 5 in T + 1 end
+val _ = print (Int.toString (g ()) ^ \"\\n\")
+val h = fn x => let datatype t = T of int in case T x of T y => y end
+val _ = print (Int.toString (h 42) ^ \"\\n\")
+abstype a = A of int with fun mk x = A x fun get (A x) = x end
+val _ = print (Int.toString (get (mk 3)) ^ \"\\n\")
+functor F () = let datatype t = T in struct val x = T end end
+structure F = F ()
+val _ = print (if F.x = F.x then \"true\\n\" else \"false\\n\")
+exception T
+val _ = print ((raise T) handle T => \"T\\n\")")
+
+(test identifiers-named-like-common-lisp-symbols
+  (let ((expected (lines "125" "15" "6" "42" "3" "true" "T")))
+    (is (string= expected (run-sml *common-lisp-named-identifiers*)))
+    (is (string= expected (load-sml *common-lisp-named-identifiers*)))))
+
+(test later-let-bindings-shadow-earlier-ones
+  (is (string= (lines "3" "11" "5")
+               (run-sml "fun f r = let val {a, b} = r val a = a + b in a end
+val _ = print (Int.toString (f {a = 1, b = 2}) ^ \"\\n\")
+val g = let val x = 1 local val x = 10 in val y = x + 1 end in y end
+val _ = print (Int.toString g ^ \"\\n\")
+val h = let local val x = 2 in val x = x + 3 end in x end
+val _ = print (Int.toString h ^ \"\\n\")"))))
