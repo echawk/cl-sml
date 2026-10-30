@@ -224,23 +224,17 @@ or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
         (and mapping (cdr mapping)))))
 
 (defun resolved-sml-symbol (name &optional lexical-env)
+  ;; A built-in is still found before a binding of its name made by an
+  ;; earlier compilation unit (a known gap: HaMLet's Basis rebinds many of
+  ;; them in SML).
   (or (lexical-symbol-for-name name lexical-env)
       (functor-body-symbol
-       (or (program-binding-symbol name)
+       (or (compile-time-sml-env-symbol name)
            (let ((resolved-name (if (sml-long-name-p name)
                                     (resolve-sml-long-name name)
                                     name)))
-             (or (program-binding-symbol resolved-name)
+             (or (compile-time-sml-env-symbol resolved-name)
                  (sml-bound-symbol resolved-name)))))))
-
-(defun program-binding-symbol (name)
-  "The symbol holding NAME's binding when this program or an earlier one in
-its package bound NAME, or else when NAME is a built-in: the bindings of
-programs shadow the built-ins of the initial basis."
-  (or (cdr (assoc name *sml-binding-symbol-env* :test #'string=))
-      (let ((bound (sml-bound-symbol name)))
-        (and (sml-binding-cell-symbol-p bound) bound))
-      (cdr (assoc name *sml-env* :test #'string=))))
 
 ;;; Binding cells (see PUBLISH-SML-BINDING).  A program refers to the
 ;;; bindings it makes itself through *SML-BINDING-SYMBOL-ENV* and
