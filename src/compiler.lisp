@@ -68,8 +68,11 @@ signature is unknown), and whether the list is complete."
       (values nil nil)
       (ecase (car sigexp)
         (:sig-id
-         (let ((found (gethash (list (target-sml-package-name) (second sigexp))
-                               *sml-signature-expressions*)))
+         (let ((found (or (gethash (list (target-sml-package-name) (second sigexp))
+                                   *sml-signature-expressions*)
+                          ;; A signature of the basis.
+                          (gethash (list *sml-basis-package-name* (second sigexp))
+                                   *sml-signature-expressions*))))
            (if found
                (sml-signature-exports found (1+ depth))
                (values nil nil))))
@@ -275,12 +278,18 @@ binding cell SYMBOL is."
 its newest binding, or the package's symbol for it."
   (let* ((symbol (sml-symbol qualified-name))
          (unit-cell (and *sml-unit-cells*
-                         (gethash qualified-name *sml-unit-cells*))))
+                         (gethash qualified-name *sml-unit-cells*)))
+         ;; A name the package does not bind denotes the basis's binding.
+         (basis-symbol (and (not unit-cell)
+                            (not (sml-name-bound-p symbol))
+                            (sml-basis-symbol (symbol-name symbol)
+                                              (symbol-package symbol)))))
     (cond
-      (*sml-compiling-functor* symbol)
+      ((and *sml-compiling-functor* (not basis-symbol)) symbol)
       ((eq unit-cell :plain) symbol)
       (unit-cell)
       ((sml-binding-cell symbol))
+      (basis-symbol (or (sml-binding-cell basis-symbol) basis-symbol))
       (t symbol))))
 
 (defun current-binding-symbol (name)
@@ -627,7 +636,7 @@ separated by blanks."
     (remove-duplicates (nreverse members) :test #'string=)))
 
 (defun compile-structure-alias-form (structure-name member-name)
-  (let ((source (sml-symbol member-name))
+  (let ((source (sml-visible-symbol member-name))
         (alias (sml-symbol (format nil "~A.~A" structure-name member-name))))
     `(progn
        (when (boundp ',source)
@@ -638,7 +647,7 @@ separated by blanks."
          ,(compile-export-form (list alias))))))
 
 (defun compile-qualified-structure-alias-form (target-structure source-structure member-name)
-  (let ((source (sml-symbol (format nil "~A.~A" source-structure member-name)))
+  (let ((source (sml-visible-symbol (format nil "~A.~A" source-structure member-name)))
         (alias (sml-symbol (format nil "~A.~A" target-structure member-name))))
     `(progn
        (when (boundp ',source)
@@ -2322,7 +2331,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
            (dolist (member (lookup-sml-module-members-for-compiler
                             name
                             *sml-local-structure-members*))
-             (let* ((source-symbol (sml-symbol (qualify-sml-name source member)))
+             (let* ((source-symbol (sml-visible-symbol (qualify-sml-name source member)))
                     (canonical (sml-constructor-canonical-symbol source-symbol)))
                (when canonical
                  (push (cons member canonical) bindings))))))))

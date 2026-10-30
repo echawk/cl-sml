@@ -10,6 +10,10 @@ fun a1 <> a2  = Bool.not(a1 = a2)
 
 open General
 
+(* cl-sml: the top-level environment binds Option (Basis Library,
+ * "The top-level environment"). *)
+exception Option = Option.Option
+
 val getOpt    = Option.getOpt
 val isSome    = Option.isSome
 val valOf     = Option.valOf

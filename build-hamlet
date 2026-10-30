@@ -14,6 +14,9 @@ if [ "$(basename "${LISP:-$SBCL}")" != sbcl ]; then
     exit 2
 fi
 
+# HaMLet runs on cl-sml's Basis, which every SML package sees; the HaMLet
+# it builds interprets programs with HaMLet's own basis (hamlet/basis), whose
+# primitives HaMLet implements.
 # Loading HaMLet's generated parser needs a deep control stack; the
 # :save-runtime-options below bakes this size into the executable.
 STACK="${CL_HAMLET_STACK:-1GB}"
@@ -24,7 +27,6 @@ STACK="${CL_HAMLET_STACK:-1GB}"
     --eval '(load "~/.sbclrc")' \
     --eval "(push #p\"$ROOT/\" asdf:*central-registry*)" \
     --eval '(ql:quickload :cl-sml)' \
-    --eval "(cl-sml:load-sml-file #P\"hamlet/basis/all.sml\" :package \"$PACKAGE\")" \
     --eval "(cl-sml:load-sml-file #P\"hamlet/hamlet.sml\" :package \"$PACKAGE\")" \
     --eval "(cl-sml::configure-hamlet-basis-path \"$PACKAGE\" #P\"$ROOT/hamlet/basis/\")" \
     --eval "(setf cl-sml::*hamlet-image-package* \"$PACKAGE\")" \

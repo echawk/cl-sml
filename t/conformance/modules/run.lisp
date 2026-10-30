@@ -6,8 +6,8 @@
 ;;;;
 ;;;; Configuration (environment variables, normally set by run.sh):
 ;;;;   CONF_CHECKER  "1" to type-check with HaMLet (cl-sml:enable-hamlet-type-checker)
-;;;;   CONF_BASIS    "auto" (default): preload hamlet/basis/all.sml for b* tests only
-;;;;                 "none": never preload; "all": preload for every test
+;;;;   CONF_BASIS    ignored: every SML package sees cl-sml's Basis (kept for
+;;;;                 older command lines; it used to preload HaMLet's)
 ;;;;   CONF_TIMEOUT  seconds per test (default 60)
 ;;;;   CONF_ISOLATE  "fork" (default for plain mode on SBCL): one forked child per test;
 ;;;;                 "none": in-process (run.sh restarts the Lisp after a crash and
@@ -73,11 +73,8 @@
     (funcall thunk)))
 
 (defun load-basis (package)
-  (let ((cl-sml:*sml-type-checker* nil))
-    (quietly (lambda ()
-               (cl-sml:load-sml-file
-                (asdf:system-relative-pathname "cl-sml" "hamlet/basis/all.sml")
-                :package package)))))
+  ;; Every SML package sees cl-sml's Basis; there is nothing to load.
+  (declare (ignore package)))
 
 (defun classify (condition)
   (cond

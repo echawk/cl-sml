@@ -30,6 +30,49 @@
       (initialize-sml-package package))
     package))
 
+;;; The Basis Library (src/basis/) is compiled once into the package
+;;; SML.BASIS (src/basis.lisp).  Every other SML package sees its bindings:
+;;; a name that a package does not bind itself denotes the basis's binding
+;;; of that name, if there is one.  Packages do not inherit the basis's
+;;; symbols (USE-PACKAGE), so that a program's own bindings, which set the
+;;; package's symbols, can never change the basis.
+
+(defparameter *sml-basis-package-name* "SML.BASIS")
+
+(defun sml-basis-package ()
+  (find-package *sml-basis-package-name*))
+
+(defun sml-name-bound-p (symbol)
+  "Does SYMBOL, a package's symbol for an SML name, hold a binding?"
+  (or (boundp symbol) (get symbol 'sml-binding-cell)))
+
+(defun sml-basis-symbol (name package)
+  "The basis's symbol for NAME when PACKAGE sees the basis and the basis
+binds NAME, else NIL."
+  (let ((basis (sml-basis-package)))
+    (when (and basis (not (eq basis package)))
+      (let ((symbol (find-symbol name basis)))
+        (and symbol
+             (eq (symbol-package symbol) basis)
+             (sml-name-bound-p symbol)
+             symbol)))))
+
+(defun sml-visible-symbol (name &optional (package *sml-package*))
+  "The symbol holding the binding of NAME that PACKAGE sees: PACKAGE's own,
+or else the basis's."
+  (let* ((package (ensure-sml-package package))
+         (symbol (sml-symbol name package)))
+    (if (sml-name-bound-p symbol)
+        symbol
+        (or (sml-basis-symbol (symbol-name symbol) package) symbol))))
+
+(defun sml-basis-package-key (package-name)
+  "The registry key of the basis package when PACKAGE-NAME (a key of the
+module registries below) sees the basis, else NIL."
+  (let ((basis (string-upcase *sml-basis-package-name*)))
+    (unless (string= (string-upcase (string package-name)) basis)
+      basis)))
+
 (defun current-sml-package-name (&optional (package *package*))
   (let ((name (package-name (find-package package))))
     (cond
@@ -135,7 +178,9 @@
   (copy-list
    (or (gethash (sml-module-key package-name structure-name)
                 *sml-structure-members*)
-       (projected-sml-structure-members package-name structure-name))))
+       (projected-sml-structure-members package-name structure-name)
+       (let ((basis (sml-basis-package-key package-name)))
+         (and basis (lookup-sml-structure-members basis structure-name))))))
 
 (defun register-sml-functor-members (package-name functor-name member-names
                                       &optional param-name)
@@ -275,7 +320,7 @@ constructor names are unique within a datatype."
                                                        member)
                                                    package-name))
                      (target-symbol
-                       (sml-symbol-in-package-name target-name package-name)))
+                       (sml-visible-symbol target-name package-name)))
                  (proclaim `(special ,param-symbol))
                  (unless (assoc param-symbol pairs)
                    (push (cons param-symbol target-symbol) pairs))))
@@ -344,8 +389,8 @@ constructor names are unique within a datatype."
 
 (defun alias-sml-module-member-to-name (package-name target-name source-module member-name
                                         &optional dynamic-bindings)
-  (let* ((source (sml-symbol-in-package-name (format nil "~A.~A" source-module member-name)
-                                             package-name))
+  (let* ((source (sml-visible-symbol (format nil "~A.~A" source-module member-name)
+                                     package-name))
          (target (sml-symbol-in-package-name target-name package-name)))
     (when (boundp source)
       (proclaim `(special ,target))
@@ -574,8 +619,9 @@ package's symbol for its SML name."
   symbol)
 
 (defun sml-value (name &optional (package *sml-package*))
-  "Return the SML value named NAME in PACKAGE, or signal an unbound error."
-  (let ((symbol (sml-symbol name package)))
+  "Return the SML value named NAME in PACKAGE (or in the basis, which every
+package sees), or signal an unbound error."
+  (let ((symbol (sml-visible-symbol name package)))
     (if (boundp symbol)
         (symbol-value symbol)
         (error "Unbound SML value ~A in package ~A"
@@ -633,8 +679,12 @@ package's symbol for its SML name."
         target))
 
 (defun lookup-sml-type-alias (name &optional (package *sml-package*))
-  (gethash (list (package-name (ensure-sml-package package)) name)
-           *sml-type-aliases*))
+  (let ((package (ensure-sml-package package)))
+    (multiple-value-bind (target presentp)
+        (gethash (list (package-name package) name) *sml-type-aliases*)
+      (if (or presentp (eq package (sml-basis-package)))
+          target
+          (gethash (list *sml-basis-package-name* name) *sml-type-aliases*)))))
 
 (defun lookup-sml-binding-type (symbol-or-name &optional (package *sml-package*))
   (etypecase symbol-or-name
@@ -642,6 +692,9 @@ package's symbol for its SML name."
     (string (or (cdr (assoc symbol-or-name *sml-builtin-type-env* :test #'string=))
                 (let ((symbol (find-symbol symbol-or-name
                                            (package-name (ensure-sml-package package)))))
+                  (and symbol (gethash symbol *sml-binding-types*)))
+                (let ((symbol (sml-basis-symbol symbol-or-name
+                                                (ensure-sml-package package))))
                   (and symbol (gethash symbol *sml-binding-types*)))))))
 
 (defun sml-type->cl-type (type)
@@ -1089,13 +1142,29 @@ infinities."
   "The exceptions of the initial basis by name.  There is one of each, shared
 by every SML package.")
 
+(defparameter *sml-basis-declared-exceptions*
+  '(("Empty" . "Empty") ("Fail" . "Fail") ("Span" . "Span")
+    ("Option" . "Option.Option"))
+  "The initial basis' exceptions that the Basis Library declares itself
+(HaMLet's static basis does not have them), and their names there.  The run
+time raises the basis' exceptions, so that a program's handlers catch them.")
+
+(defparameter *sml-exceptions-with-payload* '("Fail" "Io")
+  "The run time's exceptions that carry a value.")
+
 (defun sml-initial-exception (name)
   "The initial basis' exception NAME (`Match`, `Div`, `Fail`, ...)."
-  (or (gethash name *sml-initial-exceptions*)
-      (setf (gethash name *sml-initial-exceptions*)
-            (if (string= name "Fail")
-                (make-sml-exception-function name)
-                (make-sml-exception-constructor name)))))
+  (let* ((basis-name (cdr (assoc name *sml-basis-declared-exceptions*
+                                 :test #'string=)))
+         (basis (and basis-name (sml-basis-package)))
+         (symbol (and basis (find-symbol basis-name basis))))
+    (if (and symbol (boundp symbol))
+        (symbol-value symbol)
+        (or (gethash name *sml-initial-exceptions*)
+            (setf (gethash name *sml-initial-exceptions*)
+                  (if (member name *sml-exceptions-with-payload* :test #'string=)
+                      (make-sml-exception-function name)
+                      (make-sml-exception-constructor name)))))))
 
 (defun sml-raise-named-exception (name)
   "Raise the initial basis' exception NAME.  A program that binds the name to
@@ -1167,10 +1236,12 @@ POSITION is the source offset of the match, when known."
     value))
 
 (defun sml-none-value ()
-  (sml-symbol "NONE"))
+  "The basis's NONE, which every package sees (see INITIALIZE-SML-PACKAGE)."
+  (sml-symbol "NONE" *sml-basis-package-name*))
 
 (defun sml-some-value (value)
-  (let ((some (sml-symbol "SOME")))
+  "The basis's SOME VALUE."
+  (let ((some (sml-symbol "SOME" *sml-basis-package-name*)))
     (if (and (boundp some) (functionp (symbol-value some)))
         (funcall (symbol-value some) value)
         (cons some value))))
@@ -1641,6 +1712,22 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
     ("nil" . nil)))
 
 (defun initialize-sml-package (package)
+  "Give the basis package, before the Basis Library is compiled into it, the
+bindings of the initial basis that the run time's primitives make: the
+datatypes option and order (src/basis/types.sml declares them again, with
+the same constructors), the built-in exceptions and IO.Io.  Other packages
+see the basis's."
+  (when (string= (package-name package) *sml-basis-package-name*)
+    (initialize-sml-basis-package package))
+  package)
+
+(defparameter *sml-basis-cl-names* '("EQUAL" "SOME")
+  "The basis's names that are also external symbols of COMMON-LISP.  The
+basis package shadows them before the basis's FASL is loaded: a FASL names
+symbols by package and name, so it would otherwise refer to COMMON-LISP's.")
+
+(defun initialize-sml-basis-package (package)
+  (shadow *sml-basis-cl-names* package)
   (let* ((none (sml-symbol-in-package-name "NONE" package))
          (some (sml-symbol-in-package-name "SOME" package)))
     (unless (boundp none)
@@ -1662,18 +1749,19 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
           (register-sml-constructor symbol)
           (register-sml-binding-type symbol "order"))
         (export symbol package)))
-    ;; The exceptions of the initial basis, raised by the run-time
+    ;; The exceptions of HaMLet's initial basis, raised by the run-time
     ;; primitives through SML-RAISE-NAMED-EXCEPTION.
-    (dolist (name '("Bind" "Chr" "Div" "Domain" "Empty" "Match" "Option"
-                    "Overflow" "Size" "Subscript" "Fail"))
-      (let ((symbol (sml-symbol-in-package-name name package)))
-        (unless (boundp symbol)
-          (setf (symbol-value symbol) (sml-initial-exception name))
-          (register-sml-binding-type symbol
-                                     (if (string= name "Fail")
-                                         '(:fn "string" "exn")
-                                         "exn"))
-          (export symbol package))))
+    (loop for (name . sml-name) in '(("Bind" . "Bind") ("Chr" . "Chr")
+                                     ("Div" . "Div") ("Domain" . "Domain")
+                                     ("Match" . "Match") ("Overflow" . "Overflow")
+                                     ("Size" . "Size") ("Subscript" . "Subscript")
+                                     ("Io" . "IO.Io"))
+          for symbol = (sml-symbol-in-package-name sml-name package)
+          unless (boundp symbol)
+            do (setf (symbol-value symbol) (sml-initial-exception name))
+               (register-sml-binding-type symbol "exn")
+               (export symbol package))
+    (register-sml-structure-members (package-name package) "IO" '("Io"))
     package))
 
-(initialize-sml-package *sml-package*)
+(initialize-sml-package (ensure-sml-package *sml-basis-package-name*))

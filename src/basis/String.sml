@@ -97,7 +97,7 @@ struct
   val op<  = op<  : string * string -> bool
   val op<= = op<= : string * string -> bool
   val op>  = op>  : string * string -> bool
-  val op>= = op<= : string * string -> bool
+  val op>= = op>= : string * string -> bool
 
   val toString  = translate Char.toString
   val toCString = translate Char.toCString

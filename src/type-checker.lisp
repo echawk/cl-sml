@@ -50,12 +50,15 @@ Returns THUNK's value and the captured text."
 (defun make-hamlet-type-checker (&key
                                    (package "SML.HAMLET-TYPE-CHECKER")
                                    (hamlet-root (default-hamlet-root))
+                                   (basis-path (sml-basis-directory))
                                    (load t))
-  "Load HaMLet and return a stateful SML97 static elaboration session."
+  "Load HaMLet and return a stateful SML97 static elaboration session.
+HaMLet runs on cl-sml's basis, which every SML package sees, and it
+elaborates the programs it checks against the basis whose sources are in
+BASIS-PATH: by default cl-sml's own, so that the static and the dynamic
+basis agree."
   (let* ((root (uiop:ensure-directory-pathname (truename hamlet-root)))
-         (basis-source (merge-pathnames #P"basis/all.sml" root))
          (hamlet-source (merge-pathnames #P"hamlet.sml" root))
-         (basis-path (merge-pathnames #P"basis/" root))
          (*sml-type-checker* nil)
          ;; The Lisp generated for HaMLet itself is not worth the memory
          ;; (some 14 MB) its records would keep alive in every image.
@@ -64,7 +67,6 @@ Returns THUNK's value and the captured text."
       (error "HaMLet sources not found at ~A; run `git submodule update --init`."
              root))
     (when load
-      (load-sml-file basis-source :package package)
       (load-sml-file hamlet-source :package package)
       (load-sml-file (hamlet-adapter-source) :package package))
     (configure-hamlet-basis-path package basis-path)

@@ -40,15 +40,20 @@
   (is (eq t (cl-sml::sml-<> '(1 2) '(2 1)))))
 
 (test runtime-pervasive-option-constructors
+  ;; Every package sees the basis's option constructors, which the run-time
+  ;; primitives also use.
   (let* ((package (cl-sml::ensure-sml-package "SML.OPTION-BASIS-TEST"))
+         (basis cl-sml::*sml-basis-package-name*)
          (none (sml-value "NONE" package))
          (some (cl-sml:sml-function "SOME" package))
          (value (funcall some 42)))
-    (is (eq none (cl-sml::sml-symbol "NONE" package)))
-    (is (eq (car value) (cl-sml::sml-symbol "SOME" package)))
+    (is (eq none (cl-sml::sml-symbol "NONE" basis)))
+    (is (eq (car value) (cl-sml::sml-symbol "SOME" basis)))
     (is (= 42 (cdr value)))
+    (is (eq none (cl-sml::sml-none-value)))
+    (is (equal value (cl-sml::sml-some-value 42)))
     (is (eq :external
-            (nth-value 1 (find-symbol "SOME" package))))))
+            (nth-value 1 (find-symbol "SOME" basis))))))
 
 (test runtime-higher-order-functions
   (is (equal '(2 3 4)
@@ -454,8 +459,7 @@
     (is (eq :external (sml-symbol-status "caught" *test-sml-package*)))
 	    (is (not (eq :external (sml-symbol-status "helper" *test-sml-package*))))
 	    (is (not (eq :external (sml-symbol-status "Hidden" *test-sml-package*))))
-	    (is (eq :external (sml-symbol-status "SOME" *test-sml-package*)))
-	    (is (eq :external (sml-symbol-status "NONE" *test-sml-package*)))))
+	    (is (eq (cl-sml::sml-none-value) (sml-value "NONE" *test-sml-package*)))))
 
 (test integration-local-structure-alias-namespace
   (let ((*test-sml-package* "SML.LOCAL-STRUCTURE-ALIAS-TEST"))
@@ -707,11 +711,11 @@
       (is (= 41 (sml-value "used_child" package-name)))
       (is (= 42 (sml-value "used_main" package-name))))))
 
-(test load-hamlet-basis-prefix-files
+(test load-basis-prefix-files-into-a-user-package
   (let ((package-name "SML.HAMLET-BASIS-SMOKE"))
-    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "hamlet/basis/infix.sml") :package package-name)
-    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "hamlet/basis/types.sml") :package package-name)
-    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "hamlet/basis/exceptions.sml") :package package-name)
+    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "src/basis/infix.sml") :package package-name)
+    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "src/basis/types.sml") :package package-name)
+    (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "src/basis/exceptions.sml") :package package-name)
     (let ((some-symbol (cl-sml::sml-symbol "SOME" package-name)))
       (is (not (eq some-symbol 'cl:some)))
       (is (eq (symbol-package some-symbol)
