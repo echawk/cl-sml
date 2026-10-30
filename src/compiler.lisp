@@ -226,12 +226,21 @@ or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
 (defun resolved-sml-symbol (name &optional lexical-env)
   (or (lexical-symbol-for-name name lexical-env)
       (functor-body-symbol
-       (or (compile-time-sml-env-symbol name)
+       (or (program-binding-symbol name)
            (let ((resolved-name (if (sml-long-name-p name)
                                     (resolve-sml-long-name name)
                                     name)))
-             (or (compile-time-sml-env-symbol resolved-name)
+             (or (program-binding-symbol resolved-name)
                  (sml-bound-symbol resolved-name)))))))
+
+(defun program-binding-symbol (name)
+  "The symbol holding NAME's binding when this program or an earlier one in
+its package bound NAME, or else when NAME is a built-in: the bindings of
+programs shadow the built-ins of the initial basis."
+  (or (cdr (assoc name *sml-binding-symbol-env* :test #'string=))
+      (let ((bound (sml-bound-symbol name)))
+        (and (sml-binding-cell-symbol-p bound) bound))
+      (cdr (assoc name *sml-env* :test #'string=))))
 
 ;;; Binding cells (see PUBLISH-SML-BINDING).  A program refers to the
 ;;; bindings it makes itself through *SML-BINDING-SYMBOL-ENV* and
@@ -247,14 +256,24 @@ binding of that name the program made last, or :PLAIN when the program last
 bound it to the package's symbol itself (a datatype constructor, a member
 of a functor instance).")
 
-(defun sml-cell-symbol-p (symbol)
-  (and (symbolp symbol) (get symbol 'sml-cell-of)))
+(defun sml-binding-cell-symbol-p (symbol)
+  "Is SYMBOL a binding cell, |name;k|, rather than a package's symbol for an
+SML name (which cannot contain `;')?"
+  (and (symbolp symbol)
+       (find #\; (symbol-name symbol))
+       t))
+
+(defun sml-cell-name-symbol (cell)
+  "The package's symbol for the name whose binding CELL holds."
+  (let ((name (symbol-name cell)))
+    (sml-symbol (subseq name 0 (position #\; name :from-end t))
+                (symbol-package cell))))
 
 (defun functor-body-symbol (symbol)
   "SYMBOL, or in a functor body, the package's symbol for the name whose
 binding cell SYMBOL is."
-  (if (and *sml-compiling-functor* (sml-cell-symbol-p symbol))
-      (get symbol 'sml-cell-of)
+  (if (and *sml-compiling-functor* (sml-binding-cell-symbol-p symbol))
+      (sml-cell-name-symbol symbol)
       symbol))
 
 (defun sml-bound-symbol (qualified-name)
@@ -311,7 +330,6 @@ that compiling a program twice without running it gives the same code."
                            unless (and *sml-reserved-cells*
                                        (gethash cell *sml-reserved-cells*))
                              return cell)))
-          (setf (get cell 'sml-cell-of) symbol)
           (when *sml-reserved-cells*
             (setf (gethash cell *sml-reserved-cells*) t))
           (when *sml-unit-cells*
@@ -328,11 +346,10 @@ that compiling a program twice without running it gives the same code."
 (defun compile-binding-publication (cell type)
   "Forms that make CELL, of TYPE, the newest binding of its name.  In a
 functor body CELL is the package's symbol itself."
-  (let ((symbol (get cell 'sml-cell-of)))
-    (if symbol
-        `((publish-sml-binding ',symbol ',cell ',type))
-        `(,(compile-type-registration-form cell type)
-          ,(compile-export-form (list cell))))))
+  (if (sml-binding-cell-symbol-p cell)
+      `((publish-sml-binding ',(sml-cell-name-symbol cell) ',cell ',type))
+      `(,(compile-type-registration-form cell type)
+        ,(compile-export-form (list cell)))))
 
 (defun module-member-symbol-env (module-name members)
   (mapcar (lambda (member)
@@ -660,12 +677,6 @@ structure aliases)."
     (let ((source (sml-bound-symbol source-name)))
       (setf (gethash qualified-name *sml-unit-cells*)
             (if (sml-binding-cell-symbol-p source) source :plain)))))
-
-(defun sml-binding-cell-symbol-p (symbol)
-  "Is SYMBOL a binding cell, rather than a package's symbol for a name?"
-  (and (symbolp symbol)
-       (find #\; (symbol-name symbol))
-       t))
 
 (defun note-sml-instance-bindings (structure-name)
   "The program binds the members of structure STRUCTURE-NAME, a functor
@@ -1331,7 +1342,7 @@ declarations, those of later declarations first."
      ;; `val p1 = e1 and p2 = e2` evaluates every expression before binding
      ;; anything, like `val (p1, p2) = (e1, e2)`.  `val rec` bindings joined
      ;; to them come last.
-     (let ((vals (remove :val (cdr dec) :key #'car :test-not #'eq))
+     (let ((vals (remove-if-not (lambda (val) (eq (car val) :val)) (cdr dec)))
            (recs (remove :val (cdr dec) :key #'car)))
        (compile-local-val-binding
         `(:pat-tuple ,@(mapcar #'second vals))
@@ -1974,7 +1985,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
      ;; `val p1 = e1 and p2 = e2` evaluates every expression before binding
      ;; anything, like `val (p1, p2) = (e1, e2)`.  `val rec` bindings joined
      ;; to them come last.
-     (let ((vals (remove :val (cdr ast) :key #'car :test-not #'eq))
+     (let ((vals (remove-if-not (lambda (val) (eq (car val) :val)) (cdr ast)))
            (recs (remove :val (cdr ast) :key #'car)))
        `(progn
           ,(compile-top-level-val
