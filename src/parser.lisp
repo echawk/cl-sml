@@ -1054,18 +1054,30 @@ mixed without parentheses (Definition section 2.6)."
                '(:val :fun :type :datatype :abstype :exception :local :open
                  :infix :infixr :nonfix :structure :signature :functor))))
 
+(defvar *sml-declaration-positions* nil
+  "When non-NIL, an EQ hash table from declaration AST nodes to the offset
+where the declaration starts, filled in by the parser.  Used to report where
+the Common Lisp generated for a binding came from.")
+
+(defun note-sml-declaration-position (dec start)
+  (when (and *sml-declaration-positions* (consp dec))
+    (setf (gethash dec *sml-declaration-positions*) start))
+  dec)
+
 (defun parse-sml-decs (&key top-level)
   "A declaration sequence; at TOP-LEVEL also expressions, as (:expr e)."
   (let ((decs nil))
     (loop
-      (let ((token (current-sml-token)))
+      (let* ((token (current-sml-token))
+             (start (sml-token-start token)))
         (cond
           ((accept-sml-reserved :semicolon))
           ((sml-declaration-start-p token)
            (dolist (dec (parse-sml-dec))
-             (push dec decs)))
+             (push (note-sml-declaration-position dec start) decs)))
           ((and top-level (not (at-sml-eof-p)))
-           (push (list :expr (parse-sml-exp)) decs))
+           (push (note-sml-declaration-position (list :expr (parse-sml-exp)) start)
+                 decs))
           (t (return)))))
     (nreverse decs)))
 
@@ -1130,12 +1142,11 @@ mixed without parentheses (Definition section 2.6)."
       (dolist (binding bindings)
         (bind-sml-variables (sml-pattern-variable-names (second binding))))
       (let* ((plain (remove :val-rec nodes :key #'car))
-             (rec (remove :val rec nodes :key #'car))
+             (rec (remove :val nodes :key #'car))
              (rec-node (cond ((null rec) nil)
                              ((null (rest rec)) (first rec))
                              (t (cons :val-recs rec))))
              (all (append plain (and rec-node (list rec-node)))))
-        (declare (ignorable rec))
         (list (if (rest all) (cons :vals all) (first all)))))))
 
 (defun parse-sml-fun-head ()
@@ -1157,13 +1168,13 @@ parameter patterns (Definition section 2.6 and Appendix A)."
                     (not op-p)
                     (not (sml-long-name-p (second item)))
                     (sml-infix-name-p (second item)))))
-           (atom (entry) (sml-raw-pattern-atom (first entry))))
+           (param (entry) (sml-raw-pattern-atom (first entry))))
       (cond
         ;; atpat vid atpat, with vid infix
         ((and (= (length items) 3) (infix-id-p (second items)))
          (let ((name-item (first (second items))))
            (values (second name-item) (third name-item)
-                   (list (list :pat-tuple (atom (first items)) (atom (third items)))))))
+                   (list (list :pat-tuple (param (first items)) (param (third items)))))))
         ;; (atpat vid atpat) atpat ...
         ((and items (third (first items)))
          (let* ((pat (first (first items)))
@@ -1175,7 +1186,7 @@ parameter patterns (Definition section 2.6 and Appendix A)."
                 (pair (if (eq (car pat) :pat-cons)
                           (list :pat-tuple (second pat) (third pat))
                           (third pat))))
-           (values op-name op-start (cons pair (mapcar #'atom (rest items))))))
+           (values op-name op-start (cons pair (mapcar #'param (rest items))))))
         ;; <op> vid atpat ...
         ((and items
               (sml-raw-id-p (first (first items)))
@@ -1184,7 +1195,7 @@ parameter patterns (Definition section 2.6 and Appendix A)."
            (sml-parse-error-at head-token "a function clause needs at least one argument"))
          (let ((name-item (first (first items))))
            (values (second name-item) (third name-item)
-                   (mapcar #'atom (rest items)))))
+                   (mapcar #'param (rest items)))))
         (t (sml-parse-error-at head-token "expected a function name"))))))
 
 (defun parse-sml-fun-clause ()

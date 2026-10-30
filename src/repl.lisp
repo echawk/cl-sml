@@ -7,6 +7,8 @@
   (string-trim '(#\Space #\Tab #\Newline #\Return) source))
 
 (defun parse-repl-input (source)
+  "Decide whether the REPL buffer SOURCE is complete: returns :EXPR or
+:PROGRAM and the AST, or NIL, NIL and the syntax error."
   (let* ((trimmed (trim-repl-input source))
          (length (length trimmed)))
     (cond
@@ -14,22 +16,20 @@
        (values nil nil nil))
       ((char= (char trimmed (1- length)) #\;)
        (handler-case
-           (let ((program (esrap:parse 'sml-program trimmed)))
+           ;; Parsed without committing the environment it declares: the
+           ;; phrase is compiled (and the environment committed) later.
+           (let ((program (parse-sml-program trimmed :source-name "stdIn")))
              (if (and (= (length program) 2)
                       (consp (second program))
                       (eq (car (second program)) :expr))
                  (values :expr (second (second program)) nil)
                  (values :program program nil)))
-         (error (program-error)
-           (let ((expr-source (trim-repl-input (subseq trimmed 0 (1- length)))))
-             (handler-case
-                 (values :expr (esrap:parse 'sml-expr expr-source) nil)
-               (error ()
-                 (values nil nil program-error)))))))
+         (sml-syntax-error (program-error)
+           (values nil nil program-error))))
       (t
        (handler-case
-           (values :expr (esrap:parse 'sml-expr trimmed) nil)
-         (error (condition)
+           (values :expr (parse-sml-expression trimmed :source-name "stdIn") nil)
+         (sml-syntax-error (condition)
            (values nil nil condition)))))))
 
 (defun sml-namespaced-symbol-p (value)
@@ -176,9 +176,10 @@ the indented continuation lines of long types."
        (list (format nil "exception ~A~A"
                      (sml-exception-name (symbol-value sym))
                      (if (getf (cddr decl) :arg-type)
-                         (format nil " of ~A" (getf (cddr decl) :arg-type))
+                         (format nil " of ~A"
+                                 (sml-type-ast->string (getf (cddr decl) :arg-type)))
                          "")))))
-    ((:vals :funs)
+    ((:vals :funs :val-recs)
      (mapcan #'repl-report-decl (cdr decl)))
     (:local
      (mapcan #'repl-report-decl (third decl)))

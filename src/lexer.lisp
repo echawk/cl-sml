@@ -367,23 +367,16 @@ with an :EOF token.  Signals SML-SYNTAX-ERROR on a lexical error."
     (coerce tokens 'simple-vector)))
 
 (defun sml-real-constant-value (text start negative integer fraction exponent)
-  "The double-float denoted by INTEGER.FRACTION * 10^EXPONENT, correctly
-rounded."
-  (let* ((digits (+ (* integer (expt 10 (length fraction)))
-                    (if (plusp (length fraction)) (parse-integer fraction) 0)))
-         (scale (- exponent (length fraction)))
-         ;; Decimal magnitude of the value, to avoid huge bignums.
-         (magnitude (+ (length (princ-to-string digits)) scale)))
-    (cond
-      ((or (zerop digits) (< magnitude -400))
-       (if negative -0d0 0d0))
-      ((> magnitude 400)
-       (sml-syntax-error text start "real constant out of range"))
-      (t
-       (let ((exact (if (minusp scale)
-                        (/ digits (expt 10 (- scale)))
-                        (* digits (expt 10 scale)))))
-         (when (> exact most-positive-double-float)
-           (sml-syntax-error text start "real constant out of range"))
-         (let ((value (coerce exact 'double-float)))
-           (if negative (- value) value)))))))
+  "The double nearest to the real constant INTEGER.FRACTION * 10^EXPONENT,
+the same on every host (see PORTABLE-RATIONAL-TO-DOUBLE)."
+  (let* ((mantissa (+ integer
+                      (if (string= fraction "")
+                          0
+                          (/ (parse-integer fraction) (expt 10 (length fraction))))))
+         (value (cond ((zerop mantissa) 0d0)
+                      ((< exponent -10000) 0d0)
+                      ((> exponent 10000) nil)
+                      (t (portable-rational-to-double (* mantissa (expt 10 exponent)))))))
+    (unless value
+      (sml-syntax-error text start "real constant out of range"))
+    (if negative (- value) value)))
