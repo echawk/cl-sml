@@ -1,1361 +1,1841 @@
 (in-package #:cl-sml)
 
-;; We need a helper function to compile left-associative operators at parse-time.
-;; It translates `a + b + c` into `((+ a) b) (+ c)` (Curried AST form)
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defun build-infix-ast (first rest)
-    (if (null rest)
-        first
-        (reduce (lambda (left group)
-                  (let ((op (second group))
-                        (right (fourth group)))
-                    ;; Creates an AST of: (:app (:app (:var "+") left) right)
-                    `(:app (:app ,(sml-operator-var-node op) ,left) ,right)))
-                rest
-                :initial-value first)))
-  (defun sml-operator-var-node (op)
-    "The (:var OP) node for infix operator OP, at OP's source position."
-    (note-sml-ast-position (list :var op) (sml-ast-position op)))
-  (defun sml-fact-pattern-status (node)
-    "HaMLet's identifier status for pattern NODE, or NIL without facts."
-    (and (consp node)
-         (member (car node) '(:pat-ctor :pat-var))
-         (sml-pattern-status-at (sml-ast-position node) (second node))))
-  (defun sml-pattern-id-node* (name start default-kind)
-    "A :pat-ctor or :pat-var node for identifier NAME at offset START, as the
-static checker says, or of DEFAULT-KIND without one."
-    (let ((status (sml-pattern-status-at start name)))
-      (note-sml-ast-position
-       (list (cond ((null status) default-kind)
-                   ((sml-status-constructor-p status) :pat-ctor)
-                   (t :pat-var))
-             name)
-       start)))
-  (defun sml-pattern-id-node (name start)
-    "Like SML-PATTERN-ID-NODE*, guessing from the spelling without a checker."
-    (sml-pattern-id-node* name start
-                          (if (or (position #\. name)
-                                  (sml-constructor-looking-id-p name))
-                              :pat-ctor
-                              :pat-var)))
-  (defun sml-fact-constructor-production-p (production)
-    "PRODUCTION is (name . start): is NAME a constructor there?"
-    (sml-status-constructor-p
-     (sml-pattern-status-at (cdr production) (car production))))
-  (defun build-tupled-infix-ast (first rest)
-    (reduce (lambda (left group)
-              `(:infix-app ,(second group) ,left ,(fourth group)))
-            rest
-            :initial-value first))
-  (defun sml-string-format-char-p (ch)
-    (member ch '(#\Space #\Tab #\Newline #\Return #\Page) :test #'char=))
-  (defun decode-sml-decimal-escape (token start content-end)
-    (let ((digit-end (+ start 3)))
-      (unless (and (<= digit-end content-end)
-                   (every #'digit-char-p (subseq token start digit-end)))
-        (error "Invalid SML decimal escape in string literal: ~A" token))
-      (or (code-char (parse-integer token :start start :end digit-end))
-          (error "Invalid SML character code in string literal: ~A" token))))
-  (defun decode-sml-string-literal (token)
-    (with-output-to-string (out)
-      (let ((i 1)
-            (content-end (1- (length token))))
-        (loop while (< i content-end)
-              for ch = (char token i)
-              do (cond
-                   ((char= ch #\\)
-                    (incf i)
-                    (when (>= i content-end)
-                      (error "Invalid SML string literal: ~A" token))
-                    (let ((escape (char token i)))
-                      (cond
-                        ((sml-string-format-char-p escape)
-                         (loop while (and (< i content-end)
-                                          (sml-string-format-char-p (char token i)))
-                               do (incf i))
-                         (unless (and (< i content-end) (char= (char token i) #\\))
-                           (error "Invalid SML string gap in string literal: ~A" token)))
-                        ((digit-char-p escape)
-                         (write-char (decode-sml-decimal-escape token i content-end) out)
-                         (incf i 2))
-                        ((char= escape #\^)
-                         (incf i)
-                         (when (>= i content-end)
-                           (error "Invalid SML control escape in string literal: ~A" token))
-                         (write-char (code-char (logand (char-code (char token i)) #x1f)) out))
-                        (t
-                         (write-char
-                          (case escape
-                            (#\\ #\\)
-                            (#\" #\")
-                            (#\a (code-char 7))
-                            (#\b (code-char 8))
-                            (#\t #\Tab)
-                            (#\n #\Newline)
-                            (#\v (code-char 11))
-                            (#\f (code-char 12))
-                            (#\r #\Return)
-                            (t escape))
-                          out)))))
-                   (t
-                    (write-char ch out)))
-                 (incf i)))))
-  (defun decode-sml-char-literal (token)
-    (let ((string-value (decode-sml-string-literal (subseq token 1))))
-      (unless (= (length string-value) 1)
-        (error "Invalid SML char literal: ~A" token))
-      (char string-value 0)))
-  (defun trim-and-collapse-sml-type-text (text)
-    (let ((trimmed (trim-sml-type-text text)))
-      (with-output-to-string (out)
-        (loop with previous-space = nil
-              for ch across trimmed
-              for spacep = (member ch '(#\Space #\Tab #\Newline #\Return))
-              do (cond
-                   ((and spacep (not previous-space))
-                    (write-char #\Space out)
-                    (setf previous-space t))
-                   ((not spacep)
-                    (write-char ch out)
-                    (setf previous-space nil)))))))
-  (defun trim-sml-type-text (text)
-    (string-trim '(#\Space #\Tab #\Newline #\Return) text))
-  (defun join-sml-id-parts (first rest)
-    (with-output-to-string (out)
-      (write-string first out)
-      (dolist (part rest)
-        (write-char #\. out)
-        (write-string (second part) out))))
-  (defun sml-id-last-segment (name)
-    (let ((pos (position #\. name :from-end t)))
-      (if pos
-          (subseq name (1+ pos))
-          name)))
-  (defun sml-constructor-looking-id-p (name)
-    (let ((segment (sml-id-last-segment name)))
-      (or (member segment '("true" "false" "nil") :test #'string=)
-          (and (upper-case-p (char segment 0))
-               (or (not (position #\_ segment))
-                   (string= segment (string-upcase segment)))))))
-  (defun build-fun-binding-ast (first rest)
-    (let* ((name (first first))
-           (clauses (normalize-sml-fun-clause-arities
-                     (cons first (mapcar #'fourth rest)))))
-      (unless (every (lambda (clause) (string= (first clause) name)) clauses)
-        (error "All clauses in a fun binding must name the same function: ~S" clauses))
-      `(:fun ,name ,(mapcar (lambda (clause)
-                              `(,(second clause) ,(third clause)))
-                            clauses))))
-  (defun sml-known-nullary-constructor-name-p (name)
-    (member name '("NONE" "nil" "true" "false") :test #'string=))
-  (defun flatten-leading-nullary-constructor-pattern (pat)
-    (if (and (consp pat)
-             (eq (car pat) :pat-app)
-             (consp (second pat))
-             (eq (car (second pat)) :pat-ctor)
-             (sml-known-nullary-constructor-name-p (second (second pat))))
-        (cons (second pat)
-              (flatten-leading-nullary-constructor-pattern (third pat)))
-        (list pat)))
-  (defun normalize-sml-fun-clause-arities (clauses)
-    (let* ((expanded (mapcar (lambda (clause)
-                               `(,(first clause)
-                                 ,(mapcan #'flatten-leading-nullary-constructor-pattern
-                                          (second clause))
-                                 ,(third clause)))
-                             clauses))
-           (target-arity (loop for clause in clauses
-                               maximize (length (second clause)))))
-      (if (every (lambda (clause)
-                   (= (length (second clause)) target-arity))
-                 expanded)
-          expanded
-          clauses)))
-  (defun build-list-pattern-ast (elements)
-    (reduce (lambda (element tail)
-              `(:pat-cons ,element ,tail))
-            elements
-            :from-end t
-            :initial-value '(:pat-nil)))
-  (defun sml-structure-ascription-signature-name (ascription)
-    "The signature identifier of an ascription such as `:> PRETTY_PRINT`, if any."
-    (let* ((text (string-trim '(#\Space #\Tab #\Newline #\Return)
-                              (sml-parser-fragment-string ascription)))
-           (start (cond ((and (> (length text) 1) (string= text ":>" :end1 2)) 2)
-                        ((and (> (length text) 0) (char= (char text 0) #\:)) 1))))
-      (when start
-        (let ((name (string-trim '(#\Space #\Tab #\Newline #\Return)
-                                 (subseq text start))))
-          (and (plusp (length name))
-               (every (lambda (ch) (or (alphanumericp ch) (find ch "_'.")))
-                      name)
-               name)))))
-  (defun sml-low-precedence-pattern-op-p (op)
-    "Approximates fixity: user-declared symbolic constructors such as @@ bind
-looser than ::, while the standard arithmetic/list operators do not."
-    (not (member op '("::" "@" "^" "+" "-" "*" "/" "div" "mod")
-                 :test #'string=)))
-  (defun build-cons-pattern-ast (head tail)
-    "Build HEAD :: TAIL, re-associating `h :: l OP r` as `(h :: l) OP r`."
-    (if (and (consp tail)
-             (eq (car tail) :pat-app)
-             (equal (first (second tail)) :pat-ctor)
-             (sml-low-precedence-pattern-op-p (second (second tail)))
-             (consp (third tail))
-             (eq (car (third tail)) :pat-tuple)
-             (= (length (third tail)) 3))
-        `(:pat-app ,(second tail)
-                   (:pat-tuple ,(build-cons-pattern-ast head (second (third tail)))
-                               ,(third (third tail))))
-        `(:pat-cons ,head ,tail)))
-  (defun normalize-sml-infix-pattern-operand (op pat)
-    (if (and (string= op "@@")
-             (consp pat)
-             (eq (car pat) :pat-ctor)
-             (not (sml-fact-pattern-status pat))
-             (not (member (second pat) '("true" "false" "nil" "NONE")
-                          :test #'string=)))
-        `(:pat-var ,(second pat))
-        pat))
-	  (defun build-sml-val-ast (pat type expr expr-type)
-	    (let* ((inline-type (and (consp expr) (eq (car expr) :typed) (third expr)))
-	           (pat-type (and (consp pat) (eq (car pat) :pat-typed) (third pat)))
-           (raw-value-pat (if pat-type (second pat) pat))
-           (value-pat (if (and (consp raw-value-pat)
-                               (eq (car raw-value-pat) :pat-ctor)
-                               (not (sml-fact-pattern-status raw-value-pat)))
-                          `(:pat-var ,(second raw-value-pat))
-                          raw-value-pat))
-           (value-expr (if inline-type (second expr) expr)))
-      (cond
-	        (type `(:val ,value-pat ,value-expr :type ,type))
-	        (pat-type `(:val ,value-pat ,value-expr :type ,pat-type))
-	        (expr-type `(:val ,value-pat ,value-expr :type ,expr-type))
-	        (inline-type `(:val ,value-pat ,value-expr :type ,inline-type))
-	        (t `(:val ,value-pat ,expr)))))
-  (defun sml-parser-fragment-string (value)
-    (with-output-to-string (out)
-      (labels ((walk (item)
-                 (cond
-                   ((characterp item)
-                    (write-char item out))
-                   ((stringp item)
-                    (write-string item out))
-                   ((consp item)
-                    (mapc #'walk item)))))
-        (walk value))))
-  (defun sml-functor-param-name (text)
-    (let* ((chars (sml-parser-fragment-string text))
-           (open (position #\( chars)))
-      (when open
-        (let ((start (position-if-not
-                      (lambda (ch)
-                        (member ch '(#\Space #\Tab #\Newline #\Return)))
-                      chars
-                      :start (1+ open))))
-          (when (and start (alpha-char-p (char chars start)))
-            (let ((end (or (position-if-not
-                            (lambda (ch)
-                              (or (alphanumericp ch)
-                                  (member ch '(#\_ #\') :test #'char=)))
-                            chars
-                            :start start)
-                           (length chars))))
-              (let ((colon
-                      (position-if-not
-                       (lambda (ch)
-                         (member ch '(#\Space #\Tab #\Newline #\Return)))
-                       chars
-                       :start end)))
-                (when (and colon (char= (char chars colon) #\:))
-                  (subseq chars start end))))))))))
+;;; The SML97 parser: recursive descent over the tokens of LEX-SML, with
+;;; infix expressions and patterns resolved by precedence climbing over a
+;;; scoped fixity environment (Definition of Standard ML (Revised), section
+;;; 2.6 and Appendices A-B, chapter 3 for Modules).
+;;;
+;;; Entry points: PARSE-SML-PROGRAM, PARSE-SML-EXPRESSION,
+;;; PARSE-SML-DECLARATIONS, PARSE-SML-PATTERN and PARSE-SML-TYPE.  Syntax
+;;; errors are SML-SYNTAX-ERRORs reporting the line, the column and what was
+;;; expected.
+;;;
+;;; The parser also tracks identifier status (Definition section 4.1): which
+;;; names are value constructors or exception constructors.  Patterns need it
+;;; (`fun f red = ...` matches the constructor `red` but binds a variable
+;;; `x`), and with the HaMLet checker its static facts take precedence.
+;;; Fixity and status persist per SML package across compilation units, so
+;;; that a REPL phrase or a `use`d file sees the top-level declarations of
+;;; earlier ones.
+;;;
+;;; AST summary (strings are SML names; long names are dotted strings):
+;;;
+;;; Types
+;;;   (:ty-var "'a")  (:ty-con "list" (ty...))  (:ty-tuple ty ty...)
+;;;   (:ty-arrow ty ty)  (:ty-record ("label" ty)...)
+;;; Expressions
+;;;   integer, double-float, string and character constants; (:word n)
+;;;   (:var name)  (:ctor name)      identifier; :ctor if a constructor
+;;;   (:app f x)                     an infix application `a op b' is
+;;;                                  (:app (:var "op") (:tuple a b))
+;;;   (:tuple e...)  (:unit)  (:record ("label" e)...)  (:selector "label")
+;;;   (:list e...)  (:seq e...)  (:let decs (e...))  (:typed e ty)
+;;;   (:andalso a b)  (:orelse a b)  (:if c a b)  (:while c e)
+;;;   (:case e (pat e)...)  (:fn ((pat e)...))  (:handle e ((pat e)...))
+;;;   (:raise e)
+;;; Patterns
+;;;   constants as above; :wild; (:pat-var name)
+;;;   (:pat-ctor name [:status s])   s is the identifier status when known:
+;;;                                  "c"/"c1" constructor, "e"/"e1" exception
+;;;   (:pat-app ctor-pat pat)  (:pat-cons head tail)  (:pat-nil)
+;;;   (:pat-tuple pat...)  (:pat-unit)  (:pat-record ("label" pat)... [:record-rest])
+;;;   (:pat-typed pat ty)  (:pat-as var-pat pat)
+;;; Declarations (a declaration sequence is a list)
+;;;   (:val pat e [:type ty] [:tyvars tvs])       `val pat : ty = e'
+;;;   (:vals val...)  (:val-rec name e [:type ty] [:tyvars tvs])
+;;;   (:val-recs val-rec...)                      `val rec f = .. and g = ..'
+;;;   (:fun name ((params e)...) [:tyvars tvs])  (:funs fun...)
+;;;       an infix head `fun x ++ y = e' has the single parameter (x, y)
+;;;   (:type name ty [:tyvars tvs])
+;;;   (:datatype name ctor-defs :datbinds ((tyvars name ctor-defs)...)
+;;;              :withtype ((tyvars name ty)...))
+;;;       ctor-def: (:ctor-def name :has-args bool :arg-type ty)
+;;;   (:datatype-replication name "longtycon")
+;;;   (:exception name :arg-type ty)  (:exception-alias name "longvid")
+;;;   (:local decs decs [:abstype t])            abstype is a :local whose
+;;;                                               first part is the datatype
+;;;   (:open ("longstrid"...))  (:infix "infix"|"infixr"|"nonfix" prec (name...))
+;;;   (:expr e)                                   top-level expression
+;;;   Bindings joined by `and' that the compiler treats one by one are
+;;;   consecutive declarations, the later ones marked :and t.
+;;; Modules
+;;;   strexp: (:struct decs)  (:str-id "longstrid")  (:str-app funid strexp)
+;;;           (:str-constraint strexp sigexp :opaque bool)  (:str-let decs strexp)
+;;;   sigexp: (:sig specs)  (:sig-id name)  (:sig-where sigexp tyvars "longtycon" ty)
+;;;   specs:  (:spec-val name ty)  (:spec-type tyvars name [ty])
+;;;           (:spec-eqtype tyvars name)  (:spec-datatype ((tyvars name ctor-defs)...))
+;;;           (:spec-datatype-replication name "longtycon")
+;;;           (:spec-exception name ty)  (:spec-structure name sigexp)
+;;;           (:spec-include sigexp)  (:spec-sharing-type ("longtycon"...))
+;;;           (:spec-sharing ("longstrid"...))
+;;;   A structure binding becomes, by the shape of its structure expression
+;;;   once constraints are removed (:STREXP keeps the full expression):
+;;;     (:structure name decs [:sigexp s :opaque bool] :strexp e)
+;;;     (:structure-alias name "longstrid" [...] :strexp e)
+;;;     (:structure-app name funid arg-strexp [...] :strexp e)
+;;;   (:signature name sigexp)
+;;;   (:functor name decs :param strid-or-nil :param-sigexp s :param-specs specs
+;;;             :result-sigexp s :opaque bool :strexp body)
+;;;
+;;; The parser records the source offset of identifier, operator, word
+;;; constant, structure binding and datatype replication nodes with
+;;; NOTE-SML-AST-POSITION (see static-facts.lisp).
 
-(defrule sml-comment-char
-  (and (! "(*") (! "*)") character))
+;;;; Token access
 
-(defrule sml-comment-body (* (or sml-comment sml-comment-char)))
+(defvar *sml-parse-text* "")
+(defvar *sml-parse-tokens* (vector (make-sml-token :eof nil 0 0)))
+(defvar *sml-parse-index* 0)
+(declaim (type simple-vector *sml-parse-tokens*)
+         (type fixnum *sml-parse-index*))
 
-(defrule sml-comment (and "(*" sml-comment-body "*)")
-  (:constant nil))
+(declaim (inline current-sml-token))
+(defun current-sml-token ()
+  (svref *sml-parse-tokens* *sml-parse-index*))
 
-(defrule sml-format-char (or #\Space #\Tab #\Newline #\Return #\Page))
+(defun sml-token-ahead (k)
+  (svref *sml-parse-tokens*
+         (min (+ *sml-parse-index* k) (1- (length *sml-parse-tokens*)))))
 
-;; Whitespace
-(defrule ws (* (or #\Space #\Tab #\Newline sml-comment)) (:constant nil))
-(defrule ws1 (+ (or #\Space #\Tab #\Newline sml-comment)) (:constant nil))
+(defun next-sml-token ()
+  "Consume and return the current token."
+  (prog1 (current-sml-token)
+    (when (< *sml-parse-index* (1- (length *sml-parse-tokens*)))
+      (incf *sml-parse-index*))))
 
-;; --- KEYWORD AND ID RULES ---
-;; Define reserved keywords (added andalso, orelse, if, then, else)
-(defrule sml-keyword
-  (and (or "signature" "structure" "exception" "datatype" "withtype" "andalso"
-           "functor" "abstype" "include" "sharing" "infixr" "orelse" "handle"
-           "nonfix" "struct" "infix" "where" "local" "raise" "eqtype" "while"
-           "case" "then" "else" "type" "with" "open" "fun" "val" "rec" "and"
-           "sig" "let" "end" "do" "fn" "if" "in" "of" "op" "as")
-       (! (or (alphanumericp character) #\_ #\'))))
+(declaim (inline sml-token-reserved-p))
+(defun sml-token-reserved-p (token value)
+  (and (eq (sml-token-kind token) :reserved)
+       (eq (sml-token-value token) value)))
 
-(defrule sml-sig-keyword (and "sig" (! (or (alphanumericp character) #\_ #\')))
-  (:constant "sig"))
+(defun at-sml-reserved-p (value)
+  (sml-token-reserved-p (current-sml-token) value))
 
-(defrule sml-struct-keyword (and "struct" (! (or (alphanumericp character) #\_ #\')))
-  (:constant "struct"))
+(defun at-sml-eof-p ()
+  (eq (sml-token-kind (current-sml-token)) :eof))
 
-(defrule sml-end-keyword (and "end" (! (or (alphanumericp character) #\_ #\')))
-  (:constant "end"))
+(defun accept-sml-reserved (value)
+  (when (at-sml-reserved-p value)
+    (next-sml-token)))
 
-;; A raw identifier is any standard word
-(defrule sml-id-raw (and (alpha-char-p character) (* (or (alphanumericp character) #\_ #\')))
-  (:text t))
+(defparameter *sml-reserved-symbol-texts*
+  '((:lparen . "(") (:rparen . ")") (:lbracket . "[") (:rbracket . "]")
+    (:lbrace . "{") (:rbrace . "}") (:comma . ",") (:semicolon . ";")
+    (:dots . "...") (:underscore . "_") (:colon . ":") (:seal . ":>")
+    (:bar . "|") (:equals . "=") (:darrow . "=>") (:arrow . "->") (:hash . "#")))
 
-(defrule sml-capitalized-id (and (character-ranges (#\A #\Z)) (* (or (alphanumericp character) #\_ #\')))
-  (:text t))
+(defun sml-reserved-text (value)
+  (or (cdr (assoc value *sml-reserved-symbol-texts*))
+      (string-downcase (symbol-name value))))
 
-(defrule sml-symbolic-char
-  (or #\! #\% #\& #\$ #\# #\+ #\- #\/ #\: #\< #\= #\> #\? #\@ #\\ #\~ #\` #\^ #\| #\*))
+(defun describe-sml-token (token)
+  (case (sml-token-kind token)
+    (:eof "end of input")
+    (:reserved (format nil "`~A'" (sml-reserved-text (sml-token-value token))))
+    ((:alnum :symbolic :long) (format nil "identifier `~A'" (sml-token-value token)))
+    (:tyvar (format nil "type variable `~A'" (sml-token-value token)))
+    (t (format nil "constant `~A'"
+               (subseq *sml-parse-text* (sml-token-start token) (sml-token-end token))))))
 
-(defrule sml-symbolic-id
-  (+ sml-symbolic-char)
-  (:text t))
+(defun sml-parse-error-at (token control &rest arguments)
+  (apply #'sml-syntax-error *sml-parse-text* (sml-token-start token) control arguments))
 
-(defrule sml-op-spaced-id (and "op" ws1 (or sml-symbolic-id sml-id))
-  (:destructure (op-kw w id)
-    (declare (ignore op-kw w))
-    id))
+(defun sml-parse-expected (what)
+  (sml-parse-error-at (current-sml-token) "expected ~A but found ~A"
+                      what (describe-sml-token (current-sml-token))))
 
-(defrule sml-op-symbolic-id (and "op" sml-symbolic-id)
-  (:destructure (op-kw id)
-    (declare (ignore op-kw))
-    id))
+(defun expect-sml-reserved (value)
+  (or (accept-sml-reserved value)
+      (sml-parse-expected (format nil "`~A'" (sml-reserved-text value)))))
 
-(defrule sml-op-id (or sml-op-spaced-id sml-op-symbolic-id))
+(defun sml-identifier-token-p (token)
+  (member (sml-token-kind token) '(:alnum :symbolic)))
 
-(defrule sml-numeric-label (+ (character-ranges (#\0 #\9)))
-  (:text t))
+(defun sml-vid-token-p (token)
+  "An identifier usable as a value identifier, including `='."
+  (or (sml-identifier-token-p token)
+      (sml-token-reserved-p token :equals)))
 
-(defrule sml-label
-  (or sml-id-raw
-      sml-numeric-label))
+(defun sml-vid-token-name (token)
+  (if (sml-token-reserved-p token :equals) "=" (sml-token-value token)))
 
-(defrule sml-tyvar (and "'" (+ (or (alphanumericp character) #\_ #\')))
-  (:text t))
+(defun expect-sml-alnum-id (what)
+  (let ((token (current-sml-token)))
+    (unless (eq (sml-token-kind token) :alnum)
+      (sml-parse-expected what))
+    (next-sml-token)))
 
-;; A valid SML identifier is a raw ID or long ID whose head is NOT a keyword.
-(defrule sml-id (and (! sml-keyword) sml-id-raw (* (and "." (or sml-id-raw sml-symbolic-id))))
-  (:destructure (not-kw id rest)
-    (declare (ignore not-kw))
-    (join-sml-id-parts id rest)))
+(defun expect-sml-long-id (what)
+  "An alphanumeric identifier, possibly qualified."
+  (let ((token (current-sml-token)))
+    (unless (member (sml-token-kind token) '(:alnum :long))
+      (sml-parse-expected what))
+    (next-sml-token)))
 
-(defrule sml-long-id (and (! sml-keyword) sml-id-raw "." (or sml-id-raw sml-symbolic-id)
-                          (* (and "." (or sml-id-raw sml-symbolic-id))))
-  (:destructure (not-kw id dot tail rest)
-    (declare (ignore not-kw))
-    (join-sml-id-parts id (cons (list dot tail) rest))))
+(defun sml-long-name-p (name)
+  (and (stringp name) (position #\. name) t))
 
-(defrule sml-hex-digit
-  (or (character-ranges (#\0 #\9))
-      (character-ranges (#\a #\f))
-      (character-ranges (#\A #\F))))
+(defun split-sml-long-name (name)
+  "The structure identifiers and the final identifier of long NAME."
+  (let ((parts nil)
+        (start 0))
+    (loop for dot = (position #\. name :start start)
+          while dot
+          do (push (subseq name start dot) parts)
+             (setf start (1+ dot)))
+    (values (nreverse parts) (subseq name start))))
 
-(defrule sml-int
-  (or (and (? "~") "0x" (+ sml-hex-digit))
-      (and (? "~") (+ (character-ranges (#\0 #\9)))))
-  (:lambda (parts)
-    (let* ((hexp (= (length parts) 3))
-           (n (parse-integer (text (car (last parts)))
-                             :radix (if hexp 16 10))))
-      (if (first parts) (- n) n))))
+;;;; Identifier status and fixity environments
+;;;
+;;; The environment is a list of SML-SCOPEs, innermost first.  Declarations
+;;; bind in the first scope.  `open S` pushes S's environment (shared and
+;;; never modified) and a fresh scope above it.  A scope marked OPAQUE-P
+;;; stands for a structure whose contents are unknown: a value, structure or
+;;; type constructor not found above it has unknown status.
 
-(defrule sml-word-hex (and "0w" (or "x" "X") (+ sml-hex-digit))
-  (:destructure (prefix marker digits)
-    (declare (ignore prefix marker))
-    (parse-integer (text digits) :radix 16)))
+(defstruct (sml-scope (:constructor make-sml-scope ()))
+  (values nil)      ; name -> status "v" "c" "c1" "e" "e1"
+  (structures nil)  ; strid -> structure environment (an SML-SCOPE) or :unknown
+  (tycons nil)      ; tycon -> list of (constructor . status), or :plain
+  (fixity nil)      ; name -> (:infix . prec), (:infixr . prec) or :nonfix
+  (signatures nil)  ; sigid -> environment of its specs, or :unknown
+  (functors nil)    ; funid -> environment of its result, or :unknown
+  (opaque-p nil))
 
-(defrule sml-word-dec (and "0w" (+ (character-ranges (#\0 #\9))))
-  (:destructure (prefix digits)
-    (declare (ignore prefix))
-    (parse-integer (text digits))))
+(defvar *sml-scopes* nil
+  "The identifier status and fixity environment of the current parse.")
 
-(defrule sml-word (or sml-word-hex sml-word-dec))
+(defun sml-scope-table (scope namespace)
+  (ecase namespace
+    (:values (sml-scope-values scope))
+    (:structures (sml-scope-structures scope))
+    (:tycons (sml-scope-tycons scope))
+    (:fixity (sml-scope-fixity scope))
+    (:signatures (sml-scope-signatures scope))
+    (:functors (sml-scope-functors scope))))
 
-;; In expressions a word literal keeps its identity so that `~(0w1)` can be
-;; compiled as modular negation: words are plain integers at run time.
-(defrule sml-word-expr sml-word
-  (:lambda (n &bounds start) (note-sml-ast-position (list :word n) start)))
+(defun (setf sml-scope-table) (table scope namespace)
+  (ecase namespace
+    (:values (setf (sml-scope-values scope) table))
+    (:structures (setf (sml-scope-structures scope) table))
+    (:tycons (setf (sml-scope-tycons scope) table))
+    (:fixity (setf (sml-scope-fixity scope) table))
+    (:signatures (setf (sml-scope-signatures scope) table))
+    (:functors (setf (sml-scope-functors scope) table))))
 
-(defrule sml-real
-  (and (? "~") (+ (character-ranges (#\0 #\9))) "." (+ (character-ranges (#\0 #\9))))
-  (:destructure (neg whole dot frac)
-    (declare (ignore dot))
-    (let* ((whole-part (parse-integer (text whole)))
-           (frac-text (text frac))
-           (frac-part (parse-integer frac-text))
-           (scale (expt 10 (length frac-text)))
-           (value (+ whole-part (/ frac-part scale))))
-      (coerce (if neg (- value) value) 'double-float))))
+(defun sml-scope-bind (namespace name value &optional (scope (first *sml-scopes*)))
+  (let ((table (or (sml-scope-table scope namespace)
+                   (setf (sml-scope-table scope namespace)
+                         (make-hash-table :test #'equal)))))
+    (setf (gethash name table) value)))
 
-(defrule sml-string
-  (and #\" (* (or (and #\\ (+ sml-format-char) #\\)
-                  (and #\\ character)
-                  (and (! (or #\\ #\")) character)))
-       #\")
-  (:text t)
-  (:lambda (token)
-    (decode-sml-string-literal token)))
+(defun sml-opaque-namespace-p (namespace)
+  (member namespace '(:values :structures :tycons)))
 
-(defrule sml-char
-  (and #\# #\" (* (or (and #\\ (+ sml-format-char) #\\)
-                      (and #\\ character)
-                      (and (! (or #\\ #\")) character)))
-       #\")
-  (:text t)
-  (:lambda (token)
-    (decode-sml-char-literal token)))
+(defun sml-scope-lookup (namespace name &optional (scopes *sml-scopes*))
+  "NAME's entry in NAMESPACE, :UNKNOWN if an opaque scope hides it, or NIL."
+  (dolist (scope scopes nil)
+    (let ((table (sml-scope-table scope namespace)))
+      (when table
+        (multiple-value-bind (value found) (gethash name table)
+          (when found
+            (return value)))))
+    (when (and (sml-scope-opaque-p scope) (sml-opaque-namespace-p namespace))
+      (return :unknown))))
 
-(defrule sml-long-capitalized-tail
-  (or (and sml-id-raw "." sml-long-capitalized-tail)
-      sml-capitalized-id)
-  (:lambda (value)
-    (if (stringp value)
-        value
-        (format nil "~A.~A" (first value) (third value)))))
+(defun sml-environment-lookup (environment namespace name)
+  "NAME's entry in structure ENVIRONMENT, or :UNKNOWN."
+  (if (sml-scope-p environment)
+      (let ((table (sml-scope-table environment namespace)))
+        (multiple-value-bind (value found) (if table (gethash name table) (values nil nil))
+          (if found value :unknown)))
+      :unknown))
 
-(defrule sml-long-capitalized-id
-  (and (! sml-keyword) sml-id-raw "." sml-long-capitalized-tail)
-  (:destructure (not-kw first dot rest)
-    (declare (ignore not-kw dot))
-    (format nil "~A.~A" first rest)))
+(defun merge-sml-scopes (frames target namespaces)
+  "Copy the bindings of FRAMES (innermost first) into scope TARGET."
+  (dolist (frame (reverse frames) target)
+    (when (sml-scope-opaque-p frame)
+      ;; Everything bound before an opaque scope may have been shadowed.
+      (dolist (namespace '(:values :structures :tycons))
+        (when (member namespace namespaces)
+          (setf (sml-scope-table target namespace) nil)))
+      (setf (sml-scope-opaque-p target) t))
+    (dolist (namespace namespaces)
+      (let ((table (sml-scope-table frame namespace)))
+        (when table
+          (maphash (lambda (name value) (sml-scope-bind namespace name value target))
+                   table))))))
 
-(defrule sml-positioned-id sml-id
-  (:lambda (name &bounds start) (cons name start)))
+(defun collapse-sml-scopes (frames &optional (namespaces '(:values :structures :tycons)))
+  "A fresh scope with the bindings of FRAMES (innermost first)."
+  (merge-sml-scopes frames (make-sml-scope) namespaces))
 
-(defrule sml-fact-constructor-id
-    (sml-fact-constructor-production-p sml-positioned-id)
-  (:function car))
+(defparameter +sml-all-namespaces+
+  '(:values :structures :tycons :fixity :signatures :functors))
 
-(defrule sml-pat-ctor-head (or sml-long-id sml-capitalized-id sml-fact-constructor-id)
-  (:lambda (name &bounds start)
-    (note-sml-ast-position (list :pat-ctor name) start)))
+(defun push-sml-scope (scope)
+  "Make SCOPE's bindings visible, with a fresh scope above it for what follows."
+  (setf *sml-scopes* (list* (make-sml-scope) scope *sml-scopes*)))
 
-(defrule sml-pat-app-head
-  (or sml-pat-ctor-head
-      (and "ref" (! (or (alphanumericp character) #\_ #\'))))
-  (:lambda (name)
-    (if (and (consp name) (eq (car name) :pat-ctor))
-        name
-        '(:pat-ctor "ref"))))
+(defun open-sml-environment (environment)
+  (push-sml-scope (if (sml-scope-p environment)
+                      environment
+                      (let ((opaque (make-sml-scope)))
+                        (setf (sml-scope-opaque-p opaque) t)
+                        opaque))))
 
-;; Notice we check upper/lower case to distinguish variables from constructors!
-(defrule sml-pat-var-or-ctor sml-id
-  (:lambda (name &bounds start)
-    (sml-pattern-id-node name start)))
+(defmacro with-sml-scope (() &body body)
+  `(let ((*sml-scopes* (cons (make-sml-scope) *sml-scopes*)))
+     ,@body))
 
-(defrule sml-op-var sml-op-id
-  (:lambda (name)
-    ;; `op +` denotes the function taking a pair, unlike infix application.
-    ;; Only the curried builtin primitives need this; user-defined operators
-    ;; are already wrapped where they are defined.
-    (if (member name '("+" "-" "*" "/" "div" "mod" "^" "@" "::" ":=" "=" "<>"
-                       "<" "<=" ">" ">=")
-                :test #'string=)
-        `(:op-var ,name)
-        `(:var ,name)))
-  (:lambda (node &bounds start end)
-    (declare (ignore start))
-    (note-sml-ast-position node (- end (length (second node))))))
+(defun sml-scope-frames-since (base)
+  "The scopes pushed since *SML-SCOPES* was BASE."
+  (ldiff *sml-scopes* base))
 
-(defrule sml-bare-bar-symbol (and "|" (! sml-symbolic-char)))
+(defun make-sml-builtin-scope ()
+  "Fixity and identifier status of the initial basis."
+  (let ((scope (make-sml-scope)))
+    (loop for (names fixity) in '((("*" "/" "div" "mod") (:infix . 7))
+                                  (("+" "-" "^") (:infix . 6))
+                                  (("::" "@") (:infixr . 5))
+                                  (("=" "<>" ">" ">=" "<" "<=") (:infix . 4))
+                                  ((":=" "o") (:infix . 3))
+                                  (("before") (:infix . 0)))
+          do (dolist (name names)
+               (sml-scope-bind :fixity name fixity scope)))
+    (loop for (tycon . constructors) in '(("bool" ("true" . "c") ("false" . "c"))
+                                          ("list" ("nil" . "c") ("::" . "c1"))
+                                          ("ref" ("ref" . "c1"))
+                                          ("option" ("NONE" . "c") ("SOME" . "c1"))
+                                          ("order" ("LESS" . "c") ("EQUAL" . "c")
+                                           ("GREATER" . "c")))
+          do (sml-scope-bind :tycons tycon constructors scope)
+             (loop for (name . status) in constructors
+                   do (sml-scope-bind :values name status scope)))
+    (dolist (tycon '("int" "word" "real" "char" "string" "unit" "exn"))
+      (sml-scope-bind :tycons tycon :plain scope))
+    (dolist (name '("Bind" "Chr" "Div" "Domain" "Empty" "Match" "Option"
+                    "Overflow" "Size" "Subscript"))
+      (sml-scope-bind :values name "e" scope))
+    (sml-scope-bind :values "Fail" "e1" scope)
+    scope))
 
-(defrule sml-bare-colon-symbol (and ":" (! sml-symbolic-char)))
+(defvar *sml-builtin-scope* (make-sml-builtin-scope))
 
-(defrule sml-bare-equals-symbol (and "=" (! sml-symbolic-char)))
+(defvar *sml-package-scopes* (make-hash-table :test #'eq)
+  "SML package -> the environment its top-level declarations have built.")
 
-(defrule sml-bare-tilde-symbol (and "~" (! sml-symbolic-char)))
+(defun sml-package-parse-scopes (package)
+  (or (gethash (ensure-sml-package package) *sml-package-scopes*)
+      (list *sml-builtin-scope*)))
 
-(defrule sml-bare-tilde-var
-  (and sml-bare-tilde-symbol (! (and ws sml-prefix)))
-  (:destructure (tilde not-prefix)
-    (declare (ignore tilde not-prefix))
-    (list :var "~"))
-  (:lambda (node &bounds start)
-    (note-sml-ast-position node start)))
+(defun (setf sml-package-parse-scopes) (scopes package)
+  (setf (gethash (ensure-sml-package package) *sml-package-scopes*) scopes))
 
-(defrule sml-selector-start
-  (and "#" (or (alpha-char-p character) (character-ranges (#\0 #\9)))))
+(defun sml-fixity (name)
+  (or (sml-scope-lookup :fixity name) :nonfix))
 
-(defrule sml-char-start "#\"")
+(defun sml-infix-name-p (name)
+  (consp (sml-fixity name)))
 
-(defrule sml-symbolic-var
-  (and (! ":=") (! "=>") (! "->") (! sml-selector-start) (! sml-char-start)
-       (! sml-bare-equals-symbol) (! sml-bare-bar-symbol) (! sml-bare-colon-symbol)
-       (! sml-bare-tilde-symbol) sml-symbolic-id)
-  (:destructure (not-assign not-match-arrow not-type-arrow not-selector not-char not-equals
-                 not-bar not-colon not-tilde name)
-    (declare (ignore not-assign not-match-arrow not-type-arrow not-selector not-char
-                     not-equals not-bar not-colon not-tilde))
-    `(:var ,name))
-  (:lambda (node &bounds start)
-    (note-sml-ast-position node start)))
+(defun sml-lookup-structure (name)
+  "The environment of long structure identifier NAME, or :UNKNOWN."
+  (multiple-value-bind (qualifiers last) (split-sml-long-name name)
+    (let ((environment (if qualifiers
+                           (or (sml-scope-lookup :structures (first qualifiers)) :unknown)
+                           (or (sml-scope-lookup :structures last) :unknown))))
+      (when qualifiers
+        (dolist (part (append (rest qualifiers) (list last)))
+          (setf environment (sml-environment-lookup environment :structures part))))
+      environment)))
 
-(defrule sml-pat-op-var sml-op-id
-  (:lambda (name &bounds start end)
-    (declare (ignore start))
-    (sml-pattern-id-node* name (- end (length name)) :pat-var)))
+(defun sml-lookup-long (namespace name)
+  "NAME's entry in NAMESPACE: NIL if unbound, :UNKNOWN if not known."
+  (multiple-value-bind (qualifiers last) (split-sml-long-name name)
+    (if qualifiers
+        (sml-environment-lookup
+         (sml-lookup-structure (format nil "~{~A~^.~}" qualifiers))
+         namespace last)
+        (sml-scope-lookup namespace last))))
 
-(defrule sml-pat-symbolic-var (and (! "=") (! "|") sml-symbolic-id)
-  (:destructure (not-equals not-bar name &bounds start)
-    (declare (ignore not-equals not-bar))
-    (sml-pattern-id-node* name start :pat-var)))
+;;; Statuses use the encoding of the static facts: "v", "c", "c1", "e", "e1".
 
-(defrule sml-var-or-ctor sml-id
-  (:lambda (name &bounds start)
+(defun sml-identifier-status (name start kind)
+  "The status of identifier NAME at offset START, in a pattern (KIND :PAT)
+or an expression (:EXP): a status string, :UNKNOWN, or NIL for an unbound
+name (a variable)."
+  (or (and *sml-static-facts*
+           (if (eq kind :pat)
+               (sml-pattern-status-at start name)
+               (sml-expression-status-at start name)))
+      (sml-lookup-long :values name)))
+
+(defun sml-id-last-segment (name)
+  (let ((pos (position #\. name :from-end t)))
+    (if pos (subseq name (1+ pos)) name)))
+
+(defun sml-constructor-looking-id-p (name)
+  "Without status information, guess from the spelling (cl-sml's former
+heuristic): capitalized names are constructors."
+  (let ((segment (sml-id-last-segment name)))
+    (or (member segment '("true" "false" "nil") :test #'string=)
+        (and (plusp (length segment))
+             (upper-case-p (char segment 0))
+             (or (not (position #\_ segment))
+                 (string= segment (string-upcase segment)))))))
+
+(defun make-sml-pattern-id (name start)
+  "The pattern node for identifier NAME at offset START."
+  (let ((status (sml-identifier-status name start :pat)))
     (note-sml-ast-position
-     (let ((status (and (string/= name "ref")   ; a primitive function here
-                        (sml-expression-status-at start name))))
-       (if (if status
-               (sml-status-constructor-p status)
-               (sml-constructor-looking-id-p name))
-           `(:ctor ,name)
-           `(:var ,name)))
+     (cond
+       ((stringp status)
+        (if (sml-status-constructor-p status)
+            (list :pat-ctor name :status status)
+            (list :pat-var name)))
+       ((or (eq status :unknown) (sml-long-name-p name))
+        ;; A long identifier in a pattern is always a constructor.
+        (if (or (sml-long-name-p name) (sml-constructor-looking-id-p name))
+            (list :pat-ctor name)
+            (list :pat-var name)))
+       (t (list :pat-var name)))
      start)))
 
-;; Operators
-;; A symbolic operator is a maximal run of symbol characters, so `^/^` is not
-;; `^` followed by `/^`.
-(defrule sml-op-mult
-  (or (and (or "*" "/") (! sml-symbolic-char))
-      (and (or "div" "mod") (! (or (alphanumericp character) #\_ #\'))))
-  (:text t)
-  (:lambda (op &bounds start) (note-sml-ast-position (copy-seq op) start)))
-(defrule sml-op-add (and (or "+" "-" "^") (! sml-symbolic-char))
-  (:text t)
-  (:lambda (op &bounds start) (note-sml-ast-position (copy-seq op) start)))
-(defrule sml-op-precedence-nine
-  (and "sub" (! (or (alphanumericp character) #\_ #\')))
-  (:text t))
-(defrule sml-op-rel
-  (or "<=" ">=" "<>"
-      (and "<" (! sml-symbolic-char))
-      (and ">" (! sml-symbolic-char))
-      (and "=" (! sml-symbolic-char)))
-  (:text t)
-  (:lambda (op &bounds start) (note-sml-ast-position (copy-seq op) start)))
-(defrule sml-op-append (and "@" (! sml-symbolic-char))
-  (:constant "@"))
-
-(defrule sml-op-list (or "::" sml-op-append) (:text t))
-
-;; --- NEW DATATYPE RULES ---
-(defrule sml-type-brace-block
-  (and "{" (* (or sml-type-brace-block
-              sml-type-paren-block
-              (and (! (or "{" "}")) character)))
-       "}")
-  (:text t)
-  (:lambda (text)
-    (trim-and-collapse-sml-type-text text)))
-
-(defrule sml-type-blob (and ws "of" ws (or sml-type-brace-block
-                                           (+ (and (! (or "|" ";" #\Newline)) character))))
-  (:destructure (w1 of w2 chars)
-    (declare (ignore w1 of w2))
-    (if (stringp chars)
-        chars
-        (trim-and-collapse-sml-type-text (text chars)))))
-
-(defrule sml-type-text-id (and (! sml-end-keyword) sml-id-raw))
-
-(defrule sml-type-text-to-eol
-  (+ (or sml-type-text-id
-         (and (! (or ";" #\Newline sml-end-keyword)) character)))
-  (:text t)
-  (:lambda (text)
-    (trim-and-collapse-sml-type-text text)))
-
-(defrule sml-decl-start-after-newline
-  (and #\Newline (* (or #\Space #\Tab))
-       (or "abstype" "datatype" "exception" "fun" "functor" "in" "infix"
-           "infixr" "local" "nonfix" "open" "signature" "structure" "type"
-           "val" "withtype" "end")
-       ws))
-
-(defrule sml-decl-start-line
-  (and (* (or #\Space #\Tab))
-       (or "abstype" "datatype" "exception" "fun" "functor" "in" "infix"
-           "infixr" "local" "nonfix" "open" "signature" "structure" "type"
-           "val" "withtype" "end")
-       ws))
-
-(defrule sml-type-continuation-line
-  (and #\Newline (! sml-decl-start-line)
-       (* (and (! #\Newline) character))))
-
-(defrule sml-type-text-multiline
-  (and sml-type-text-to-eol (* sml-type-continuation-line))
-  (:text t)
-  (:lambda (text)
-    (trim-and-collapse-sml-type-text text)))
-
-(defrule sml-type-text-to-decl-boundary
-  (+ (or sml-type-paren-block
-         (and (! ";") (! sml-end-keyword) (! sml-decl-start-after-newline)
-              character)))
-  (:text t)
-  (:lambda (text)
-    (trim-and-collapse-sml-type-text text)))
-
-(defrule sml-type-paren-block
-  (and "(" (* (or sml-type-paren-block
-              (and (! (or "(" ")")) character)))
-       ")"))
-
-(defrule sml-type-text-inline
-  (+ (or sml-type-paren-block
-         (and (! (or ";" #\Newline "," ")" sml-end-keyword)) character)))
-  (:text t)
-  (:lambda (text)
-    (trim-and-collapse-sml-type-text text)))
-
-(defrule sml-type-text-before-equals (+ (and (! "=") character))
-  (:text t)
-  (:lambda (text)
-    (trim-and-collapse-sml-type-text text)))
-
-(defrule sml-type-constraint (and ws ":" ws sml-type-text-before-equals)
-  (:destructure (w1 colon w2 type)
-    (declare (ignore w1 colon w2))
-    type))
-
-(defrule sml-expression-type-constraint (and ws ":" ws sml-type-text-to-eol)
-  (:destructure (w1 colon w2 type)
-    (declare (ignore w1 colon w2))
-    type))
-
-(defrule sml-expression-type-ascription (and ws ":" ws sml-type-text-inline)
-  (:destructure (w1 colon w2 type)
-    (declare (ignore w1 colon w2))
-    type))
-
-(defrule sml-pattern-type-text-inline
-  (+ (or sml-type-paren-block
-         (and (! (or ";" #\Newline "," ")" "]" "}" "::" "=>" "=" sml-end-keyword))
-              character)))
-  (:text t)
-  (:lambda (text)
-    (trim-and-collapse-sml-type-text text)))
-
-(defrule sml-pattern-type-ascription (and ws ":" (! ":") ws sml-pattern-type-text-inline)
-  (:destructure (w1 colon not-colon w2 type)
-    (declare (ignore w1 colon not-colon w2))
-    type))
-
-(defrule sml-type-params
-  (or sml-tyvar
-      (and "(" ws sml-tyvar (* (and ws "," ws sml-tyvar)) ws ")")))
-
-(defrule sml-tycon-name (and (? (and sml-type-params ws)) sml-id)
-  (:destructure (params name)
-    (declare (ignore params))
-    name))
-
-(defrule sml-ctor-name (or sml-id sml-symbolic-id))
-
-(defrule sml-ctor-def (and ws sml-ctor-name (? sml-type-blob))
-  (:destructure (w1 name has-args) (declare (ignore w1))
-    (if has-args
-        `(:ctor-def ,name :has-args t :arg-type ,has-args)
-        `(:ctor-def ,name :has-args nil :arg-type nil))))
-
-(defrule sml-ctor-defs (and sml-ctor-def (* (and ws "|" sml-ctor-def)))
-  (:destructure (first rest)
-    (cons first (mapcar #'third rest))))
-
-(defrule sml-datatype-replication
-  (and "datatype" ws sml-positioned-id ws "=" ws "datatype" ws sml-type-text-to-eol ws (? ";"))
-  (:destructure (dt w1 positioned-name w2 eq w3 dt2 w4 source w5 semi)
-    (declare (ignore dt w1 w2 eq w3 dt2 w4 w5 semi))
-    ;; Positioned at the type name, where the static checker reports the
-    ;; constructors the replication binds.
+(defun make-sml-pattern-constructor (name start)
+  "The node for NAME applied as a constructor in a pattern."
+  (let ((status (sml-identifier-status name start :pat)))
     (note-sml-ast-position
-     `(:datatype-replication ,(car positioned-name) ,source)
-     (cdr positioned-name))))
-
-(defrule sml-withtype-tail
-  (and ws "withtype" ws sml-tycon-name ws "=" ws sml-type-decl-rhs
-       (* (and ws "and" ws sml-tycon-name ws "=" ws sml-type-decl-rhs)))
-  (:constant nil))
-
-(defrule sml-datatype-and-tail
-  (and ws "and" ws sml-tycon-name ws "=" sml-ctor-defs)
-  (:destructure (w1 and-kw w2 name w3 eq defs)
-    (declare (ignore w1 and-kw w2 name w3 eq))
-    defs))
-
-(defrule sml-datatype (and "datatype" ws sml-tycon-name ws "=" sml-ctor-defs
-                           (* sml-datatype-and-tail) (? sml-withtype-tail) ws (? ";"))
-  (:destructure (dt w1 name w2 eq defs and-defs withtype w3 semi)
-    (declare (ignore dt w1 w2 eq withtype w3 semi))
-    `(:datatype ,name ,(append defs (mapcan #'identity and-defs)))))
-
-(defrule sml-exception-alias (and "exception" ws sml-id ws "=" ws sml-type-text-to-eol ws (? ";"))
-  (:destructure (exn w1 name w2 eq w3 target w4 semi)
-    (declare (ignore exn w1 w2 eq w3 w4 semi))
-    `(:exception-alias ,name ,target)))
-
-(defrule sml-exception (and "exception" ws sml-id (? sml-type-blob) ws (? ";"))
-  (:destructure (exn w1 name arg-type w2 semi)
-    (declare (ignore exn w1 w2 semi))
-    `(:exception ,name :arg-type ,arg-type)))
-
-(defrule sml-type-decl-rhs (or sml-type-brace-block sml-type-text-multiline))
-
-(defrule sml-type-decl (and "type" ws sml-tycon-name ws "=" ws sml-type-decl-rhs ws (? ";"))
-  (:destructure (type-kw w1 name w2 eq w3 target w4 semi)
-    (declare (ignore type-kw w1 w2 eq w3 w4 semi))
-    `(:type ,name ,target)))
-
-(defrule sml-infix-decl
-  (and (or "infixr" "infix" "nonfix") (? (and ws (+ (character-ranges (#\0 #\9))))) ws
-       sml-type-text-to-eol ws (? ";"))
-  (:destructure (kind precedence w1 names w2 semi)
-    (declare (ignore w1 w2 semi))
-    `(:infix ,kind ,(and precedence (parse-integer (text (second precedence)))) ,names)))
-
-(defrule sml-module-ignore-id
-  (and (! (or sml-sig-keyword sml-struct-keyword sml-end-keyword)) sml-id-raw))
-
-(defrule sml-module-ignore-char
-  (and (! (or sml-sig-keyword sml-struct-keyword sml-end-keyword)) character))
-
-(defrule sml-module-ignore-body
-  (* (or sml-sig-block sml-ignored-struct-block sml-module-ignore-id sml-module-ignore-char)))
-
-(defrule sml-sig-block (and sml-sig-keyword sml-module-ignore-body sml-end-keyword)
-  (:constant nil))
-
-(defrule sml-ignored-struct-block (and sml-struct-keyword sml-module-ignore-body sml-end-keyword)
-  (:constant nil))
-
-;; The body text is kept so that sealed structures can be restricted to the
-;; names their signature mentions.
-(defrule sml-sig-block-text (and sml-sig-keyword sml-module-ignore-body sml-end-keyword)
-  (:text t))
-
-(defrule sml-signature (and "signature" ws sml-id ws "=" ws sml-sig-block-text ws (? ";"))
-  (:destructure (sig-kw w1 name w2 eq w3 body w4 semi)
-    (declare (ignore sig-kw w1 w2 eq w3 w4 semi))
-    `(:signature ,name :text ,body)))
-
-(defrule sml-open-let-boundary
-  (and ws1 (or "in" "end") (! (or (alphanumericp character) #\_ #\'))))
-
-(defrule sml-open-names-text
-  (+ (and (! ";") (! #\Newline) (! sml-open-let-boundary) character))
-  (:text t)
-  (:lambda (text)
-    (trim-and-collapse-sml-type-text text)))
-
-(defrule sml-open (and "open" ws sml-open-names-text ws (? ";"))
-  (:destructure (open-kw w1 names w2 semi)
-    (declare (ignore open-kw w1 w2 semi))
-    `(:open ,names)))
-
-(defrule sml-structure-equals-struct (and "=" ws sml-struct-keyword))
-
-(defrule sml-module-paren-block
-  (and "(" (* (or sml-module-paren-block
-              sml-sig-block
-              sml-ignored-struct-block
-              (and (! (or "(" ")")) character)))
-       ")")
-  (:constant nil))
-
-(defrule sml-module-paren-text
-  (and "(" (* (or sml-module-paren-text
-              sml-sig-block
-              sml-ignored-struct-block
-              (and (! (or "(" ")")) character)))
-       ")")
-  (:text t))
-
-(defrule sml-module-post-ascription
-  (and ws ":" (? ">") ws (or sml-sig-block sml-type-text-to-eol))
-  (:constant nil))
-
-(defrule sml-structure-ascription-char (and (! sml-structure-equals-struct) character))
-
-(defrule sml-structure-equals-functor-app
-  (and "=" ws sml-id ws sml-module-paren-block))
-
-(defrule sml-structure-functor-app-char
-  (and (! "=") character))
-
-(defrule sml-structure-functor-app
-  (and "structure" ws sml-id ws (* sml-structure-functor-app-char)
-       "=" ws sml-id ws sml-module-paren-text (? sml-module-post-ascription) ws (? ";"))
-  (:destructure (structure-kw w1 name w2 ascription eq w3 functor-name w4 args post w5 semi)
-    (declare (ignore structure-kw w1 w2 ascription eq w3 w4 post w5 semi))
-    `(:structure-app ,name ,functor-name ,args)))
-
-(defrule sml-structure-alias
-  (and "structure" ws sml-id ws (* (and (! (or "where" "=")) character)) "=" ws sml-id ws (? ";"))
-  (:destructure (structure-kw w1 name w2 ascription eq w3 target w4 semi)
-    (declare (ignore structure-kw w1 w2 ascription eq w3 w4 semi))
-    `(:structure-alias ,name ,target)))
-
-(defrule sml-structure
-  (and "structure" ws sml-positioned-id ws (* sml-structure-ascription-char)
-       "=" ws sml-struct-keyword ws sml-decs ws sml-end-keyword ws (? ";"))
-  (:destructure (structure-kw w1 positioned-name w2 ascription eq w3 struct-kw w4 decs w5 end-kw w6 semi)
-    (declare (ignore structure-kw w1 w2 eq w3 struct-kw w4 w5 end-kw w6 semi))
-    (let ((signature (sml-structure-ascription-signature-name ascription))
-          (name (car positioned-name)))
-      ;; The node is positioned at the structure's name, where the static
-      ;; checker reports the structure's members.
-      (note-sml-ast-position
-       (if signature
-           `(:structure ,name ,decs :sig ,signature)
-           `(:structure ,name ,decs))
-       (cdr positioned-name)))))
-
-(defrule sml-functor
-  (and "functor" ws sml-id ws (* sml-structure-ascription-char)
-       "=" ws sml-struct-keyword ws sml-decs ws sml-end-keyword ws (? ";"))
-  (:destructure (functor-kw w1 name w2 ascription eq w3 struct-kw w4 decs w5 end-kw w6 semi)
-    (declare (ignore functor-kw w1 w2 eq w3 struct-kw w4 w5 end-kw w6 semi))
-    `(:functor ,name ,decs :param ,(sml-functor-param-name ascription))))
-
-(defrule sml-decs (* (and ws (or sml-signature sml-functor sml-structure-functor-app
-                                 sml-structure-alias sml-structure sml-open
-                                 sml-local sml-infix-decl sml-type-decl
-                                 sml-datatype-replication sml-datatype
-                                 sml-exception-alias sml-exception sml-val-rec
-                                 sml-val sml-fun sml-top-expr) ws))
-  (:destructure (&rest items)
-    (mapcar #'second items)))
-
-(defrule sml-local (and "local" ws sml-decs ws "in" ws sml-decs ws "end" ws (? ";"))
-  (:destructure (local-kw w1 local-decs w2 in-kw w3 body-decs w4 end-kw w5 opt-semi)
-    (declare (ignore local-kw w1 w2 in-kw w3 w4 end-kw w5 opt-semi))
-    `(:local ,local-decs ,body-decs)))
-
-(defrule sml-let (and "let" ws sml-decs ws "in" ws sml-expr (* (and ws ";" ws sml-expr)) ws (? ";") ws "end")
-  (:destructure (let-kw w1 decs w2 in-kw w3 e1 rest w4 opt-semi w5 end-kw)
-    (declare (ignore let-kw w1 w2 in-kw w3 w4 opt-semi w5 end-kw))
-    `(:let ,decs (,e1 ,@(mapcar #'fourth rest)))))
-
-;; --- LIST EXPRESSIONS ---
-;; Parse comma-separated list elements
-(defrule sml-list-elements (and sml-expr (* (and ws "," ws sml-expr)))
-  (:destructure (e1 rest)
-    (cons e1 (mapcar #'fourth rest))))
-
-;; Parse the actual list [ ... ]
-(defrule sml-list (and "[" ws (? sml-list-elements) ws "]")
-  (:destructure (lb w1 elems w2 rb) (declare (ignore lb w1 w2 rb))
-    `(:list ,@elems)))
-
-(defrule sml-record-field (and sml-label ws "=" ws sml-expr)
-  (:destructure (label w1 eq w2 expr)
-    (declare (ignore w1 eq w2))
-    (list label expr)))
-
-(defrule sml-record-fields (and sml-record-field (* (and ws "," ws sml-record-field)))
-  (:destructure (first rest)
-    (cons first (mapcar #'fourth rest))))
-
-(defrule sml-record (and "{" ws (? sml-record-fields) ws "}")
-  (:destructure (lb w1 fields w2 rb)
-    (declare (ignore lb w1 w2 rb))
-    `(:record ,@fields)))
-
-(defrule sml-paren-elements (and sml-expr (* (and ws "," ws sml-expr)))
-  (:destructure (first rest)
-    (cons first (mapcar #'fourth rest))))
-
-(defrule sml-paren-sequence (and sml-expr (+ (and ws ";" ws sml-expr)))
-  (:destructure (first rest)
-    `(:seq ,first ,@(mapcar #'fourth rest))))
-
-;; Base Expressions
-(defrule sml-selector (and "#" sml-label)
-  (:destructure (hash label)
-    (declare (ignore hash))
-    `(:selector ,label)))
-
-(defrule sml-atomic (or sml-let sml-record sml-list sml-selector sml-char sml-string sml-word-expr sml-real sml-int
-                        sml-op-var sml-bare-tilde-var sml-symbolic-var sml-var-or-ctor sml-parens))
-
-(defrule sml-deref (and "!" ws sml-prefix)
-  (:destructure (bang w expr) (declare (ignore bang w))
-    `(:deref ,expr)))
-
-(defrule sml-negate (and sml-bare-tilde-symbol ws sml-prefix)
-  (:destructure (tilde w expr &bounds start) (declare (ignore tilde w))
-    `(:app ,(note-sml-ast-position (list :var "~") start) ,expr)))
-
-(defrule sml-prefix (or sml-deref sml-negate sml-atomic))
-
-(defrule sml-parens (and "(" ws (? (or sml-paren-sequence sml-paren-elements)) ws ")")
-  (:destructure (lp w1 elems w2 rp) (declare (ignore lp w1 w2 rp))
-    (cond
-      ((null elems) '(:unit))
-      ((and (consp elems) (eq (first elems) :seq)) elems)
-      ((null (rest elems)) (first elems))
-      (t `(:tuple ,@elems)))))
-
-;; Application: f x y
-(defrule sml-app-arg (and ws
-                          (! sml-op-precedence-nine)
-                          (! sml-op-mult) (! sml-op-add) (! sml-op-rel)
-                          (! sml-op-list) (! ":=")
-                          (! sml-generic-word-infix-op) (! sml-generic-symbolic-infix-op)
-                          (! (and "before" (! (or (alphanumericp character) #\_ #\'))))
-                          sml-prefix))
-
-(defrule sml-app (and sml-prefix (* sml-app-arg))
-  (:destructure (first rest)
-    (if (null rest)
-        first
-        (reduce (lambda (left group)
-                  `(:app ,left ,(car (last group))))
-                rest
-                :initial-value first))))
-
-;; --- INFIX PRECEDENCE CLIMBING ---
-
-;; HaMLet and the SML/NJ parser libraries conventionally give Array.sub the
-;; highest fixity. Full dynamically scoped fixity resolution is still pending.
-(defrule sml-precedence-nine-expr
-  (and sml-app (* (and ws sml-op-precedence-nine ws sml-app)))
-  (:destructure (first rest) (build-tupled-infix-ast first rest)))
-
-;; 1. Multiplication level (*, div, mod, /)
-(defrule sml-mult-expr
-  (and sml-precedence-nine-expr
-       (* (and ws sml-op-mult ws sml-precedence-nine-expr)))
-  (:destructure (first rest) (build-infix-ast first rest)))
-
-;; 2. Addition level (+, -, ^)
-(defrule sml-add-expr (and sml-mult-expr (* (and ws sml-op-add ws sml-mult-expr)))
-  (:destructure (first rest) (build-infix-ast first rest)))
-
-
-;; 4. Logical AND (andalso)
-(defrule sml-generic-symbolic-infix-op
-  (and (! ":=") (! "->") (! "=>") (! sml-selector-start) (! sml-char-start)
-       (! sml-bare-bar-symbol) (! sml-bare-colon-symbol) (! sml-bare-equals-symbol)
-       (! sml-bare-tilde-symbol) sml-symbolic-id)
-  (:destructure (not-assign not-type-arrow not-match-arrow not-selector not-char not-bar
-                 not-colon not-equals not-tilde op)
-    (declare (ignore not-assign not-type-arrow not-match-arrow not-selector not-char
-                     not-bar not-colon not-equals not-tilde))
-    op))
-
-(defrule sml-generic-word-infix-op
-  (or (and "oplusVEandTE" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusVEandTE" (! (or (alphanumericp character) #\_ #\')))
-      (and "oplusTE" (! (or (alphanumericp character) #\_ #\')))
-      (and "oplusSE" (! (or (alphanumericp character) #\_ #\')))
-      (and "oplusG" (! (or (alphanumericp character) #\_ #\')))
-      (and "oplusF" (! (or (alphanumericp character) #\_ #\')))
-      (and "oplusE" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusVE" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusTE" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusSE" (! (or (alphanumericp character) #\_ #\')))
-      (and "IBplusI" (! (or (alphanumericp character) #\_ #\')))
-      (and "TEplus" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusT" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusU" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusG" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusF" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusE" (! (or (alphanumericp character) #\_ #\')))
-      (and "plusI" (! (or (alphanumericp character) #\_ #\')))
-      (and "oplus" (! (or (alphanumericp character) #\_ #\')))
-      (and "plus" (! (or (alphanumericp character) #\_ #\')))
-      (and "o" (! (or (alphanumericp character) #\_ #\'))))
-  (:text t))
-
-(defrule sml-generic-infix-op
-  (or sml-generic-symbolic-infix-op sml-generic-word-infix-op))
-
-(defrule sml-generic-infix-expr (and sml-rel-expr (* (and ws sml-generic-infix-op ws sml-rel-expr)))
-  (:destructure (first rest) (build-tupled-infix-ast first rest)))
-
-(defrule sml-andalso-expr (and sml-generic-infix-expr (* (and ws "andalso" ws sml-raise-expr)))
-  (:destructure (first rest)
-    (if (null rest)
-        first
-        (reduce (lambda (left group) `(:andalso ,left ,(fourth group)))
-                rest :initial-value first))))
-
-;; 5. Logical OR (orelse)
-(defrule sml-orelse-expr (and sml-andalso-expr (* (and ws "orelse" ws sml-raise-expr)))
-  (:destructure (first rest)
-    (if (null rest)
-        first
-        (reduce (lambda (left group) `(:orelse ,left ,(fourth group)))
-                rest :initial-value first))))
-
-(defrule sml-list-expr (and sml-add-expr (? (and ws sml-op-list ws sml-list-expr)))
-  (:destructure (left opt-right)
-    (if opt-right
-        `(:app (:app (:var ,(second opt-right)) ,left) ,(fourth opt-right))
-        left)))
-
-;; 3. Relational level (=, <, >)
-(defrule sml-rel-expr (and sml-list-expr (* (and ws sml-op-rel ws sml-add-expr)))
-  (:destructure (first rest) (build-infix-ast first rest)))
-
-;; --- CONTROL FLOW & PATTERN MATCHING ---
-
-(defrule sml-if (and "if" ws sml-expr ws "then" ws sml-expr ws "else" ws sml-expr)
-  (:destructure (i w1 cond w2 t1 w3 then-expr w4 e1 w5 else-expr)
-    (declare (ignore i w1 w2 t1 w3 w4 e1 w5))
-    `(:if ,cond ,then-expr ,else-expr)))
-
-(defrule sml-while (and "while" ws sml-expr ws "do" ws sml-ascribed-expr)
-  (:destructure (while-kw w1 cond w2 do-kw w3 body)
-    (declare (ignore while-kw w1 w2 do-kw w3))
-    `(:while ,cond ,body)))
-
-;; --- LIST PATTERNS (For Case Statements) ---
-;; Parse empty list pattern []
-(defrule sml-pat-empty-list (and "[" ws "]")
-  (:constant '(:pat-nil)))
-
-(defrule sml-pat-list-elements (and sml-pat (* (and ws "," ws sml-pat)))
-  (:destructure (first rest)
-    (cons first (mapcar #'fourth rest))))
-
-(defrule sml-pat-list (and "[" ws (? sml-pat-list-elements) ws "]")
-  (:destructure (lb w1 elems w2 rb)
-    (declare (ignore lb w1 w2 rb))
-    (build-list-pattern-ast (or elems nil))))
-
-(defrule sml-pat-app (and sml-pat-app-head ws sml-pat-app-primary)
-  (:destructure (ctor w pat) (declare (ignore w))
-    (if (eq (car ctor) :pat-ctor)
-        `(:pat-app ,ctor ,pat)
-        ;; If it wasn't capitalized, it's not a valid pattern app in SML
-        (error "Pattern application head must be a Constructor (Capitalized)"))))
-
-(defrule sml-pat-record-app (and sml-pat-app-head ws sml-pat-record)
-  (:destructure (ctor w pat) (declare (ignore w))
-    `(:pat-app ,ctor ,pat)))
-
-(defrule sml-pat-parens (and "(" ws sml-pat ws ")")
-  (:destructure (lp w1 pat w2 rp) (declare (ignore lp w1 w2 rp)) pat))
-
-(defrule sml-pat-paren-elements (and sml-pat (* (and ws "," ws sml-pat)))
-  (:destructure (first rest)
-    (cons first (mapcar #'fourth rest))))
-
-(defrule sml-pat-record-rest "..."
-  (:constant :record-rest))
-
-(defrule sml-pat-record-field
-  (or sml-pat-record-rest
-      (and sml-label ws "=" ws sml-pat)
-      sml-label)
-  (:lambda (field)
-    (cond
-      ((eq field :record-rest) field)
-      ((stringp field)
-       (list field `(:pat-var ,field)))
-      (t
-       (list (first field) (fifth field))))))
-
-(defrule sml-pat-record-fields (and sml-pat-record-field (* (and ws "," ws sml-pat-record-field)))
-  (:destructure (first rest)
-    (cons first (mapcar #'fourth rest))))
-
-(defrule sml-pat-record (and "{" ws (? sml-pat-record-fields) ws "}")
-  (:destructure (lb w1 fields w2 rb)
-    (declare (ignore lb w1 w2 rb))
-    `(:pat-record ,@fields)))
-
-(defrule sml-pat-tuple-or-parens (and "(" ws (? sml-pat-paren-elements) ws ")")
-  (:destructure (lp w1 elems w2 rp) (declare (ignore lp w1 w2 rp))
-    (cond
-      ((null elems) '(:pat-unit))
-      ((null (rest elems)) (first elems))
-      (t `(:pat-tuple ,@elems)))))
-
-(defrule sml-wildcard "_"
-  (:lambda (token)
-    (declare (ignore token))
-    :wild))
-
-(defrule sml-pat-primary
-    (or sml-word
-        sml-real
-        sml-int
-        sml-string
-        sml-char
-        sml-pat-record
-        sml-pat-op-var
-        sml-pat-symbolic-var
-        sml-pat-var-or-ctor
-        sml-wildcard
-        sml-pat-tuple-or-parens))
-
-(defrule sml-pat-app-primary
-    (or sml-word
-        sml-real
-        sml-int
-        sml-string
-        sml-char
-        sml-pat-list
-        sml-pat-record
-        sml-pat-var-or-ctor
-        sml-wildcard
-        sml-pat-tuple-or-parens))
-
-(defrule sml-pat-non-cons
-  (or sml-pat-list
-      sml-pat-record-app
-      sml-pat-app
-      sml-pat-primary))
-
-(defrule sml-pat-ascribed (and sml-pat-non-cons (? sml-pattern-type-ascription))
-  (:destructure (pat type)
-    (if type
-        `(:pat-typed ,pat ,type)
-        pat)))
-
-(defrule sml-pat-as (and sml-pat-ascribed ws "as" ws sml-pat)
-  (:destructure (alias w1 as-kw w2 pat)
-    (declare (ignore w1 as-kw w2))
-    `(:pat-as ,(if (and (consp alias)
-                        (eq (car alias) :pat-ctor))
-                   `(:pat-var ,(second alias))
-                   alias)
-              ,pat)))
-
-;; Parse the right-associative cons pattern: h :: t.
-(defrule sml-pat-cons (and (or sml-pat-as sml-pat-ascribed) ws "::" ws sml-pat)
-  (:destructure (h w1 op w2 t-pat) (declare (ignore w1 op w2))
-    (build-cons-pattern-ast h t-pat)))
-
-(defrule sml-pat-symbolic-infix-op
-  (and (! "::") (! ":=") (! "=>") (! "->") (! "=") (! "|") sml-symbolic-id)
-  (:destructure (not-cons not-assign not-match-arrow not-type-arrow not-equals not-bar op)
-    (declare (ignore not-cons not-assign not-match-arrow not-type-arrow not-equals not-bar))
-    op))
-
-(defrule sml-pat-symbolic-infix
-  (and sml-pat-ascribed ws sml-pat-symbolic-infix-op ws sml-pat)
-  (:destructure (left w1 op w2 right)
-    (declare (ignore w1 w2))
-    `(:pat-app (:pat-ctor ,op)
-               ;; Only the right operand (the annotation, as in `s@@A`) is turned
-               ;; into a variable; a capitalized left operand such as
-               ;; `EMPTYSpec@@A` is a genuine constructor.
-               (:pat-tuple ,left
-                           ,(normalize-sml-infix-pattern-operand op right)))))
-
-;; Patterns for case statements
-;; Order is critical! Complex patterns (cons, app) must come before simple vars
-
-(defrule sml-pat (or sml-pat-cons
-                     sml-pat-symbolic-infix
-                     sml-pat-as
-                     sml-pat-ascribed))
-
-;; Case statement
-(defrule sml-match-branch (and ws "|" ws sml-pat ws "=>" ws sml-expr)
-  (:destructure (w1 bar w2 pat w3 arr w4 expr) (declare (ignore w1 bar w2 w3 arr w4))
-    `(,pat ,expr)))
-
-(defrule sml-first-branch (and sml-pat ws "=>" ws sml-expr)
-  (:destructure (pat w1 arr w2 expr) (declare (ignore w1 arr w2))
-    `(,pat ,expr)))
-
-(defrule sml-case (and "case" ws sml-expr ws "of" ws sml-first-branch (* sml-match-branch))
-  (:destructure (c w1 expr w2 o w3 first rest) (declare (ignore c w1 w2 o w3))
-    `(:case ,expr ,first ,@rest)))
-
-(defrule sml-fn (and "fn" ws sml-first-branch (* sml-match-branch))
-  (:destructure (f w1 first rest)
-    (declare (ignore f w1))
-    `(:fn (,first ,@rest))))
-
-(defrule sml-assign-expr (and sml-orelse-expr (? (and ws ":=" ws sml-assign-expr)))
-  (:destructure (left opt-right)
-    (if opt-right
-        `(:app (:app (:var ":=") ,left) ,(fourth opt-right))
-        left)))
-
-(defrule sml-handle-branch (and sml-pat ws "=>" ws sml-expr)
-  (:destructure (pat w1 arr w2 expr)
-    (declare (ignore w1 arr w2))
-    `(,pat ,expr)))
-
-(defrule sml-handle-match-branch (and ws "|" ws sml-pat ws "=>" ws sml-expr)
-  (:destructure (w1 bar w2 pat w3 arr w4 expr)
-    (declare (ignore w1 bar w2 w3 arr w4))
-    `(,pat ,expr)))
-
-;; `before` is infix 0, looser than every other operator including :=.
-(defrule sml-before-expr
-  (and sml-assign-expr
-       (* (and ws "before" (! (or (alphanumericp character) #\_ #\')) ws sml-assign-expr)))
-  (:destructure (first rest)
-    (reduce (lambda (left group) `(:infix-app "before" ,left ,(fifth group)))
-            rest
-            :initial-value first)))
-
-(defrule sml-base-expr
-  (or sml-fn
-      sml-case
-      sml-if
-      sml-while
-      sml-before-expr))
-
-(defrule sml-handle-expr (and sml-base-expr (? (and ws "handle" ws sml-handle-branch (* sml-handle-match-branch))))
-  (:destructure (expr opt-handle)
-    (if opt-handle
-        `(:handle ,expr (,(fourth opt-handle) ,@(fifth opt-handle)))
-        expr)))
-
-(defrule sml-raise-expr
-  (or (and "raise" ws sml-raise-expr)
-      sml-handle-expr)
-  (:lambda (result)
-    (if (and (consp result)
-             (= (length result) 3)
-             (stringp (first result))
-             (string= (first result) "raise"))
-        `(:raise ,(third result))
-        result)))
-
-(defrule sml-ascribed-expr (and sml-raise-expr (? sml-expression-type-ascription))
-  (:destructure (expr type)
-    (if type
-        `(:typed ,expr ,type)
-        expr)))
-
-(defrule sml-seq-expr (and sml-ascribed-expr (* (and ws ";" ws sml-ascribed-expr)))
-  (:destructure (first rest)
-    (if (null rest)
-        first
-        `(:seq ,first ,@(mapcar #'fourth rest)))))
-
-(defrule sml-expr sml-ascribed-expr)
-
-(defrule sml-val-binding (and sml-pat (? sml-type-constraint) ws "=" ws sml-expr
-                              (? sml-expression-type-constraint))
-  (:destructure (pat type w1 eq w2 expr expr-type)
-    (declare (ignore w1 eq w2))
-    (build-sml-val-ast pat type expr expr-type)))
-
-(defrule sml-val (and "val" ws sml-val-binding (* (and ws "and" ws sml-val-binding))
-                      ws (? ";"))
-  (:destructure (v w1 first rest w2 semi)
-    (declare (ignore v w1 w2 semi))
-    (let ((bindings (cons first (mapcar #'fourth rest))))
-      (if (rest bindings)
-          `(:vals ,@bindings)
-          first))))
-
-(defrule sml-val-rec (and "val" ws "rec" ws sml-id ws "=" ws sml-expr ws (? ";"))
-  (:destructure (v w1 rec w2 name w3 eq w4 expr w5 semi)
-    (declare (ignore v w1 rec w2 w3 eq w4 w5 semi))
-    `(:val-rec ,name ,expr)))
-
-(defrule sml-fun-name (or sml-op-id sml-symbolic-id sml-id))
-
-(defrule sml-known-word-infix-id
-  (and (or "IBplusI" "TEplus" "oplusVEandTE" "oplusTE"
-           "oplusSE" "oplusG" "oplusF" "oplusE"
-           "plusVEandTE" "plusVE" "plusTE" "plusSE"
-           "plusG" "plusF" "plusE" "plusT" "plusU" "plusI"
-           "oplus" "plus" "sub" "before" "o")
-       (! (or (alphanumericp character) #\_ #\')))
-  (:text t))
-
-(defrule sml-infix-fun-name (or sml-op-id sml-symbolic-id sml-known-word-infix-id)
-  (:text t))
-
-(defrule sml-paren-infix-fun-name (or sml-infix-fun-name sml-id)
-  (:text t))
-
-;; Curried parameters are atomic patterns: in `f J (x as p)` the capitalized J
-;; is a variable argument, not a constructor applied to the next pattern.
-(defrule sml-fun-param (and (! ":") (or sml-pat-list sml-pat-primary))
-  (:function second))
-
-(defrule sml-fun-result-type (and ws ":" (! ":") ws sml-type-text-before-equals)
-  (:function fifth))
-
-(defrule sml-fun-prefix-clause
-  (and sml-fun-name (+ (and ws sml-fun-param)) (? sml-fun-result-type) ws "=" ws sml-expr)
-  (:destructure (name params result-type w1 eq w2 expr)
-    (declare (ignore w1 eq w2))
-    `(,name ,(mapcar #'second params)
-            ,(if result-type `(:typed ,expr ,result-type) expr))))
-
-;; Lenient fallback for non-standard clauses such as `fun f x :: xs = ...`.
-(defrule sml-fun-loose-prefix-clause (and sml-fun-name (+ (and ws sml-pat)) ws "=" ws sml-expr)
-  (:destructure (name params w1 eq w2 expr)
-    (declare (ignore w1 eq w2))
-    `(,name ,(mapcar #'second params) ,expr)))
-
-(defrule sml-fun-paren-infix-clause
-  (and "(" ws sml-pat-primary ws1 sml-paren-infix-fun-name ws1 sml-pat ws ")" (* (and ws sml-pat)) ws "=" ws sml-expr)
-  (:destructure (lp w1 left w2 name w3 right w4 rp rest w5 eq w6 expr)
-    (declare (ignore lp w1 w2 w3 w4 rp w5 eq w6))
-    `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
-
-(defrule sml-fun-bare-id-infix-clause
-  (and sml-pat-tuple-or-parens ws1 sml-id ws1 sml-pat (* (and ws sml-pat)) ws "=" ws sml-expr)
-  (:destructure (left w1 name w2 right rest w3 eq w4 expr)
-    (declare (ignore w1 w2 w3 eq w4))
-    `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
-
-(defrule sml-fun-symbolic-infix-clause
-  (and sml-pat-primary ws (! sml-char-start) (! sml-selector-start)
-       sml-symbolic-id ws sml-pat
-       (* (and ws sml-pat)) ws "=" ws sml-expr)
-  (:destructure (left w1 not-char not-selector name w2 right rest w3 eq w4 expr)
-    (declare (ignore w1 not-char not-selector w2 w3 eq w4))
-    `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
-
-(defrule sml-fun-bare-infix-clause
-  (and sml-pat-primary ws1 sml-infix-fun-name ws1 sml-pat (* (and ws sml-pat)) ws "=" ws sml-expr)
-  (:destructure (left w1 name w2 right rest w3 eq w4 expr)
-    (declare (ignore w1 w2 w3 eq w4))
-    `(,name (,left ,right ,@(mapcar #'second rest)) ,expr)))
-
-(defrule sml-fun-clause (or sml-fun-paren-infix-clause
-                            sml-fun-bare-id-infix-clause
-                            sml-fun-symbolic-infix-clause
-                            sml-fun-bare-infix-clause
-                            sml-fun-prefix-clause
-                            sml-fun-loose-prefix-clause))
-
-(defrule sml-fun-binding (and sml-fun-clause (* (and ws "|" ws sml-fun-clause)))
-  (:destructure (first rest)
-    (build-fun-binding-ast first rest)))
-
-(defrule sml-fun (and "fun" ws sml-fun-binding (* (and ws "and" ws sml-fun-binding)) ws (? ";"))
-  (:destructure (f w1 first rest w2 semi)
-    (declare (ignore f w1 w2 semi))
-    (if rest
-        `(:funs ,first ,@(mapcar #'fourth rest))
+     (if (and (stringp status) (sml-status-constructor-p status))
+         (list :pat-ctor name :status status)
+         (list :pat-ctor name))
+     start)))
+
+(defun make-sml-expression-id (name start)
+  "The expression node for identifier NAME at offset START."
+  (let ((status (if (string= name "ref")
+                    "v"                 ; compiled as a primitive function
+                    (sml-identifier-status name start :exp))))
+    (note-sml-ast-position
+     (list (cond
+             ((stringp status) (if (sml-status-constructor-p status) :ctor :var))
+             ((eq status :unknown) (if (sml-constructor-looking-id-p name) :ctor :var))
+             (t :var))
+           name)
+     start)))
+
+;;;; Types
+
+(defun sml-tycon-token-p (token)
+  (member (sml-token-kind token) '(:alnum :long)))
+
+(defun at-sml-star-p ()
+  (let ((token (current-sml-token)))
+    (and (eq (sml-token-kind token) :symbolic)
+         (string= (sml-token-value token) "*"))))
+
+(defun parse-sml-ty ()
+  (let ((ty (parse-sml-tuple-ty)))
+    (if (accept-sml-reserved :arrow)
+        (list :ty-arrow ty (parse-sml-ty))
+        ty)))
+
+(defun parse-sml-tuple-ty ()
+  (let ((first (parse-sml-app-ty)))
+    (if (at-sml-star-p)
+        (let ((items (list first)))
+          (loop while (at-sml-star-p)
+                do (next-sml-token)
+                   (push (parse-sml-app-ty) items))
+          (cons :ty-tuple (nreverse items)))
         first)))
 
-(defrule sml-top-expr (and sml-expr ws ";")
-  (:destructure (expr w semi)
-    (declare (ignore w semi))
-    `(:expr ,expr)))
+(defun parse-sml-app-ty ()
+  (let ((ty (parse-sml-atomic-ty)))
+    (loop while (sml-tycon-token-p (current-sml-token))
+          do (setf ty (list :ty-con (sml-token-value (next-sml-token)) (list ty))))
+    ty))
 
-;; Program rule simply uses the new reusable sml-decs block
-(defrule sml-program (and ws sml-decs ws)
-  (:destructure (w1 decs w2)
-    (declare (ignore w1 w2))
-    `(:program ,@decs)))
+(defun parse-sml-atomic-ty ()
+  (let ((token (current-sml-token)))
+    (case (sml-token-kind token)
+      (:tyvar
+       (next-sml-token)
+       (list :ty-var (sml-token-value token)))
+      ((:alnum :long)
+       (next-sml-token)
+       (list :ty-con (sml-token-value token) nil))
+      (t
+       (cond
+         ((accept-sml-reserved :lbrace)
+          (let ((fields nil))
+            (unless (at-sml-reserved-p :rbrace)
+              (loop
+                (let ((label (parse-sml-label)))
+                  (expect-sml-reserved :colon)
+                  (push (list label (parse-sml-ty)) fields))
+                (unless (accept-sml-reserved :comma)
+                  (return))))
+            (expect-sml-reserved :rbrace)
+            (cons :ty-record (nreverse fields))))
+         ((accept-sml-reserved :lparen)
+          (let ((first (parse-sml-ty)))
+            (if (accept-sml-reserved :comma)
+                (let ((args (list first)))
+                  (loop do (push (parse-sml-ty) args)
+                        while (accept-sml-reserved :comma))
+                  (expect-sml-reserved :rparen)
+                  (unless (sml-tycon-token-p (current-sml-token))
+                    (sml-parse-expected "a type constructor after a type argument sequence"))
+                  (list :ty-con (sml-token-value (next-sml-token)) (nreverse args)))
+                (progn
+                  (expect-sml-reserved :rparen)
+                  first))))
+         (t (sml-parse-expected "a type")))))))
 
-;; 2. Add this helper function at the bottom of the file
-(defun parse-sml-string (str)
-  (esrap:parse 'sml-expr str))
+(defun parse-sml-tyvarseq ()
+  "An optional type variable sequence: 'a or ('a, 'b)."
+  (cond
+    ((eq (sml-token-kind (current-sml-token)) :tyvar)
+     (list (sml-token-value (next-sml-token))))
+    ((and (at-sml-reserved-p :lparen)
+          (eq (sml-token-kind (sml-token-ahead 1)) :tyvar))
+     (next-sml-token)
+     (let ((tyvars nil))
+       (loop
+         (let ((token (current-sml-token)))
+           (unless (eq (sml-token-kind token) :tyvar)
+             (sml-parse-expected "a type variable"))
+           (push (sml-token-value (next-sml-token)) tyvars))
+         (unless (accept-sml-reserved :comma)
+           (return)))
+       (expect-sml-reserved :rparen)
+       (nreverse tyvars)))
+    (t nil)))
+
+(defun parse-sml-label ()
+  "A record label: an identifier or a numeral 1, 2, ..."
+  (let ((token (current-sml-token)))
+    (case (sml-token-kind token)
+      ((:alnum :symbolic)
+       (next-sml-token)
+       (sml-token-value token))
+      (:int
+       (let ((text (subseq *sml-parse-text* (sml-token-start token) (sml-token-end token))))
+         (unless (and (every #'digit-char-p text) (char/= (char text 0) #\0))
+           (sml-parse-expected "a record label"))
+         (next-sml-token)
+         text))
+      (t (sml-parse-expected "a record label")))))
+
+;;; Types as data, for the compiler and the REPL.
+
+(defun sml-type-ast->string (ty)
+  "SML syntax for type AST TY."
+  (labels ((walk (ty context)
+             ;; CONTEXT: 0 anywhere, 1 tuple component, 2 argument
+             (ecase (car ty)
+               (:ty-var (second ty))
+               (:ty-con
+                (let ((args (third ty)))
+                  (cond
+                    ((null args) (second ty))
+                    ((null (rest args))
+                     (format nil "~A ~A" (walk (first args) 2) (second ty)))
+                    (t (format nil "(~{~A~^, ~}) ~A"
+                               (mapcar (lambda (arg) (walk arg 0)) args)
+                               (second ty))))))
+               (:ty-tuple
+                (let ((text (format nil "~{~A~^ * ~}"
+                                    (mapcar (lambda (item) (walk item 1)) (rest ty)))))
+                  (if (>= context 1) (format nil "(~A)" text) text)))
+               (:ty-arrow
+                (let ((text (format nil "~A -> ~A" (walk (second ty) 1) (walk (third ty) 0))))
+                  (if (>= context 1) (format nil "(~A)" text) text)))
+               (:ty-record
+                (format nil "{~{~A~^, ~}}"
+                        (mapcar (lambda (field)
+                                  (format nil "~A : ~A" (first field) (walk (second field) 0)))
+                                (rest ty)))))))
+    (walk ty 0)))
+
+(defun sml-type-ast->binding-type (ty)
+  "TY in the representation of REGISTER-SML-BINDING-TYPE: a type name string,
+(:list ty), (:option ty), (:tuple ty...), (:record (label . ty)...) or
+(:fn ty ty)."
+  (if (not (and (consp ty) (keywordp (car ty))))
+      ty
+      (ecase (car ty)
+        (:ty-var (second ty))
+        (:ty-con
+         (let ((name (second ty))
+               (args (third ty)))
+           (cond
+             ((null args) name)
+             ((and (string= name "list") (= (length args) 1))
+              (list :list (sml-type-ast->binding-type (first args))))
+             ((and (string= name "option") (= (length args) 1))
+              (list :option (sml-type-ast->binding-type (first args))))
+             ((and (string= name "ref") (= (length args) 1)) "ref")
+             (t (sml-type-ast->string ty)))))
+        (:ty-tuple (cons :tuple (mapcar #'sml-type-ast->binding-type (rest ty))))
+        (:ty-arrow (list :fn
+                         (sml-type-ast->binding-type (second ty))
+                         (sml-type-ast->binding-type (third ty))))
+        (:ty-record
+         (if (rest ty)
+             (cons :record
+                   (sort (mapcar (lambda (field)
+                                   (cons (first field)
+                                         (sml-type-ast->binding-type (second field))))
+                                 (rest ty))
+                         #'string< :key #'car))
+             "unit")))))
+
+;;;; Infix resolution
+;;;
+;;; An infix expression or pattern is read as a flat list of atoms and
+;;; operator items; juxtaposed atoms are applications, and the operators are
+;;; resolved by precedence climbing.
+
+(defstruct (sml-operator-item (:constructor make-sml-operator-item (name start fixity)))
+  name start fixity)
+
+(defun sml-operator-precedence (item)
+  (cdr (sml-operator-item-fixity item)))
+
+(defun sml-operator-right-p (item)
+  (eq (car (sml-operator-item-fixity item)) :infixr))
+
+(defun take-sml-operator-item ()
+  (let* ((token (next-sml-token))
+         (name (sml-vid-token-name token)))
+    (make-sml-operator-item name (sml-token-start token) (sml-fixity name))))
+
+(defvar *sml-last-infix-pattern* nil
+  "The pattern most recently built by infix resolution, so that a fun clause
+can recognise the head `(x ++ y) z'.")
+
+(defun check-sml-operator-associativity (operators)
+  "Operators of equal precedence but different associativity may not be
+mixed without parentheses (Definition section 2.6)."
+  (loop for (item . rest) on operators
+        for precedence = (sml-operator-precedence item)
+        for next = (find-if (lambda (other)
+                              (<= (sml-operator-precedence other) precedence))
+                            rest)
+        when (and next
+                  (= (sml-operator-precedence next) precedence)
+                  (not (eq (sml-operator-right-p next) (sml-operator-right-p item))))
+          do (sml-syntax-error *sml-parse-text* (sml-operator-item-start next)
+                               "operators `~A' and `~A' have the same precedence ~
+                                but different associativity"
+                               (sml-operator-item-name item)
+                               (sml-operator-item-name next))))
+
+(defun resolve-sml-infix (items kind)
+  "Resolve ITEMS, atoms and SML-OPERATOR-ITEMs, of an expression or pattern
+(KIND :EXP or :PAT)."
+  (let ((operands nil)
+        (operators nil)
+        (run nil))
+    (flet ((end-run (item)
+             (when (null run)
+               (if item
+                   (sml-syntax-error *sml-parse-text* (sml-operator-item-start item)
+                                     "infix operator `~A' is missing its left operand ~
+                                      (use `op ~A' for the function itself)"
+                                     (sml-operator-item-name item)
+                                     (sml-operator-item-name item))
+                   (sml-syntax-error *sml-parse-text*
+                                     (sml-operator-item-start (first operators))
+                                     "infix operator `~A' is missing its right operand"
+                                     (sml-operator-item-name (first operators)))))
+             (push (if (eq kind :exp)
+                       (build-sml-application (nreverse run))
+                       (build-sml-pattern-application (nreverse run)))
+                   operands)
+             (setf run nil)))
+      (dolist (item items)
+        (if (sml-operator-item-p item)
+            (progn (end-run item) (push item operators))
+            (push item run)))
+      (end-run nil))
+    (if (null operators)
+        (first operands)
+        (let* ((operator-list (nreverse operators))
+               (operator-vector (coerce operator-list 'simple-vector))
+               (operand-vector (coerce (nreverse operands) 'simple-vector))
+               (index 0))
+          (check-sml-operator-associativity operator-list)
+          (labels ((climb (min)
+                     (let ((left (svref operand-vector index)))
+                       (loop while (and (< index (length operator-vector))
+                                        (>= (sml-operator-precedence
+                                             (svref operator-vector index))
+                                            min))
+                             do (let* ((item (svref operator-vector index))
+                                       (precedence (sml-operator-precedence item)))
+                                  (incf index)
+                                  (let ((right (climb (if (sml-operator-right-p item)
+                                                          precedence
+                                                          (1+ precedence)))))
+                                    (setf left (if (eq kind :exp)
+                                                   (make-sml-infix-expression item left right)
+                                                   (make-sml-infix-pattern item left right))))))
+                       left)))
+            (let ((result (climb 0)))
+              (when (eq kind :pat)
+                (setf *sml-last-infix-pattern* result))
+              result))))))
+
+(defun build-sml-application (atoms)
+  (reduce (lambda (function argument) (list :app function argument))
+          (rest atoms)
+          :initial-value (first atoms)))
+
+(defun make-sml-infix-expression (item left right)
+  (list :app
+        (make-sml-expression-id (sml-operator-item-name item) (sml-operator-item-start item))
+        (list :tuple left right)))
+
+(defun make-sml-infix-pattern (item left right)
+  (let ((name (sml-operator-item-name item)))
+    (if (string= name "::")
+        (list :pat-cons left right)
+        (list :pat-app
+              (make-sml-pattern-constructor name (sml-operator-item-start item))
+              (list :pat-tuple left right)))))
+
+;;; Patterns are first read as raw atomic patterns, where an identifier is
+;;; (:%id name start) until it is known whether it is a fun clause's name, a
+;;; constructor applied to an argument, or an atomic pattern.
+
+(defun sml-raw-id-p (item)
+  (and (consp item) (eq (car item) :%id)))
+
+(defun sml-raw-pattern-atom (item)
+  (if (sml-raw-id-p item)
+      (make-sml-pattern-id (second item) (third item))
+      item))
+
+(defun normalize-sml-constructor-pattern (constructor argument)
+  (if (and (string= (second constructor) "::")
+           (consp argument)
+           (eq (car argument) :pat-tuple)
+           (= (length argument) 3))
+      (list :pat-cons (second argument) (third argument))
+      (list :pat-app constructor argument)))
+
+(defun build-sml-pattern-application (atoms)
+  (case (length atoms)
+    (1 (sml-raw-pattern-atom (first atoms)))
+    (2 (let ((head (first atoms)))
+         (unless (sml-raw-id-p head)
+           (sml-syntax-error *sml-parse-text* (or (sml-ast-position-of head) 0)
+                             "only a constructor can be applied in a pattern"))
+         (normalize-sml-constructor-pattern
+          (make-sml-pattern-constructor (second head) (third head))
+          (sml-raw-pattern-atom (second atoms)))))
+    (t (let ((head (first atoms)))
+         (sml-syntax-error *sml-parse-text*
+                           (if (sml-raw-id-p head) (third head) 0)
+                           "a constructor pattern takes exactly one argument")))))
+
+(defun sml-ast-position-of (node)
+  (sml-ast-position node))
+
+;;;; Patterns
+
+(defun sml-atpat-start-p (token)
+  (case (sml-token-kind token)
+    ((:int :word :real :string :char :long :alnum :symbolic) t)
+    (:reserved (member (sml-token-value token)
+                       '(:underscore :op :lbrace :lparen :lbracket)))
+    (t nil)))
+
+(defun sml-pattern-operator-token-p (token)
+  (and (sml-identifier-token-p token)
+       (sml-infix-name-p (sml-token-value token))))
+
+(defun parse-sml-pat ()
+  (let ((pat (parse-sml-infix-pat)))
+    (loop while (accept-sml-reserved :colon)
+          do (setf pat (list :pat-typed pat (parse-sml-ty))))
+    (if (at-sml-reserved-p :as)
+        (let ((as-token (next-sml-token)))
+          (list :pat-as (sml-layered-pattern-variable pat as-token) (parse-sml-pat)))
+        pat)))
+
+(defun sml-layered-pattern-variable (pat as-token)
+  "The `<op> vid <: ty>' before `as'."
+  (cond
+    ((and (consp pat) (eq (car pat) :pat-var)) pat)
+    ((and (consp pat) (eq (car pat) :pat-ctor))
+     ;; A layered pattern binds a variable whatever the name's status.
+     (note-sml-ast-position (list :pat-var (second pat)) (sml-ast-position pat)))
+    ((and (consp pat) (eq (car pat) :pat-typed))
+     (list :pat-typed (sml-layered-pattern-variable (second pat) as-token) (third pat)))
+    (t (sml-parse-error-at as-token "only a variable may precede `as'"))))
+
+(defun parse-sml-infix-pat ()
+  (let ((items nil))
+    (loop
+      (let ((token (current-sml-token)))
+        (cond
+          ((sml-pattern-operator-token-p token)
+           (push (take-sml-operator-item) items))
+          ((sml-atpat-start-p token)
+           (push (parse-sml-atpat-raw) items))
+          (t (return)))))
+    (when (null items)
+      (sml-parse-expected "a pattern"))
+    (resolve-sml-infix (nreverse items) :pat)))
+
+(defun parse-sml-atpat-raw ()
+  "An atomic pattern; an identifier is returned as (:%id name start)."
+  (let ((token (next-sml-token)))
+    (case (sml-token-kind token)
+      ((:int :real :string :char) (sml-token-value token))
+      (:word (note-sml-ast-position (list :word (sml-token-value token))
+                                    (sml-token-start token)))
+      ((:alnum :symbolic :long)
+       (list :%id (sml-token-value token) (sml-token-start token)))
+      (t
+       (case (sml-token-value token)
+         (:underscore :wild)
+         (:op
+          (let ((id (current-sml-token)))
+            (unless (or (sml-vid-token-p id) (eq (sml-token-kind id) :long))
+              (sml-parse-expected "an identifier after `op'"))
+            (next-sml-token)
+            (list :%id (sml-vid-token-name id) (sml-token-start id))))
+         (:lbrace (parse-sml-record-pattern))
+         (:lparen
+          (if (accept-sml-reserved :rparen)
+              (list :pat-unit)
+              (let ((first (parse-sml-pat)))
+                (if (accept-sml-reserved :comma)
+                    (let ((items (list first)))
+                      (loop do (push (parse-sml-pat) items)
+                            while (accept-sml-reserved :comma))
+                      (expect-sml-reserved :rparen)
+                      (cons :pat-tuple (nreverse items)))
+                    (progn
+                      (expect-sml-reserved :rparen)
+                      first)))))
+         (:lbracket
+          (let ((items nil))
+            (unless (at-sml-reserved-p :rbracket)
+              (loop do (push (parse-sml-pat) items)
+                    while (accept-sml-reserved :comma)))
+            (expect-sml-reserved :rbracket)
+            (let ((list (list :pat-nil)))
+              (dolist (item items list)
+                (setf list (list :pat-cons item list))))))
+         (t (sml-parse-error-at token "expected a pattern but found ~A"
+                                (describe-sml-token token))))))))
+
+(defun parse-sml-record-pattern ()
+  ;; After `{'.
+  (let ((fields nil))
+    (unless (at-sml-reserved-p :rbrace)
+      (loop
+        (if (accept-sml-reserved :dots)
+            (progn (push :record-rest fields) (return))
+            (let* ((label-token (current-sml-token))
+                   (label (parse-sml-label)))
+              (if (accept-sml-reserved :equals)
+                  (push (list label (parse-sml-pat)) fields)
+                  ;; `vid <: ty> <as pat>' abbreviates `vid = vid <: ty> <as pat>'.
+                  (let ((pat (make-sml-pattern-id label (sml-token-start label-token))))
+                    (when (eq (sml-token-kind label-token) :int)
+                      (sml-parse-error-at label-token "a numeric label needs `= pattern'"))
+                    (when (eq (car pat) :pat-ctor)
+                      (setf pat (if (getf (cddr pat) :status)
+                                    pat
+                                    (note-sml-ast-position (list :pat-var label)
+                                                           (sml-token-start label-token)))))
+                    (when (accept-sml-reserved :colon)
+                      (setf pat (list :pat-typed pat (parse-sml-ty))))
+                    (when (at-sml-reserved-p :as)
+                      (let ((as-token (next-sml-token)))
+                        (setf pat (list :pat-as (sml-layered-pattern-variable pat as-token)
+                                        (parse-sml-pat)))))
+                    (push (list label pat) fields)))))
+        (unless (accept-sml-reserved :comma)
+          (return))))
+    (expect-sml-reserved :rbrace)
+    (if (null fields)
+        (list :pat-unit)
+        (cons :pat-record (nreverse fields)))))
+
+(defun sml-pattern-variable-names (pat)
+  "The variables PAT binds."
+  (cond
+    ((atom pat) nil)
+    ((eq (car pat) :pat-var) (list (second pat)))
+    ((eq (car pat) :pat-ctor) nil)
+    ((eq (car pat) :pat-record)
+     (loop for field in (rest pat)
+           unless (eq field :record-rest)
+             append (sml-pattern-variable-names (second field))))
+    ((member (car pat) '(:pat-typed)) (sml-pattern-variable-names (second pat)))
+    ((member (car pat) '(:pat-app)) (sml-pattern-variable-names (third pat)))
+    ((member (car pat) '(:pat-as :pat-cons))
+     (append (sml-pattern-variable-names (second pat))
+             (sml-pattern-variable-names (third pat))))
+    ((eq (car pat) :pat-tuple) (mapcan #'sml-pattern-variable-names (rest pat)))
+    (t nil)))
+
+(defun bind-sml-variables (names)
+  (dolist (name names)
+    (sml-scope-bind :values name "v")))
+
+;;;; Expressions
+
+(defun sml-atexp-start-p (token)
+  (case (sml-token-kind token)
+    ((:int :word :real :string :char :long :alnum :symbolic) t)
+    (:reserved (member (sml-token-value token)
+                       '(:op :lbrace :hash :lparen :lbracket :let)))
+    (t nil)))
+
+(defun sml-expression-operator-token-p (token)
+  (and (sml-vid-token-p token)
+       (sml-infix-name-p (sml-vid-token-name token))))
+
+(defun sml-prefix-expression-keyword-p (token)
+  (and (eq (sml-token-kind token) :reserved)
+       (member (sml-token-value token) '(:raise :fn :case :if :while))))
+
+(defun parse-sml-exp ()
+  (parse-sml-exp-level 0))
+
+(defun parse-sml-exp-level (min)
+  ;; Precedences: `:' 4, andalso 3, orelse 2, handle 1.  raise, fn, case,
+  ;; if and while extend as far to the right as possible.
+  (if (sml-prefix-expression-keyword-p (current-sml-token))
+      (parse-sml-prefix-exp)
+      (let ((exp (parse-sml-infix-exp)))
+        (loop
+          (cond
+            ((and (<= min 4) (accept-sml-reserved :colon))
+             (setf exp (list :typed exp (parse-sml-ty))))
+            ((and (<= min 3) (accept-sml-reserved :andalso))
+             (setf exp (list :andalso exp (parse-sml-exp-level 3))))
+            ((and (<= min 2) (accept-sml-reserved :orelse))
+             (setf exp (list :orelse exp (parse-sml-exp-level 2))))
+            ((and (<= min 1) (accept-sml-reserved :handle))
+             (setf exp (list :handle exp (parse-sml-match))))
+            (t (return exp)))))))
+
+(defun parse-sml-prefix-exp ()
+  (let ((token (next-sml-token)))
+    (ecase (sml-token-value token)
+      (:raise (list :raise (parse-sml-exp)))
+      (:fn (list :fn (parse-sml-match)))
+      (:case
+       (let ((exp (parse-sml-exp)))
+         (expect-sml-reserved :of)
+         (list* :case exp (parse-sml-match))))
+      (:if
+       (let ((test (parse-sml-exp)))
+         (expect-sml-reserved :then)
+         (let ((then (parse-sml-exp)))
+           (expect-sml-reserved :else)
+           (list :if test then (parse-sml-exp)))))
+      (:while
+       (let ((test (parse-sml-exp)))
+         (expect-sml-reserved :do)
+         (list :while test (parse-sml-exp)))))))
+
+(defun parse-sml-match ()
+  "Rules `pat => exp' separated by `|'."
+  (let ((rules nil))
+    (loop
+      (let ((pat (parse-sml-pat)))
+        (expect-sml-reserved :darrow)
+        (push (list pat (parse-sml-exp)) rules))
+      (unless (accept-sml-reserved :bar)
+        (return)))
+    (nreverse rules)))
+
+(defun parse-sml-infix-exp ()
+  (let ((items nil))
+    (loop
+      (let ((token (current-sml-token)))
+        (cond
+          ((sml-expression-operator-token-p token)
+           (push (take-sml-operator-item) items))
+          ((sml-atexp-start-p token)
+           (push (parse-sml-atexp) items))
+          (t (return)))))
+    (when (null items)
+      (sml-parse-expected "an expression"))
+    (resolve-sml-infix (nreverse items) :exp)))
+
+(defun parse-sml-atexp ()
+  (let ((token (next-sml-token)))
+    (case (sml-token-kind token)
+      ((:int :real :string :char) (sml-token-value token))
+      (:word (note-sml-ast-position (list :word (sml-token-value token))
+                                    (sml-token-start token)))
+      ((:alnum :symbolic :long)
+       (make-sml-expression-id (sml-token-value token) (sml-token-start token)))
+      (t
+       (case (sml-token-value token)
+         (:op
+          (let ((id (current-sml-token)))
+            (unless (or (sml-vid-token-p id) (eq (sml-token-kind id) :long))
+              (sml-parse-expected "an identifier after `op'"))
+            (next-sml-token)
+            (make-sml-expression-id (sml-vid-token-name id) (sml-token-start id))))
+         (:equals
+          ;; `=' declared nonfix.
+          (make-sml-expression-id "=" (sml-token-start token)))
+         (:lbrace
+          (let ((fields nil))
+            (unless (at-sml-reserved-p :rbrace)
+              (loop
+                (let ((label (parse-sml-label)))
+                  (expect-sml-reserved :equals)
+                  (push (list label (parse-sml-exp)) fields))
+                (unless (accept-sml-reserved :comma)
+                  (return))))
+            (expect-sml-reserved :rbrace)
+            (if fields
+                (cons :record (nreverse fields))
+                (list :unit))))
+         (:hash (list :selector (parse-sml-label)))
+         (:lparen
+          (if (accept-sml-reserved :rparen)
+              (list :unit)
+              (let ((first (parse-sml-exp)))
+                (cond
+                  ((accept-sml-reserved :comma)
+                   (let ((items (list first)))
+                     (loop do (push (parse-sml-exp) items)
+                           while (accept-sml-reserved :comma))
+                     (expect-sml-reserved :rparen)
+                     (cons :tuple (nreverse items))))
+                  ((accept-sml-reserved :semicolon)
+                   (let ((items (list first)))
+                     (loop do (push (parse-sml-exp) items)
+                           while (accept-sml-reserved :semicolon))
+                     (expect-sml-reserved :rparen)
+                     (cons :seq (nreverse items))))
+                  (t
+                   (expect-sml-reserved :rparen)
+                   first)))))
+         (:lbracket
+          (let ((items nil))
+            (unless (at-sml-reserved-p :rbracket)
+              (loop do (push (parse-sml-exp) items)
+                    while (accept-sml-reserved :comma)))
+            (expect-sml-reserved :rbracket)
+            (cons :list (nreverse items))))
+         (:let
+          (with-sml-scope ()
+            (let ((decs (parse-sml-decs)))
+              (expect-sml-reserved :in)
+              (let ((body (list (parse-sml-exp))))
+                (loop while (accept-sml-reserved :semicolon)
+                      do (push (parse-sml-exp) body))
+                (expect-sml-reserved :end)
+                (list :let decs (nreverse body))))))
+         (t (sml-parse-error-at token "expected an expression but found ~A"
+                                (describe-sml-token token))))))))
+
+;;;; Core declarations
+
+(defun sml-declaration-start-p (token)
+  (and (eq (sml-token-kind token) :reserved)
+       (member (sml-token-value token)
+               '(:val :fun :type :datatype :abstype :exception :local :open
+                 :infix :infixr :nonfix :structure :signature :functor))))
+
+(defun parse-sml-decs (&key top-level)
+  "A declaration sequence; at TOP-LEVEL also expressions, as (:expr e)."
+  (let ((decs nil))
+    (loop
+      (let ((token (current-sml-token)))
+        (cond
+          ((accept-sml-reserved :semicolon))
+          ((sml-declaration-start-p token)
+           (dolist (dec (parse-sml-dec))
+             (push dec decs)))
+          ((and top-level (not (at-sml-eof-p)))
+           (push (list :expr (parse-sml-exp)) decs))
+          (t (return)))))
+    (nreverse decs)))
+
+(defun parse-sml-dec ()
+  "One declaration; returns a list of nodes."
+  (let ((token (next-sml-token)))
+    (ecase (sml-token-value token)
+      (:val (parse-sml-val-dec))
+      (:fun (parse-sml-fun-dec))
+      (:type (parse-sml-type-dec))
+      (:datatype (parse-sml-datatype-dec token))
+      (:abstype (parse-sml-abstype-dec))
+      (:exception (parse-sml-exception-dec))
+      (:local (parse-sml-local-dec))
+      (:open (parse-sml-open-dec))
+      ((:infix :infixr :nonfix) (parse-sml-fixity-dec (sml-token-value token)))
+      (:structure (parse-sml-structure-dec))
+      (:signature (parse-sml-signature-dec))
+      (:functor (parse-sml-functor-dec)))))
+
+(defun mark-sml-and-bindings (nodes)
+  "Mark all but the first of NODES, bindings joined by `and'."
+  (cons (first nodes)
+        (mapcar (lambda (node) (append node (list :and t))) (rest nodes))))
+
+(defun strip-sml-pattern-parens-and-types (pat)
+  (if (and (consp pat) (eq (car pat) :pat-typed))
+      (strip-sml-pattern-parens-and-types (second pat))
+      pat))
+
+(defun parse-sml-val-dec ()
+  (let ((tyvars (parse-sml-tyvarseq))
+        (bindings nil)
+        (recursive nil))
+    (loop
+      (when (accept-sml-reserved :rec)
+        (setf recursive t))
+      (let ((pat (parse-sml-pat)))
+        (expect-sml-reserved :equals)
+        (push (list recursive pat (parse-sml-exp)) bindings))
+      (unless (accept-sml-reserved :and)
+        (return)))
+    (setf bindings (nreverse bindings))
+    (let* ((tyvar-plist (and tyvars (list :tyvars tyvars)))
+           (nodes
+             (mapcar
+              (lambda (binding)
+                (destructuring-bind (recursive pat exp) binding
+                  (let ((type (and (consp pat) (eq (car pat) :pat-typed) (third pat)))
+                        (inner (if (and (consp pat) (eq (car pat) :pat-typed))
+                                   (second pat)
+                                   pat)))
+                    (if recursive
+                        (let ((variable (strip-sml-pattern-parens-and-types pat)))
+                          (unless (and (consp variable)
+                                       (member (car variable) '(:pat-var :pat-ctor)))
+                            (sml-parse-expected "a variable in `val rec'"))
+                          `(:val-rec ,(second variable) ,exp
+                                     ,@(and type (list :type type)) ,@tyvar-plist))
+                        `(:val ,inner ,exp ,@(and type (list :type type)) ,@tyvar-plist)))))
+              bindings)))
+      (dolist (binding bindings)
+        (bind-sml-variables (sml-pattern-variable-names (second binding))))
+      (let* ((plain (remove :val-rec nodes :key #'car))
+             (rec (remove :val rec nodes :key #'car))
+             (rec-node (cond ((null rec) nil)
+                             ((null (rest rec)) (first rec))
+                             (t (cons :val-recs rec))))
+             (all (append plain (and rec-node (list rec-node)))))
+        (declare (ignorable rec))
+        (list (if (rest all) (cons :vals all) (first all)))))))
+
+(defun parse-sml-fun-head ()
+  "Read a fun clause head; returns the function name, its offset and the
+parameter patterns (Definition section 2.6 and Appendix A)."
+  (let ((items nil)
+        (head-token (current-sml-token)))
+    (loop until (or (at-sml-reserved-p :equals) (at-sml-reserved-p :colon))
+          do (unless (sml-atpat-start-p (current-sml-token))
+               (sml-parse-expected "`=' after the function clause head"))
+             (let ((op-p (at-sml-reserved-p :op))
+                   (item (parse-sml-atpat-raw)))
+               (push (list item op-p (eq item *sml-last-infix-pattern*)) items)))
+    (setf items (nreverse items))
+    (flet ((infix-id-p (entry)
+             (destructuring-bind (item op-p infix-paren-p) entry
+               (declare (ignore infix-paren-p))
+               (and (sml-raw-id-p item)
+                    (not op-p)
+                    (not (sml-long-name-p (second item)))
+                    (sml-infix-name-p (second item)))))
+           (atom (entry) (sml-raw-pattern-atom (first entry))))
+      (cond
+        ;; atpat vid atpat, with vid infix
+        ((and (= (length items) 3) (infix-id-p (second items)))
+         (let ((name-item (first (second items))))
+           (values (second name-item) (third name-item)
+                   (list (list :pat-tuple (atom (first items)) (atom (third items)))))))
+        ;; (atpat vid atpat) atpat ...
+        ((and items (third (first items)))
+         (let* ((pat (first (first items)))
+                (op-name (if (eq (car pat) :pat-cons) "::" (second (second pat))))
+                (op-start (if (eq (car pat) :pat-cons)
+                              (sml-token-start head-token)
+                              (or (sml-ast-position (second pat))
+                                  (sml-token-start head-token))))
+                (pair (if (eq (car pat) :pat-cons)
+                          (list :pat-tuple (second pat) (third pat))
+                          (third pat))))
+           (values op-name op-start (cons pair (mapcar #'atom (rest items))))))
+        ;; <op> vid atpat ...
+        ((and items
+              (sml-raw-id-p (first (first items)))
+              (not (sml-long-name-p (second (first (first items))))))
+         (when (null (rest items))
+           (sml-parse-error-at head-token "a function clause needs at least one argument"))
+         (let ((name-item (first (first items))))
+           (values (second name-item) (third name-item)
+                   (mapcar #'atom (rest items)))))
+        (t (sml-parse-error-at head-token "expected a function name"))))))
+
+(defun parse-sml-fun-clause ()
+  (let ((head-token (current-sml-token)))
+    (multiple-value-bind (name start params) (parse-sml-fun-head)
+      (declare (ignore start))
+      (let ((result-type (and (accept-sml-reserved :colon) (parse-sml-ty))))
+        (expect-sml-reserved :equals)
+        (let ((body (parse-sml-exp)))
+          (list name
+                params
+                (if result-type (list :typed body result-type) body)
+                head-token))))))
+
+(defun parse-sml-fun-dec ()
+  (let ((tyvars (parse-sml-tyvarseq))
+        (functions nil))
+    (loop
+      (let ((clauses (list (parse-sml-fun-clause))))
+        (loop while (accept-sml-reserved :bar)
+              do (push (parse-sml-fun-clause) clauses))
+        (setf clauses (nreverse clauses))
+        (let ((name (first (first clauses)))
+              (arity (length (second (first clauses)))))
+          (dolist (clause (rest clauses))
+            (unless (string= (first clause) name)
+              (sml-parse-error-at (fourth clause)
+                                  "clauses of one function must all define `~A', not `~A'"
+                                  name (first clause)))
+            (unless (= (length (second clause)) arity)
+              (sml-parse-error-at (fourth clause)
+                                  "clauses of `~A' take different numbers of arguments"
+                                  name)))
+          (push `(:fun ,name ,(mapcar (lambda (clause) (list (second clause) (third clause)))
+                                      clauses)
+                       ,@(and tyvars (list :tyvars tyvars)))
+                functions)))
+      (unless (accept-sml-reserved :and)
+        (return)))
+    (setf functions (nreverse functions))
+    (bind-sml-variables (mapcar #'second functions))
+    (list (if (rest functions) (cons :funs functions) (first functions)))))
+
+(defun parse-sml-typbind ()
+  "tyvarseq tycon = ty <and ...>; returns ((tyvars name ty) ...)."
+  (let ((bindings nil))
+    (loop
+      (let* ((tyvars (parse-sml-tyvarseq))
+             (name (sml-token-value (expect-sml-alnum-id "a type constructor"))))
+        (expect-sml-reserved :equals)
+        (push (list tyvars name (parse-sml-ty)) bindings))
+      (unless (accept-sml-reserved :and)
+        (return)))
+    (nreverse bindings)))
+
+(defun parse-sml-type-dec ()
+  (let ((bindings (parse-sml-typbind)))
+    (dolist (binding bindings)
+      (sml-scope-bind :tycons (second binding) :plain))
+    (mark-sml-and-bindings
+     (mapcar (lambda (binding)
+               (destructuring-bind (tyvars name ty) binding
+                 `(:type ,name ,ty ,@(and tyvars (list :tyvars tyvars)))))
+             bindings))))
+
+(defun parse-sml-condescs ()
+  "Constructor descriptions `<op> vid <of ty> | ...'."
+  (let ((constructors nil))
+    (loop
+      (accept-sml-reserved :op)
+      (let ((token (current-sml-token)))
+        (unless (sml-vid-token-p token)
+          (sml-parse-expected "a constructor name"))
+        (next-sml-token)
+        (let ((arg-type (and (accept-sml-reserved :of) (parse-sml-ty))))
+          (push (list :ctor-def (sml-vid-token-name token)
+                      :has-args (and arg-type t)
+                      :arg-type arg-type)
+                constructors)))
+      (unless (accept-sml-reserved :bar)
+        (return)))
+    (nreverse constructors)))
+
+(defun sml-constructor-status (ctor-def)
+  (if (getf (cddr ctor-def) :has-args) "c1" "c"))
+
+(defun bind-sml-datatype (name constructors &optional (scope (first *sml-scopes*)))
+  (sml-scope-bind :tycons name
+                  (mapcar (lambda (ctor) (cons (second ctor) (sml-constructor-status ctor)))
+                          constructors)
+                  scope)
+  (dolist (ctor constructors)
+    (sml-scope-bind :values (second ctor) (sml-constructor-status ctor) scope)))
+
+(defun parse-sml-datbinds ()
+  "datbind <withtype typbind>; returns datbinds ((tyvars name ctors) ...) and
+the withtype bindings."
+  (let ((datbinds nil))
+    (loop
+      (let* ((tyvars (parse-sml-tyvarseq))
+             (name (sml-token-value (expect-sml-alnum-id "a type constructor"))))
+        (expect-sml-reserved :equals)
+        (push (list tyvars name (parse-sml-condescs)) datbinds))
+      (unless (accept-sml-reserved :and)
+        (return)))
+    (values (nreverse datbinds)
+            (and (accept-sml-reserved :withtype) (parse-sml-typbind)))))
+
+(defun make-sml-datatype-node (datbinds withtype)
+  `(:datatype ,(second (first datbinds))
+              ,(mapcan (lambda (datbind) (copy-list (third datbind))) datbinds)
+              :datbinds ,datbinds
+              :withtype ,withtype))
+
+(defun bind-sml-datbinds (datbinds withtype)
+  (dolist (datbind datbinds)
+    (bind-sml-datatype (second datbind) (third datbind)))
+  (dolist (binding withtype)
+    (sml-scope-bind :tycons (second binding) :plain)))
+
+(defun bind-sml-replicated-datatype (name name-start longtycon)
+  "Bind the constructors that `datatype NAME = datatype LONGTYCON' brings
+into scope, when known."
+  (let* ((fact (and *sml-static-facts*
+                    (first (sml-static-facts-at name-start "dtrep" name))))
+         (constructors
+           (if fact
+               (mapcar (lambda (entry) (cons (cdr entry) (car entry)))
+                       (parse-sml-structure-members (third fact)))
+               (sml-lookup-long :tycons longtycon))))
+    (cond
+      ((listp constructors)
+       (sml-scope-bind :tycons name constructors)
+       (loop for (constructor . status) in constructors
+             do (sml-scope-bind :values constructor status)))
+      ((eq constructors :plain)
+       (sml-scope-bind :tycons name :plain))
+      (t
+       ;; Unknown constructors: names below become uncertain.
+       (open-sml-environment :unknown)
+       (sml-scope-bind :tycons name :plain)))))
+
+(defun parse-sml-datatype-dec (keyword-token)
+  (declare (ignore keyword-token))
+  (if (and (eq (sml-token-kind (current-sml-token)) :alnum)
+           (sml-token-reserved-p (sml-token-ahead 1) :equals)
+           (sml-token-reserved-p (sml-token-ahead 2) :datatype))
+      (let* ((name-token (next-sml-token))
+             (name (sml-token-value name-token)))
+        (next-sml-token)
+        (next-sml-token)
+        (let ((longtycon (sml-token-value (expect-sml-long-id "a type constructor"))))
+          (bind-sml-replicated-datatype name (sml-token-start name-token) longtycon)
+          (list (note-sml-ast-position (list :datatype-replication name longtycon)
+                                       (sml-token-start name-token)))))
+      (multiple-value-bind (datbinds withtype) (parse-sml-datbinds)
+        (bind-sml-datbinds datbinds withtype)
+        (list (make-sml-datatype-node datbinds withtype)))))
+
+(defun parse-sml-abstype-dec ()
+  (multiple-value-bind (datbinds withtype) (parse-sml-datbinds)
+    (let ((outer *sml-scopes*)
+          (datatype (make-sml-datatype-node datbinds withtype)))
+      (let ((body nil)
+            (frames nil))
+        (with-sml-scope ()
+          (bind-sml-datbinds datbinds withtype)
+          (let ((base *sml-scopes*))
+            (push-sml-scope (make-sml-scope))
+            (expect-sml-reserved :with)
+            (setf body (parse-sml-decs))
+            (expect-sml-reserved :end)
+            (setf frames (sml-scope-frames-since base))))
+        ;; The types stay visible, their constructors do not.
+        (merge-sml-scopes frames (first outer) +sml-all-namespaces+)
+        (dolist (datbind datbinds)
+          (sml-scope-bind :tycons (second datbind) :plain (first outer)))
+        (list (list :local (list datatype) body :abstype t))))))
+
+(defun parse-sml-exception-dec ()
+  (let ((nodes nil))
+    (loop
+      (accept-sml-reserved :op)
+      (let ((token (current-sml-token)))
+        (unless (sml-vid-token-p token)
+          (sml-parse-expected "an exception name"))
+        (next-sml-token)
+        (let ((name (sml-vid-token-name token)))
+          (cond
+            ((accept-sml-reserved :equals)
+             (accept-sml-reserved :op)
+             (let* ((target-token (current-sml-token))
+                    (target (progn
+                              (unless (or (sml-vid-token-p target-token)
+                                          (eq (sml-token-kind target-token) :long))
+                                (sml-parse-expected "an exception name"))
+                              (sml-vid-token-name (next-sml-token))))
+                    (status (sml-identifier-status target (sml-token-start target-token) :pat)))
+               (push (list :exception-alias name target) nodes)
+               (sml-scope-bind :values name (if (and (stringp status)
+                                                     (sml-status-exception-p status))
+                                                status
+                                                "e"))))
+            (t
+             (let ((arg-type (and (accept-sml-reserved :of) (parse-sml-ty))))
+               (push (list :exception name :arg-type arg-type) nodes)
+               (sml-scope-bind :values name (if arg-type "e1" "e")))))))
+      (unless (accept-sml-reserved :and)
+        (return)))
+    (mark-sml-and-bindings (nreverse nodes))))
+
+(defun parse-sml-local-dec ()
+  (let ((outer *sml-scopes*)
+        (local-decs nil)
+        (body-decs nil)
+        (frames nil))
+    (with-sml-scope ()
+      (setf local-decs (parse-sml-decs))
+      (expect-sml-reserved :in)
+      (let ((base *sml-scopes*))
+        (push-sml-scope (make-sml-scope))
+        (setf body-decs (parse-sml-decs))
+        (setf frames (sml-scope-frames-since base))))
+    (expect-sml-reserved :end)
+    (merge-sml-scopes frames (first outer) +sml-all-namespaces+)
+    (list (list :local local-decs body-decs))))
+
+(defun parse-sml-open-dec ()
+  (let ((names nil))
+    (loop while (member (sml-token-kind (current-sml-token)) '(:alnum :long))
+          do (push (sml-token-value (next-sml-token)) names))
+    (when (null names)
+      (sml-parse-expected "a structure name after `open'"))
+    (setf names (nreverse names))
+    (dolist (name names)
+      (open-sml-environment (sml-lookup-structure name)))
+    (list (list :open names))))
+
+(defun parse-sml-fixity-dec (kind)
+  (let ((precedence nil)
+        (names nil))
+    (when (and (member kind '(:infix :infixr))
+               (eq (sml-token-kind (current-sml-token)) :int))
+      (let* ((token (current-sml-token))
+             (text (subseq *sml-parse-text* (sml-token-start token) (sml-token-end token))))
+        (unless (and (= (length text) 1) (digit-char-p (char text 0)))
+          (sml-parse-error-at token "a precedence must be a single digit 0-9"))
+        (next-sml-token)
+        (setf precedence (sml-token-value token))))
+    (loop while (sml-vid-token-p (current-sml-token))
+          do (push (sml-vid-token-name (next-sml-token)) names))
+    (when (null names)
+      (sml-parse-expected "an identifier"))
+    (setf names (nreverse names))
+    (dolist (name names)
+      (sml-scope-bind :fixity name
+                      (ecase kind
+                        (:infix (cons :infix (or precedence 0)))
+                        (:infixr (cons :infixr (or precedence 0)))
+                        (:nonfix :nonfix))))
+    (list (list :infix (string-downcase (symbol-name kind)) precedence names))))
+
+;;;; Modules
+
+(defun sml-scope-frames-environment (frames)
+  (collapse-sml-scopes frames))
+
+(defun parse-sml-strexp ()
+  "A structure expression; returns its AST and its environment."
+  (multiple-value-bind (strexp environment) (parse-sml-atomic-strexp)
+    (loop
+      (let ((opaque (cond ((accept-sml-reserved :colon) nil)
+                          ((accept-sml-reserved :seal) t)
+                          (t (return)))))
+        (multiple-value-bind (sigexp signature-environment) (parse-sml-sigexp)
+          (setf strexp (list :str-constraint strexp sigexp :opaque opaque))
+          (when (sml-scope-p signature-environment)
+            (setf environment signature-environment)))))
+    (values strexp environment)))
+
+(defun parse-sml-struct-body ()
+  "Declarations up to `end'; returns them and their environment."
+  (with-sml-scope ()
+    (let* ((base (rest *sml-scopes*))
+           (decs (parse-sml-decs)))
+      (expect-sml-reserved :end)
+      (values decs (sml-scope-frames-environment (sml-scope-frames-since base))))))
+
+(defun parse-sml-atomic-strexp ()
+  (let ((token (current-sml-token)))
+    (cond
+      ((accept-sml-reserved :struct)
+       (multiple-value-bind (decs environment) (parse-sml-struct-body)
+         (values (list :struct decs) environment)))
+      ((accept-sml-reserved :let)
+       (with-sml-scope ()
+         (let ((decs (parse-sml-decs)))
+           (expect-sml-reserved :in)
+           (multiple-value-bind (strexp environment) (parse-sml-strexp)
+             (expect-sml-reserved :end)
+             (values (list :str-let decs strexp) environment)))))
+      ((and (eq (sml-token-kind token) :alnum)
+            (sml-token-reserved-p (sml-token-ahead 1) :lparen))
+       ;; Functor application funid (strexp) or funid (strdec).
+       (let ((funid (sml-token-value (next-sml-token))))
+         (next-sml-token)
+         (let ((argument
+                 (if (or (at-sml-reserved-p :rparen)
+                         (sml-declaration-start-p (current-sml-token)))
+                     (with-sml-scope ()
+                       (list :struct (parse-sml-decs)))
+                     (parse-sml-strexp))))
+           (expect-sml-reserved :rparen)
+           (values (list :str-app funid argument)
+                   (or (sml-scope-lookup :functors funid) :unknown)))))
+      ((member (sml-token-kind token) '(:alnum :long))
+       (next-sml-token)
+       (values (list :str-id (sml-token-value token))
+               (sml-lookup-structure (sml-token-value token))))
+      (t (sml-parse-expected "a structure expression")))))
+
+(defun strip-sml-strexp-constraints (strexp)
+  "STREXP without constraints, the outermost signature and whether it is opaque."
+  (let ((sigexp nil)
+        (opaque nil))
+    (loop while (eq (car strexp) :str-constraint)
+          do (unless sigexp
+               (setf sigexp (third strexp)
+                     opaque (getf (cdddr strexp) :opaque)))
+             (setf strexp (second strexp)))
+    (values strexp sigexp opaque)))
+
+(defun sml-strexp-body-decs (strexp)
+  "Declarations whose bindings are the members of STREXP, for the compiler."
+  (let ((core (strip-sml-strexp-constraints strexp)))
+    (ecase (car core)
+      (:struct (second core))
+      (:str-let (list (list :local (second core) (sml-strexp-body-decs (third core)))))
+      (:str-id (list (list :open (list (second core)))))
+      (:str-app (list (sml-structure-binding-node "%Body" nil core)
+                      (list :open (list "%Body")))))))
+
+(defun sml-structure-binding-node (name start strexp)
+  "The declaration node of `structure NAME = STREXP' (see the AST summary)."
+  (multiple-value-bind (core sigexp opaque) (strip-sml-strexp-constraints strexp)
+    (let ((signature (and sigexp (list :sigexp sigexp :opaque opaque))))
+      (note-sml-ast-position
+       (ecase (car core)
+         (:struct `(:structure ,name ,(second core) ,@signature :strexp ,strexp))
+         (:str-let `(:structure ,name ,(sml-strexp-body-decs core) ,@signature
+                                :strexp ,strexp))
+         (:str-id `(:structure-alias ,name ,(second core) ,@signature :strexp ,strexp))
+         (:str-app `(:structure-app ,name ,(second core) ,(third core) ,@signature
+                                    :strexp ,strexp)))
+       start))))
+
+(defun parse-sml-structure-dec ()
+  (let ((nodes nil)
+        (environments nil))
+    (loop
+      (let* ((name-token (expect-sml-alnum-id "a structure name"))
+             (constraint (cond ((accept-sml-reserved :colon) :transparent)
+                               ((accept-sml-reserved :seal) :opaque))))
+        (multiple-value-bind (sigexp signature-environment)
+            (and constraint (parse-sml-sigexp))
+          (expect-sml-reserved :equals)
+          (multiple-value-bind (strexp environment) (parse-sml-strexp)
+            (when constraint
+              ;; strid : sigexp = strexp abbreviates strid = strexp : sigexp.
+              (setf strexp (list :str-constraint strexp sigexp
+                                 :opaque (eq constraint :opaque)))
+              (when (sml-scope-p signature-environment)
+                (setf environment signature-environment)))
+            (push (sml-structure-binding-node (sml-token-value name-token)
+                                              (sml-token-start name-token)
+                                              strexp)
+                  nodes)
+            (push (cons (sml-token-value name-token) environment) environments))))
+      (unless (accept-sml-reserved :and)
+        (return)))
+    (loop for (name . environment) in (reverse environments)
+          do (sml-scope-bind :structures name environment))
+    (mark-sml-and-bindings (nreverse nodes))))
+
+(defun parse-sml-sigexp ()
+  "A signature expression; returns its AST and its environment."
+  (multiple-value-bind (sigexp environment)
+      (cond
+        ((accept-sml-reserved :sig)
+         (multiple-value-bind (specs environment) (parse-sml-sig-body)
+           (values (list :sig specs) environment)))
+        ((eq (sml-token-kind (current-sml-token)) :alnum)
+         (let ((name (sml-token-value (next-sml-token))))
+           (values (list :sig-id name)
+                   (or (sml-scope-lookup :signatures name) :unknown))))
+        (t (sml-parse-expected "a signature expression")))
+    (values (parse-sml-where-clauses sigexp) environment)))
+
+(defun parse-sml-where-clauses (sigexp)
+  "`where type tyvarseq longtycon = ty', also joined by `and type'."
+  (loop while (and (at-sml-reserved-p :where)
+                   (sml-token-reserved-p (sml-token-ahead 1) :type))
+        do (next-sml-token)
+           (next-sml-token)
+           (loop
+             (let* ((tyvars (parse-sml-tyvarseq))
+                    (longtycon (sml-token-value (expect-sml-long-id "a type constructor"))))
+               (expect-sml-reserved :equals)
+               (setf sigexp (list :sig-where sigexp tyvars longtycon (parse-sml-ty))))
+             (unless (and (at-sml-reserved-p :and)
+                          (sml-token-reserved-p (sml-token-ahead 1) :type))
+               (return))
+             (next-sml-token)
+             (next-sml-token)))
+  sigexp)
+
+(defun parse-sml-sig-body ()
+  "Specifications up to `end'; returns them and their environment."
+  (with-sml-scope ()
+    (let* ((base (rest *sml-scopes*))
+           (specs (parse-sml-specs)))
+      (expect-sml-reserved :end)
+      (values specs (sml-scope-frames-environment (sml-scope-frames-since base))))))
+
+(defun parse-sml-specs ()
+  (let ((specs nil))
+    (loop
+      (cond
+        ((accept-sml-reserved :semicolon))
+        ((accept-sml-reserved :val)
+         (loop
+           (accept-sml-reserved :op)
+           (let ((token (current-sml-token)))
+             (unless (sml-vid-token-p token)
+               (sml-parse-expected "a value name"))
+             (next-sml-token)
+             (expect-sml-reserved :colon)
+             (push (list :spec-val (sml-vid-token-name token) (parse-sml-ty)) specs)
+             (sml-scope-bind :values (sml-vid-token-name token) "v"))
+           (unless (accept-sml-reserved :and)
+             (return))))
+        ((or (at-sml-reserved-p :type) (at-sml-reserved-p :eqtype))
+         (let ((eqtype (sml-token-reserved-p (next-sml-token) :eqtype)))
+           (loop
+             (let* ((tyvars (parse-sml-tyvarseq))
+                    (name (sml-token-value (expect-sml-alnum-id "a type constructor"))))
+               (sml-scope-bind :tycons name :plain)
+               (push (cond
+                       (eqtype (list :spec-eqtype tyvars name))
+                       ((accept-sml-reserved :equals)
+                        (list :spec-type tyvars name (parse-sml-ty)))
+                       (t (list :spec-type tyvars name)))
+                     specs))
+             (unless (accept-sml-reserved :and)
+               (return)))))
+        ((accept-sml-reserved :datatype)
+         (if (and (eq (sml-token-kind (current-sml-token)) :alnum)
+                  (sml-token-reserved-p (sml-token-ahead 1) :equals)
+                  (sml-token-reserved-p (sml-token-ahead 2) :datatype))
+             (let ((name-token (next-sml-token)))
+               (next-sml-token)
+               (next-sml-token)
+               (let ((longtycon (sml-token-value (expect-sml-long-id "a type constructor"))))
+                 (bind-sml-replicated-datatype (sml-token-value name-token)
+                                               (sml-token-start name-token)
+                                               longtycon)
+                 (push (list :spec-datatype-replication (sml-token-value name-token) longtycon)
+                       specs)))
+             (let ((datbinds nil))
+               (loop
+                 (let* ((tyvars (parse-sml-tyvarseq))
+                        (name (sml-token-value (expect-sml-alnum-id "a type constructor"))))
+                   (expect-sml-reserved :equals)
+                   (let ((constructors (parse-sml-condescs)))
+                     (bind-sml-datatype name constructors)
+                     (push (list tyvars name constructors) datbinds)))
+                 (unless (accept-sml-reserved :and)
+                   (return)))
+               (push (list :spec-datatype (nreverse datbinds)) specs))))
+        ((accept-sml-reserved :exception)
+         (loop
+           (accept-sml-reserved :op)
+           (let ((token (current-sml-token)))
+             (unless (sml-vid-token-p token)
+               (sml-parse-expected "an exception name"))
+             (next-sml-token)
+             (let ((arg-type (and (accept-sml-reserved :of) (parse-sml-ty))))
+               (push (list :spec-exception (sml-vid-token-name token) arg-type) specs)
+               (sml-scope-bind :values (sml-vid-token-name token) (if arg-type "e1" "e"))))
+           (unless (accept-sml-reserved :and)
+             (return))))
+        ((accept-sml-reserved :structure)
+         (loop
+           (let ((name (sml-token-value (expect-sml-alnum-id "a structure name"))))
+             (expect-sml-reserved :colon)
+             (multiple-value-bind (sigexp environment) (parse-sml-sigexp)
+               (push (list :spec-structure name sigexp) specs)
+               (sml-scope-bind :structures name environment)))
+           (unless (accept-sml-reserved :and)
+             (return))))
+        ((accept-sml-reserved :include)
+         (if (and (eq (sml-token-kind (current-sml-token)) :alnum)
+                  (eq (sml-token-kind (sml-token-ahead 1)) :alnum))
+             ;; include sigid1 ... sigidn
+             (loop while (eq (sml-token-kind (current-sml-token)) :alnum)
+                   do (let ((name (sml-token-value (next-sml-token))))
+                        (push (list :spec-include (list :sig-id name)) specs)
+                        (open-sml-environment (or (sml-scope-lookup :signatures name)
+                                                  :unknown))))
+             (multiple-value-bind (sigexp environment) (parse-sml-sigexp)
+               (push (list :spec-include sigexp) specs)
+               (open-sml-environment environment))))
+        ((accept-sml-reserved :sharing)
+         (let ((typep (accept-sml-reserved :type))
+               (names (list (sml-token-value (expect-sml-long-id "a name to share")))))
+           (loop while (accept-sml-reserved :equals)
+                 do (push (sml-token-value (expect-sml-long-id "a name to share")) names))
+           (push (list (if typep :spec-sharing-type :spec-sharing) (nreverse names))
+                 specs)))
+        (t (return))))
+    (nreverse specs)))
+
+(defun parse-sml-signature-dec ()
+  (let ((nodes nil)
+        (environments nil))
+    (loop
+      (let ((name (sml-token-value (expect-sml-alnum-id "a signature name"))))
+        (expect-sml-reserved :equals)
+        (multiple-value-bind (sigexp environment) (parse-sml-sigexp)
+          (push (list :signature name sigexp) nodes)
+          (push (cons name environment) environments)))
+      (unless (accept-sml-reserved :and)
+        (return)))
+    (loop for (name . environment) in (reverse environments)
+          do (sml-scope-bind :signatures name environment))
+    (mark-sml-and-bindings (nreverse nodes))))
+
+(defun parse-sml-functor-dec ()
+  (let ((nodes nil)
+        (results nil))
+    (loop
+      (let ((name (sml-token-value (expect-sml-alnum-id "a functor name")))
+            (param nil)
+            (param-sigexp nil)
+            (param-specs nil))
+        (expect-sml-reserved :lparen)
+        (with-sml-scope ()
+          (if (and (eq (sml-token-kind (current-sml-token)) :alnum)
+                   (sml-token-reserved-p (sml-token-ahead 1) :colon))
+              (progn
+                (setf param (sml-token-value (next-sml-token)))
+                (next-sml-token)
+                (multiple-value-bind (sigexp environment) (parse-sml-sigexp)
+                  (setf param-sigexp sigexp)
+                  (sml-scope-bind :structures param environment)))
+              ;; funid (spec): the specification's names are visible in the
+              ;; body (Appendix A).
+              (setf param-specs (parse-sml-specs)))
+          (expect-sml-reserved :rparen)
+          (let ((constraint (cond ((accept-sml-reserved :colon) :transparent)
+                                  ((accept-sml-reserved :seal) :opaque))))
+            (multiple-value-bind (result-sigexp result-environment)
+                (and constraint (parse-sml-sigexp))
+              (expect-sml-reserved :equals)
+              (multiple-value-bind (body environment) (parse-sml-strexp)
+                (push (cons name (if (sml-scope-p result-environment)
+                                     result-environment
+                                     environment))
+                      results)
+                (push `(:functor ,name ,(sml-strexp-body-decs body)
+                                 :param ,param
+                                 :param-sigexp ,param-sigexp
+                                 :param-specs ,param-specs
+                                 :result-sigexp ,result-sigexp
+                                 :opaque ,(eq constraint :opaque)
+                                 :strexp ,body)
+                      nodes))))))
+      (unless (accept-sml-reserved :and)
+        (return)))
+    (loop for (name . environment) in (reverse results)
+          do (sml-scope-bind :functors name environment))
+    (mark-sml-and-bindings (nreverse nodes))))
+
+;;;; Entry points
+
+(defun call-with-sml-tokens (text start end source-name scopes thunk)
+  (let* ((*sml-source-name* source-name)
+         (*sml-parse-text* text)
+         (*sml-parse-tokens* (lex-sml text :start start :end (or end (length text))))
+         (*sml-parse-index* 0)
+         (*sml-last-infix-pattern* nil)
+         (*sml-scopes* (cons (make-sml-scope) scopes)))
+    (funcall thunk)))
+
+(defun expect-sml-eof ()
+  (unless (at-sml-eof-p)
+    (sml-parse-expected "end of input")))
+
+(defun parse-sml-program (text &key (start 0) end source-name
+                                 (package *sml-package*)
+                                 (scopes (sml-package-parse-scopes package)))
+  "Parse TEXT (between START and END) as an SML program in the environment
+SCOPES.  Returns (:program dec...) and the environment the program leaves
+for the next one (see SML-PACKAGE-PARSE-SCOPES).  AST positions are offsets
+into TEXT."
+  (call-with-sml-tokens
+   text start end source-name scopes
+   (lambda ()
+     (let ((decs (parse-sml-decs :top-level t)))
+       (expect-sml-eof)
+       (values (cons :program decs)
+               (list (collapse-sml-scopes *sml-scopes* +sml-all-namespaces+)))))))
+
+(defun parse-sml-declarations (text &key (start 0) end source-name
+                                      (package *sml-package*)
+                                      (scopes (sml-package-parse-scopes package)))
+  "Parse TEXT as a declaration sequence; returns the list of declarations."
+  (call-with-sml-tokens
+   text start end source-name scopes
+   (lambda ()
+     (prog1 (parse-sml-decs)
+       (expect-sml-eof)))))
+
+(defun parse-sml-expression (text &key (start 0) end source-name
+                                    (package *sml-package*)
+                                    (scopes (sml-package-parse-scopes package)))
+  "Parse TEXT as one SML expression."
+  (call-with-sml-tokens
+   text start end source-name scopes
+   (lambda ()
+     (prog1 (parse-sml-exp)
+       (expect-sml-eof)))))
+
+(defun parse-sml-pattern (text &key (start 0) end source-name
+                                 (package *sml-package*)
+                                 (scopes (sml-package-parse-scopes package)))
+  "Parse TEXT as one SML pattern."
+  (call-with-sml-tokens
+   text start end source-name scopes
+   (lambda ()
+     (prog1 (parse-sml-pat)
+       (expect-sml-eof)))))
+
+(defun parse-sml-type (text &key (start 0) end source-name)
+  "Parse TEXT as one SML type."
+  (call-with-sml-tokens
+   text start end source-name nil
+   (lambda ()
+     (prog1 (parse-sml-ty)
+       (expect-sml-eof)))))
+
+(defun parse-sml-string (text)
+  "Parse TEXT as an SML expression (kept for older callers)."
+  (parse-sml-expression text))
