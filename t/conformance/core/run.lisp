@@ -73,7 +73,6 @@
   (let* ((source (merge-pathnames (format nil "tests/~A.sml" name) *here*))
          (expected (file-string (merge-pathnames (format nil "tests/~A.out" name)
                                                  *here*)))
-         (text (file-string source))
          (package (format nil "SML.CONF-~:@(~A~).~:@(~A~)" *mode* name))
          (out (make-string-output-stream))
          (err (make-string-output-stream))

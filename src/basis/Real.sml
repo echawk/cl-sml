@@ -6,6 +6,8 @@
  * Notes:
  * - Incomplete
  * - toString is currently implemented as primitive (it shouldn't be).
+ * - cl-sml: the functions HaMLet leaves out because some implementations
+ *   lack them are cl-sml primitives, as are fmt, toManExp and fromManExp.
  *)
 
 structure Real :> REAL where type real = real =
@@ -14,14 +16,12 @@ struct
   structure Math              = Math
   structure IEEE              = IEEEReal
 
-(* Not supported by all implementations:
   val radix                   = use{b = "Real.radix"} () : int
   val precision               = use{b = "Real.precision"} () : int
 
   val maxFinite               = use{b = "Real.maxFinite"} () : real
   val minPos                  = use{b = "Real.minPos"} () : real
   val minNormalPos            = use{b = "Real.minNormalPos"} () : real
-*)
   val posInf                  = 1.0/0.0
   val negInf                  = ~1.0/0.0
 
@@ -33,12 +33,10 @@ struct
   val ceil                    = use{b = "Real.ceil"}    : real -> Int.int
   val trunc                   = use{b = "Real.trunc"}   : real -> Int.int
   val round                   = use{b = "Real.round"}   : real -> Int.int
-(* Not supported by all implementations:
   val realFloor               = use{b = "Real.realFloor"} : real -> real
   val realCeil                = use{b = "Real.realCeil"}  : real -> real
   val realTrunc               = use{b = "Real.realTrunc"} : real -> real
   val realRound               = use{b = "Real.realRound"} : real -> real
-*)
 
   fun toInt IEEE.TO_NEGINF    = floor
     | toInt IEEE.TO_POSINF    = ceil
@@ -58,9 +56,7 @@ struct
   val op-                     = op- : real * real -> real
   val op*                     = op* : real * real -> real
   val op/                     = op/ : real * real -> real
-(* Not supported by all implementations:
   val rem                     = use{b = "Real.rem"} : real * real -> real
-*)
   fun *+(x, y, z)             = x*y + z
   fun *-(x, y, z)             = x*y - z
 
@@ -83,15 +79,11 @@ struct
 
   val isFinite                = use{b = "Real.isFinite"}   : real -> bool
   val isNan                   = use{b = "Real.isNan"}      : real -> bool
-(* Not supported by all implementations:
   val isNormal                = use{b = "Real.isNormal"}   : real -> bool
-*)
   val signBit                 = use{b = "Real.signBit"}    : real -> bool
   val checkFloat              = use{b = "Real.checkFloat"} : real -> real
   val copySign                = use{b = "Real.copySign"}   : real * real -> real
-(* Not supported by all implementations:
   val nextAfter               = use{b = "Real.nextAfter"}  : real * real -> real
-*)
 
   fun min(x, y)               = if x < y then x else y
   fun max(x, y)               = if x > y then x else y
@@ -100,21 +92,32 @@ struct
   fun sameSign(x, y)          = signBit x = signBit y
   fun unordered(x, y)         = isNan x orelse isNan y
 
-(*
   fun class x                 = if isNan x then IEEE.NAN
                                 else if Bool.not(isFinite x) then IEEE.INF
                                 else if ==(x, 0.0) then IEEE.ZERO
                                 else if isNormal x then IEEE.NORMAL
                                 else IEEE.SUBNORMAL
-*)
 
-(*
-     val toManExp : real -> {man : real, exp : int}
-     val fromManExp : {man : real, exp : int} -> real
-     val split : real -> {whole : real, frac : real}
+  val toManExp                = use{b = "Real.toManExp"}
+                                  : real -> {man : real, exp : int}
+  val fromManExp              = use{b = "Real.fromManExp"}
+                                  : {man : real, exp : int} -> real
+  fun split x                 = if isFinite x
+                                then let val whole = realTrunc x
+                                     in {whole = whole, frac = x - whole} end
+                                else if isNan x then {whole = x, frac = x}
+                                else {whole = x, frac = copySign(0.0, x)}
+  fun realMod x               = #frac(split x)
 
-     val fmt : StringCvt.realfmt -> real -> string
-*)
+  (* (kind, digits) -> real -> string; kind 0 is SCI, 1 FIX, 2 GEN, 3 EXACT *)
+  val fmt'                    = use{b = "Real.fmt"} : int * int -> real -> string
+  fun fmt (StringCvt.SCI NONE)     = fmt'(0, 6)
+    | fmt (StringCvt.SCI (SOME n)) = if n < 0 then raise Size else fmt'(0, n)
+    | fmt (StringCvt.FIX NONE)     = fmt'(1, 6)
+    | fmt (StringCvt.FIX (SOME n)) = if n < 0 then raise Size else fmt'(1, n)
+    | fmt (StringCvt.GEN NONE)     = fmt'(2, 12)
+    | fmt (StringCvt.GEN (SOME n)) = if n < 1 then raise Size else fmt'(2, n)
+    | fmt StringCvt.EXACT          = fmt'(3, 0)
 
   fun value c = fromInt(Int.-(Char.ord c, Char.ord #"0"))
 

@@ -146,13 +146,16 @@ into scope to those of the replicated datatype."
           for builtin = (and (null source-prefix)
                              (not (compile-time-sml-env-symbol-shadowed-p name))
                              (assoc name *sml-env* :test #'string=))
-          for source = (if builtin
-                           (cdr builtin)
-                           (resolved-sml-symbol
-                            (if source-prefix
+          for source-name = (if source-prefix
                                 (qualify-sml-name source-prefix name)
-                                name)))
+                                name)
           for target = (target-sml-symbol name)
+          for source = (cond (builtin (cdr builtin))
+                             ((let ((resolved (resolved-sml-symbol source-name)))
+                                (and (not (eq resolved target)) resolved)))
+                             ;; The name resolves to the binding being made;
+                             ;; the replicated datatype may be the basis's.
+                             (t (sml-visible-symbol source-name)))
           unless (and (not builtin) (eq source target))
             collect (if (and (symbolp source) (not builtin))
                         `(alias-sml-constructor ',target ',source)
@@ -1680,6 +1683,7 @@ name it is used at (\"int\", \"word\", \"word8\", \"real\", \"char\" or
 applied to the compiled ARGS (one for unary, two for binary operators).
 Returns NIL for combinations without a specialization."
   (let ((bits (sml-word-type-bits tyname))
+        (int-p (string= tyname "int"))
         (comparison (cdr (assoc name '(("<" . <) (">" . >)
                                        ("<=" . <=) (">=" . >=))
                                 :test #'string=))))
@@ -1693,6 +1697,9 @@ Returns NIL for combinations without a specialization."
         ((= (length args) 1)
          (let ((x (first args)))
            (cond
+             ;; Int arithmetic raises Overflow (see SML-INT-+).
+             ((and int-p (string= name "~")) `(sml-int-negate ,x))
+             ((and int-p (string= name "abs")) `(sml-int-abs ,x))
              ((string= name "~") (wrap `(- ,x)))
              ((and (string= name "abs") (not bits)) `(abs ,x)))))
         ((/= (length args) 2) nil)
@@ -1713,6 +1720,10 @@ Returns NIL for combinations without a specialization."
                                           (<= . sml-real-<=) (>= . sml-real->=))))
                 ,x ,y))
              (t `(,comparison ,x ,y)))))
+        ((and int-p (member name '("+" "-" "*") :test #'string=))
+         `(,(cdr (assoc name '(("+" . sml-int-+) ("-" . sml-int--) ("*" . sml-int-*))
+                        :test #'string=))
+           ,@args))
         ((member name '("+" "-" "*") :test #'string=)
          (destructuring-bind (x y) args
            (wrap `(,(intern name :cl) ,x ,y))))

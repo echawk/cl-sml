@@ -873,7 +873,16 @@
 
 (test real-basis-primitives
   (is (equal "3.14" (cl-sml::sml-real-to-string 3.14d0)))
-  (is (equal "1.0E10" (cl-sml::sml-real-to-string 1d10)))
+  (is (equal "10000000000.0" (cl-sml::sml-real-to-string 1d10)))
+  (is (equal "1E22" (cl-sml::sml-real-to-string 1d22)))
+  (is (equal "0.333333333333" (cl-sml::sml-real-to-string (/ 1d0 3d0))))
+  (is (equal "123456789.0" (cl-sml::sml-real-to-string 123456789d0)))
+  (is (equal "1E~05" (cl-sml::sml-real-to-string 1d-5)))
+  (is (equal "~0.0" (cl-sml::sml-real-to-string -0d0)))
+  (is (equal "3.142E00" (cl-sml::sml-real-fmt :sci 3 3.14159d0)))
+  (is (equal "3.14" (cl-sml::sml-real-fmt :fix 2 3.14159d0)))
+  (is (equal "2" (cl-sml::sml-real-fmt :fix 0 2.5d0)))
+  (is (equal "0.314159E1" (cl-sml::sml-real-fmt :exact 0 3.14159d0)))
   (is (equal "~2.5" (cl-sml::sml-real-to-string -2.5d0)))
   (is (equal "0.1" (cl-sml::sml-real-to-string 0.1d0)))
   (is (equal "~0.25" (cl-sml::sml-real-to-string -0.25d0)))
@@ -1006,7 +1015,7 @@
     (is (equal '(-323 "5") (digits least-positive-double-float)))
     (is (equal '(-307 "22250738585072014") (digits least-positive-normalized-double-float)))
     (is (equal '(309 "17976931348623157") (digits most-positive-double-float))))
-  (is (equal "5.0E~324" (cl-sml::sml-real-to-string least-positive-double-float)))
+  (is (equal "4.94065645841E~324" (cl-sml::sml-real-to-string least-positive-double-float)))
   ;; Each result lies within half an ulp of the value, so it reads back as
   ;; the same double.
   (let ((state 42)

@@ -4,6 +4,10 @@
  * Standard ML Basis Library
  *
  * Note: Incomplete.
+ *
+ * cl-sml: radix, precision, maxFinite, minPos, minNormalPos, rem, isNormal,
+ * class, fmt, toManExp, fromManExp, split, realMod, nextAfter and realFloor
+ * to realRound are specified.
  *)
 
 structure LargeReal = struct type real = real end
@@ -13,22 +17,18 @@ sig
   type real
   structure Math : MATH
     where type real = real
-(*
   val radix : int
   val precision : int
   val maxFinite : real
   val minPos : real
   val minNormalPos : real
-*)
   val posInf : real
   val negInf : real
   val + : real * real -> real
   val - : real * real -> real
   val * : real * real -> real
   val / : real * real -> real
-(*
   val rem : real * real -> real
-*)
   val *+ : real * real * real -> real
   val *- : real * real * real -> real
   val ~ : real -> real
@@ -51,28 +51,22 @@ sig
   val unordered : real * real -> bool
   val isFinite : real -> bool
   val isNan : real -> bool
-(*
   val isNormal : real -> bool
   val class : real -> IEEEReal.float_class
   val fmt : StringCvt.realfmt -> real -> string
-*)
   val toString : real -> string
   val scan : (char, 'a) StringCvt.reader -> (real, 'a) StringCvt.reader
   val fromString : string -> real option
-(*
   val toManExp : real -> {man : real, exp : int}
   val fromManExp : {man : real, exp : int} -> real
   val split : real -> {whole : real, frac : real}
   val realMod : real -> real
   val nextAfter : real * real -> real
-*)
   val checkFloat : real ->real
-(*
   val realFloor : real -> real
   val realCeil : real -> real
   val realTrunc : real -> real
   val realRound : real -> real
-*)
   val floor : real -> int
   val ceil : real -> int
   val trunc : real -> int
