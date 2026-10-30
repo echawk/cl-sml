@@ -10,7 +10,8 @@
     cl-sml-runtime-tests::cl-sml-runtime-suite
     cl-sml-repl-tests::cl-sml-repl-suite
     cl-sml-inspect-tests::cl-sml-inspect-suite
-    cl-sml-hamlet-tests::cl-sml-hamlet-suite))
+    cl-sml-hamlet-tests::cl-sml-hamlet-suite
+    cl-sml-semantics-tests::cl-sml-semantics-suite))
 
 (defun run-tests (&optional (suites *suites*))
   "Run SUITES, reporting each; true when all of them pass."

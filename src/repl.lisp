@@ -404,6 +404,10 @@ accepts SOURCE (which then points at a gap in our parser)."
                     (cond
                       (kind
                        (handler-case (evaluate-and-report kind)
+                         (sml-raised-exception (condition)
+                           (format error-output "uncaught exception ~A~%"
+                                   (sml-exception-description
+                                    (sml-exception-value condition))))
                          (error (condition)
                            (format error-output "Error: ~A~%" condition)))
                        (reset-buffer))
