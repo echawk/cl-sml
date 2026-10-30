@@ -159,7 +159,10 @@ into scope to those of the replicated datatype."
   (sml-symbol (current-qualified-sml-name name)))
 
 (defun sml-lexical-symbol (name)
-  (intern name *sml-package*))
+  "A fresh variable for the let-bound SML identifier NAME.  The package's
+symbol for NAME may have been proclaimed special by a top-level binding,
+or be a COMMON-LISP symbol such as T, so it must not be bound by LET."
+  (gensym name))
 
 (defun resolve-structure-prefix (name)
   (or (cdr (assoc name *sml-local-structure-prefixes* :test #'string=))
@@ -924,10 +927,13 @@ and the position of AST, the match's first pattern, are diagnostics."
   `(sml-raise-match-failure ,exception-name ,where
                             ,(first-positioned-sml-node ast)))
 
-(defun compile-local-val-binding (pat expr body &optional local-exceptions lexical-env)
+(defun compile-local-val-binding (pat expr body bindings
+                                  &optional local-exceptions lexical-env)
+  "Bind PAT to the value of EXPR around BODY.  BINDINGS maps the variables of
+PAT to their symbols (see LOCAL-DECLARATION-LEXICAL-BINDINGS)."
   (cond
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
-     `(let ((,(sml-lexical-symbol (second pat))
+     `(let ((,(local-binding-symbol (second pat) bindings)
               ,(maybe-wrap-infix-value-initializer (second pat) expr)))
         ,body))
     ((eq pat :wild)
@@ -937,12 +943,7 @@ and the position of AST, the match's first pattern, are diagnostics."
           ,body)))
     (t
      (let ((tmp (gensym "MATCHED"))
-           (binding-env
-             (append
-              (mapcar (lambda (name)
-                        (cons name (sml-lexical-symbol name)))
-                      (pattern-bound-names pat local-exceptions lexical-env))
-              lexical-env)))
+           (binding-env (append bindings lexical-env)))
        `(let ((,tmp ,expr))
           (trivia:match ,tmp
             (,(let ((*sml-module-prefix* nil))
@@ -950,15 +951,19 @@ and the position of AST, the match's first pattern, are diagnostics."
              ,body)
             (_ ,(compile-match-failure "Bind" "val" pat))))))))
 
-(defun compile-local-datatype-bindings (ctors body)
+(defun local-datatype-constructor-tag (ctor)
+  "The symbol that tags the values of local datatype constructor CTOR."
+  (sml-symbol (second ctor)))
+
+(defun compile-local-datatype-bindings (ctors body bindings)
   (let ((bindings
           (mapcar (lambda (ctor)
-                    (let ((name (sml-lexical-symbol (second ctor))))
-                      (list name
+                    (let ((tag (local-datatype-constructor-tag ctor)))
+                      (list (local-binding-symbol (second ctor) bindings)
                             (if (fourth ctor)
                                 `(lambda (payload)
-                                   (cons ',name payload))
-                                `',name))))
+                                   (cons ',tag payload))
+                                `',tag))))
                   ctors)))
     `(let ,bindings
        (declare (ignorable ,@(mapcar #'first bindings)))
@@ -985,31 +990,47 @@ and the position of AST, the match's first pattern, are diagnostics."
   (append (declaration-exposed-exceptions dec)
           local-exceptions))
 
+(defvar *sml-local-declaration-bindings* (make-portable-weak-eq-hash-table)
+  "Local declaration -> its lexical bindings, so that the binding and every
+use of a let-bound variable get the same fresh symbol, however many times
+the compiler asks.")
+
 (defun local-declaration-lexical-bindings (dec)
-  (case (and (consp dec) (car dec))
-    (:val
-     (mapcar (lambda (name) (cons name (sml-lexical-symbol name)))
-             (pattern-bound-names (second dec))))
-    (:vals
-     (mapcan #'local-declaration-lexical-bindings (cdr dec)))
-    (:val-rec
-     (list (cons (second dec) (sml-lexical-symbol (second dec)))))
-    (:fun
-     (list (cons (second dec) (sml-lexical-symbol (second dec)))))
-    (:funs
-     (mapcan #'local-declaration-lexical-bindings (cdr dec)))
-    (:datatype
-     (mapcar (lambda (ctor)
-               (cons (second ctor) (sml-lexical-symbol (second ctor))))
-             (third dec)))
-    (:exception
-     (list (cons (second dec) (sml-lexical-symbol (second dec)))))
-    (:exception-alias
-     (list (cons (second dec) (sml-lexical-symbol (second dec)))))
-    (:local
-     (mapcan #'local-declaration-lexical-bindings (third dec)))
-    (otherwise
-     nil)))
+  "An alist from the identifiers local declaration DEC binds to the fresh
+variables that hold them."
+  (when (consp dec)
+    (multiple-value-bind (bindings presentp)
+        (gethash dec *sml-local-declaration-bindings*)
+      (if presentp
+          bindings
+          (setf (gethash dec *sml-local-declaration-bindings*)
+                (compute-local-declaration-lexical-bindings dec))))))
+
+(defun compute-local-declaration-lexical-bindings (dec)
+  (flet ((fresh (name) (cons name (sml-lexical-symbol name)))
+         (nested (decs)
+           (loop for nested-dec in decs
+                 append (local-declaration-lexical-bindings nested-dec))))
+    (case (car dec)
+      (:val (mapcar #'fresh (pattern-bound-names (second dec))))
+      ((:vals :funs) (nested (cdr dec)))
+      ((:val-rec :fun :exception :exception-alias)
+       (list (fresh (second dec))))
+      (:datatype (mapcar (lambda (ctor) (fresh (second ctor))) (third dec)))
+      (:local (nested (third dec)))
+      (otherwise nil))))
+
+(defun local-binding-symbol (name bindings)
+  "The symbol BINDINGS (from LOCAL-DECLARATION-LEXICAL-BINDINGS) gives NAME."
+  (or (cdr (assoc name bindings :test #'string=))
+      (error "No local binding for ~A" name)))
+
+(defun local-datatype-constructor-bindings (dec)
+  "Constructor-name -> tag bindings for a local datatype declaration DEC."
+  (when (eq (car dec) :datatype)
+    (mapcar (lambda (ctor)
+              (cons (second ctor) (local-datatype-constructor-tag ctor)))
+            (third dec))))
 
 (defun local-open-symbol-bindings (dec)
   (when (eq (car dec) :open)
@@ -1037,7 +1058,9 @@ and the position of AST, the match's first pattern, are diagnostics."
                (let ((*sml-binding-symbol-env*
                        (append open-symbol-bindings *sml-binding-symbol-env*))
                      (*sml-constructor-symbol-env*
-                       (append open-constructor-bindings *sml-constructor-symbol-env*)))
+                       (append (local-datatype-constructor-bindings dec)
+                               open-constructor-bindings
+                               *sml-constructor-symbol-env*)))
                  (compile-local-decls-into-body
                   (rest decs)
                   body
@@ -1081,12 +1104,25 @@ and the position of AST, the match's first pattern, are diagnostics."
      (compile-local-val-binding (second dec)
                                 (compile-expr (third dec) local-exceptions lexical-env)
                                 body
+                                (local-declaration-lexical-bindings dec)
                                 local-exceptions
                                 lexical-env))
     ((eq (car dec) :vals)
-     (compile-local-decls-into-body (cdr dec) body local-exceptions lexical-env))
+     ;; `val p1 = e1 and p2 = e2` evaluates every expression before binding
+     ;; anything, like `val (p1, p2) = (e1, e2)`.
+     (compile-local-val-binding
+      `(:pat-tuple ,@(mapcar #'second (cdr dec)))
+      `(list :tuple ,@(mapcar (lambda (val-dec)
+                                (compile-expr (third val-dec)
+                                              local-exceptions lexical-env))
+                              (cdr dec)))
+      body
+      (local-declaration-lexical-bindings dec)
+      local-exceptions
+      lexical-env))
 	    ((eq (car dec) :fun)
-	     (let ((name (sml-lexical-symbol (second dec))))
+	     (let ((name (local-binding-symbol
+                         (second dec) (local-declaration-lexical-bindings dec))))
 	       `(let ((,name nil))
 	          (setf ,name ,(maybe-wrap-infix-value-initializer
 	                        (second dec)
@@ -1101,10 +1137,7 @@ and the position of AST, the match's first pattern, are diagnostics."
      ;; `fun f ... and g ...` is mutually recursive: bind every name before
      ;; any of the closures is created.
      (let* ((funs (cdr dec))
-            (bindings (mapcar (lambda (fun-dec)
-                                (cons (second fun-dec)
-                                      (sml-lexical-symbol (second fun-dec))))
-                              funs))
+            (bindings (local-declaration-lexical-bindings dec))
             (extended-env (append bindings lexical-env)))
        `(let ,(mapcar (lambda (binding) `(,(cdr binding) nil)) bindings)
           ,@(mapcar (lambda (fun-dec)
@@ -1118,21 +1151,24 @@ and the position of AST, the match's first pattern, are diagnostics."
                     funs)
           ,body)))
     ((eq (car dec) :val-rec)
-     (let ((name (sml-lexical-symbol (second dec))))
+     (let ((name (local-binding-symbol
+                  (second dec) (local-declaration-lexical-bindings dec))))
        `(let ((,name nil))
           (setf ,name ,(compile-expr (third dec)
                                      local-exceptions
                                      (acons (second dec) name lexical-env)))
           ,body)))
     ((eq (car dec) :datatype)
-     (compile-local-datatype-bindings (third dec) body))
+     (compile-local-datatype-bindings (third dec) body
+                                      (local-declaration-lexical-bindings dec)))
     ((member (car dec) '(:type :infix :datatype-replication :expr :signature :open
                          :structure-alias :structure-app :functor))
      body)
     ((eq (car dec) :structure)
      (compile-local-decls-into-body (third dec) body local-exceptions lexical-env))
     ((eq (car dec) :exception)
-     (let* ((name (sml-lexical-symbol (second dec)))
+     (let* ((name (local-binding-symbol
+                   (second dec) (local-declaration-lexical-bindings dec)))
             (arg-type (getf (cddr dec) :arg-type)))
        (if arg-type
            `(let ((,name (make-sml-exception-function ,(second dec))))
@@ -1142,11 +1178,14 @@ and the position of AST, the match's first pattern, are diagnostics."
               (declare (ignorable ,name))
               ,body))))
     ((eq (car dec) :exception-alias)
-     (let ((name (sml-lexical-symbol (second dec)))
-           (target (resolved-sml-symbol (third dec))))
-       `(let ((,name (if (boundp ',target)
-                         (symbol-value ',target)
-                         (make-sml-exception-constructor ,(second dec)))))
+     (let ((name (local-binding-symbol
+                  (second dec) (local-declaration-lexical-bindings dec)))
+           (target (resolved-sml-symbol (third dec) lexical-env)))
+       `(let ((,name ,(if (lexical-symbol-for-name (third dec) lexical-env)
+                          target
+                          `(if (boundp ',target)
+                               (symbol-value ',target)
+                               (make-sml-exception-constructor ,(second dec))))))
           (declare (ignorable ,name))
           ,body)))
     ((eq (car dec) :local)
@@ -1662,9 +1701,17 @@ X: a pair X was taken for both arguments.  Returns NIL otherwise."
      (compile-top-level-val (second ast) (third ast) local-exceptions
                             (getf (cdddr ast) :type) lexical-env))
     ((eq (car ast) :vals)
-     `(progn ,@(mapcar (lambda (val-dec)
-                         (compile-decl val-dec local-exceptions lexical-env))
-                       (cdr ast))))
+     ;; `val p1 = e1 and p2 = e2` evaluates every expression before binding
+     ;; anything, like `val (p1, p2) = (e1, e2)`.
+     (compile-top-level-val
+      `(:pat-tuple ,@(mapcar #'second (cdr ast)))
+      `(:tuple ,@(mapcar (lambda (val-dec)
+                           (let ((type (getf (cdddr val-dec) :type)))
+                             (if type
+                                 `(:typed ,(third val-dec) ,type)
+                                 (third val-dec))))
+                         (cdr ast)))
+      local-exceptions nil lexical-env))
     ((eq (car ast) :val-rec)
      (let ((name (target-sml-symbol (second ast))))
        `(progn
