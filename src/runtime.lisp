@@ -182,6 +182,9 @@
   "Maps a constructor's function value to the tag its values carry.")
 
 (defun register-sml-constructor (symbol &optional canonical-symbol)
+  ;; A constructor is bound to the package's symbol itself, not to a cell
+  ;; (see PUBLISH-SML-BINDING).
+  (forget-sml-binding-cell symbol)
   (let ((canonical (or canonical-symbol symbol)))
     (setf (gethash symbol *sml-constructor-symbols*) canonical)
     (when (and (boundp symbol) (functionp (symbol-value symbol)))
@@ -352,6 +355,11 @@ constructor names are unique within a datatype."
       (let ((type (lookup-sml-binding-type source)))
         (when type
           (register-sml-binding-type target type)))
+      ;; TARGET now denotes SOURCE's binding (and its cell, if it has one).
+      (let ((cell (sml-binding-cell source)))
+        (if cell
+            (setf (get target 'sml-binding-cell) cell)
+            (forget-sml-binding-cell target)))
       (when (sml-constructor-symbol-p source)
         (register-sml-constructor target
                                   (sml-constructor-canonical-symbol source)))
@@ -359,6 +367,7 @@ constructor names are unique within a datatype."
 
 (defun alias-sml-constructor (target source)
   "Make constructor symbol TARGET denote the constructor SOURCE denotes."
+  (forget-sml-binding-cell target)
   (proclaim `(special ,target))
   (setf (symbol-value target) (symbol-value source))
   (let ((type (lookup-sml-binding-type source)))
@@ -517,6 +526,53 @@ constructor names are unique within a datatype."
         (symbol symbol)
         (t (intern symbol-name pkg))))))
 
+;;; Top-level bindings.  Each top-level binding of a value (`val', `fun',
+;;; `val rec', `exception'), structure members included, is held in a special
+;;; variable of its own, its cell: |x;1| for the first binding of `x' in a
+;;; package, |x;2| for the next one, and so on.  Code refers to the cell of
+;;; the binding in scope where it was compiled, so a later binding of the
+;;; same name does not change it.  The package's symbol for the name, |x|,
+;;; holds the value of the newest binding, for Common Lisp (SML-VALUE,
+;;; CALL-SML, the REPL) and for run-time aliasing (`open', functor
+;;; application), and records that binding's cell, which compilation units
+;;; compiled later refer to.
+
+(defun sml-binding-cell (symbol)
+  "The cell holding the newest binding of SYMBOL, a package's symbol for an
+SML name, or NIL when SYMBOL itself holds it (or nothing is bound)."
+  (get symbol 'sml-binding-cell))
+
+(defun forget-sml-binding-cell (symbol)
+  "SYMBOL itself now holds its newest binding."
+  (remprop symbol 'sml-binding-cell))
+
+(defun sml-cell-index (cell symbol)
+  "K when CELL is |name;K|, a cell for SYMBOL's name, else 0."
+  (let ((prefix (concatenate 'string (symbol-name symbol) ";")))
+    (or (and cell
+             (string-prefix-p prefix (symbol-name cell))
+             (parse-integer (symbol-name cell) :start (length prefix)
+                                               :junk-allowed t))
+        0)))
+
+(defun published-sml-cell-count (symbol)
+  "The highest K of the cells |name;K| published for SYMBOL's name."
+  (get symbol 'sml-cell-count 0))
+
+(defun publish-sml-binding (symbol cell &optional (type nil typep))
+  "Make the binding held in CELL, of TYPE, the newest binding of SYMBOL, the
+package's symbol for its SML name."
+  (proclaim `(special ,symbol))
+  (setf (symbol-value symbol) (symbol-value cell)
+        (get symbol 'sml-binding-cell) cell
+        (get symbol 'sml-cell-count) (max (published-sml-cell-count symbol)
+                                          (sml-cell-index cell symbol)))
+  (when typep
+    (register-sml-binding-type symbol type)
+    (register-sml-binding-type cell type))
+  (export (list symbol) (symbol-package symbol))
+  symbol)
+
 (defun sml-value (name &optional (package *sml-package*))
   "Return the SML value named NAME in PACKAGE, or signal an unbound error."
   (let ((symbol (sml-symbol name package)))
@@ -526,7 +582,12 @@ constructor names are unique within a datatype."
                name (package-name (ensure-sml-package package))))))
 
 (defun (setf sml-value) (value name &optional (package *sml-package*))
-  (setf (symbol-value (sml-symbol name package)) value))
+  (let* ((symbol (sml-symbol name package))
+         (cell (sml-binding-cell symbol)))
+    ;; Code compiled against the binding reads its cell.
+    (when cell
+      (setf (symbol-value cell) value))
+    (setf (symbol-value symbol) value)))
 
 (defun sml-function (name &optional (package *sml-package*))
   "Return the unary function stored in the SML value namespace."

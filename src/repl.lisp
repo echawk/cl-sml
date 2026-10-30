@@ -235,6 +235,8 @@ recording to commit once the form has been evaluated."
          (value (with-sml-phase (:eval)
                   (eval form))))
     (setf (symbol-value (repl-it-symbol)) value)
+    ;; `it' is now bound to the symbol itself, not to a binding cell.
+    (forget-sml-binding-cell (repl-it-symbol))
     (register-sml-binding-type (repl-it-symbol) type)
     (export-sml-symbols (list (repl-it-symbol)))
     (list (format nil "val it = ~A~A"
@@ -363,6 +365,9 @@ accepts SOURCE (which then points at a gap in our parser)."
                     (error "Unknown command :~A; :help lists the commands."
                            command)))))
              (evaluate (kind)
+               (with-sml-cell-reservations
+                 (evaluate-phrase kind)))
+             (evaluate-phrase (kind)
                (multiple-value-bind (form ast recording)
                    (compile-repl-phrase kind buffer :first-line buffer-line)
                  (setf *repl-checked-value-types*

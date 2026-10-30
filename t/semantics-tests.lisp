@@ -180,3 +180,169 @@ val _ = p (case () of {} => 7)"))))
   (is (string= (lines "4")
                (run-sml "val r = {1 = 4}
 val _ = print (Int.toString (#1 r) ^ \"\\n\")"))))
+
+;;; Static scoping of top-level rebindings
+
+(test top-level-rebinding-does-not-change-earlier-code
+  (is (string= (lines "1" "20" "10" "21" "8" "7" "new" "12")
+               (run-sml "fun p n = print (Int.toString n ^ \"\\n\")
+val x = 1
+fun getx () = x
+val x = 2
+val _ = p (getx ())
+val y = 10
+val f = let val y = 20 in fn () => y end
+val _ = p (f ())
+val _ = p y
+fun g z = let val y = z in fn () => y end
+val g1 = g 1
+val g2 = g 2
+val _ = p (g1 () + g2 () * 10)
+fun shadow n = let val n = n + 1 in let val n = n * 2 in n end end
+val _ = p (shadow 3)
+datatype k = K of int
+fun unK (K n) = n
+val old = K 7
+datatype k = K of string
+val _ = p (unK old)
+val _ = print ((case K \"new\" of K s => s) ^ \"\\n\")
+fun h () = 1
+val h1 = h
+fun h () = 2
+val _ = p (h1 () * 10 + h ())"))))
+
+(test rebinding-across-compilation-units
+  ;; Each string is compiled and run on its own, like REPL phrases or `use'd
+  ;; files loaded into one package.
+  (multiple-value-bind (output package)
+      (run-sml "val x = 1"
+               "fun getx () = x"
+               "val x = 2"
+               "fun f () = 1 fun g () = f ()"
+               "fun f () = 2"
+               "val _ = print (Int.toString (getx () * 100 + g () * 10 + f ()) ^ \"\\n\")")
+    (is (string= (lines "112") output))
+    ;; The package's symbol is the newest binding, for Common Lisp.
+    (is (= 2 (cl-sml:sml-value "x" package)))
+    (is (= 2 (funcall (cl-sml:sml-function "f" package) (cl-sml::sml-unit))))))
+
+(test simultaneous-val-and
+  (is (string= (lines "21" "18" "6" "2")
+               (run-sml "fun p n = print (Int.toString n ^ \"\\n\")
+val x = 1
+val x = 2 and y = x
+val _ = p (x * 10 + y)
+val a = 5 and b = 6 and c = 7
+val _ = p (a + b + c)
+val (m, n) = (1, 2) and k = 3
+val _ = p (m + n + k)
+val f = fn () => x
+val x = 100
+val _ = p (f ())")))
+  (is (string= (lines "21")
+               (run-sml "val r = let val x = 1 in let val x = 2 and y = x in x * 10 + y end end
+val _ = print (Int.toString r ^ \"\\n\")"))))
+
+(test exception-declarations-are-generative-at-top-level
+  (is (string= (lines "old" "new")
+               (run-sml "exception E
+val old = (fn () => raise E) : unit -> unit
+exception E
+val _ = print (((old (); \"\") handle E => \"new\" | _ => \"old\") ^ \"\\n\")
+val _ = print (((raise E) handle E => \"new\" | _ => \"old\") ^ \"\\n\")")))
+  (is (string= (lines "old")
+               (run-sml "exception E"
+                        "val old = (fn () => raise E) : unit -> unit"
+                        "exception E"
+                        "val _ = print (((old (); \"\") handle E => \"new\" | _ => \"old\") ^ \"\\n\")"))))
+
+(test structure-rebinding-does-not-change-earlier-code
+  (is (string= (lines "1" "10" "20")
+               (run-sml "structure S = struct
+val x = 1
+fun get () = x
+end
+val g = S.get
+structure S = struct
+val x = 2
+fun get () = x
+end
+val _ = print (Int.toString (g ()) ^ \"\\n\")
+structure T = struct val v = 10 end
+fun getV () = T.v
+structure T = struct val v = 20 end
+val _ = print (Int.toString (getV ()) ^ \"\\n\")
+val _ = print (Int.toString T.v ^ \"\\n\")"))))
+
+(test let-binders-are-lexical-after-top-level-binding
+  ;; A `use'd file binding a name that an earlier unit bound at top level.
+  (is (string= (lines "20" "10")
+               (run-sml "val y = 10"
+                        "val f = let val y = 20 in fn () => y end
+val _ = print (Int.toString (f ()) ^ \"\\n\")
+val _ = print (Int.toString y ^ \"\\n\")"))))
+
+(test rebinding-through-load-sml-file
+  (is (string= (lines "1" "2")
+               (load-sml "val x = 1
+fun getx () = x
+val x = 2
+val _ = print (Int.toString (getx ()) ^ \"\\n\")
+val _ = print (Int.toString x ^ \"\\n\")"))))
+
+(test repl-rebinding-is-static
+  (let ((output (make-string-output-stream))
+        (error-output (make-string-output-stream)))
+    (cl-sml:repl :input (make-string-input-stream
+                         (format nil "val x = 1;~%fun getx () = x;~%val x = 2;~%getx ();~%x;~%val x = raise Fail \"no\";~%x;~%:quit~%"))
+                 :output output
+                 :error-output error-output
+                 :prompt nil
+                 :package (fresh-sml-package))
+    (let ((text (get-output-stream-string output)))
+      (is (search "val it = 1" text))
+      (is (= 2 (count-matches "val it = 2" text))))
+    (is (search "uncaught exception Fail" (get-output-stream-string error-output)))))
+
+(defun count-matches (needle haystack)
+  (loop for start = (search needle haystack) then (search needle haystack :start2 (1+ start))
+        while start
+        count t))
+
+;;; SML identifiers named like COMMON-LISP symbols
+
+(defparameter *common-lisp-named-identifiers*
+  "val T = 1
+fun list x = x
+val nil' = 2
+structure S = struct val car = 3 val NIL = 4 val PI = 5 end
+datatype d = CAR | LIST of int
+fun f CAR = 0 | f (LIST n) = n
+val _ = print (Int.toString (T + list 10 + nil' + S.car + S.NIL + S.PI + f (LIST 100) + f CAR) ^ \"\\n\")
+val t = let val T = 7 val NIL = 8 in T + NIL end
+val _ = print (Int.toString t ^ \"\\n\")
+fun g () = let val T = 5 in T + 1 end
+val _ = print (Int.toString (g ()) ^ \"\\n\")
+val h = fn x => let datatype t = T of int in case T x of T y => y end
+val _ = print (Int.toString (h 42) ^ \"\\n\")
+abstype a = A of int with fun mk x = A x fun get (A x) = x end
+val _ = print (Int.toString (get (mk 3)) ^ \"\\n\")
+functor F () = let datatype t = T in struct val x = T end end
+structure F = F ()
+val _ = print (if F.x = F.x then \"true\\n\" else \"false\\n\")
+exception T
+val _ = print ((raise T) handle T => \"T\\n\")")
+
+(test identifiers-named-like-common-lisp-symbols
+  (let ((expected (lines "125" "15" "6" "42" "3" "true" "T")))
+    (is (string= expected (run-sml *common-lisp-named-identifiers*)))
+    (is (string= expected (load-sml *common-lisp-named-identifiers*)))))
+
+(test later-let-bindings-shadow-earlier-ones
+  (is (string= (lines "3" "11" "5")
+               (run-sml "fun f r = let val {a, b} = r val a = a + b in a end
+val _ = print (Int.toString (f {a = 1, b = 2}) ^ \"\\n\")
+val g = let val x = 1 local val x = 10 in val y = x + 1 end in y end
+val _ = print (Int.toString g ^ \"\\n\")
+val h = let local val x = 2 in val x = x + 3 end in x end
+val _ = print (Int.toString h ^ \"\\n\")"))))
