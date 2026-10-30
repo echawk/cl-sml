@@ -172,9 +172,6 @@
       (sml-parse-expected what))
     (next-sml-token)))
 
-(defun sml-long-name-p (name)
-  (and (stringp name) (position #\. name) t))
-
 (defun split-sml-long-name (name)
   "The structure identifiers and the final identifier of long NAME."
   (let ((parts nil)
