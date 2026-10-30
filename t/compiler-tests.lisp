@@ -9,7 +9,7 @@
 (in-suite cl-sml-compiler-suite)
 
 (test compile-expression-string-emits-expected-cl
-  (is (equal '(funcall (funcall #'cl-sml::sml-+ 1) 2)
+  (is (equal '(cl-sml::sml-+ 1 2)
              (cl-sml:compile-sml-expression-string "1 + 2"
                                                    :package "SML.COMPILER-TEST"))))
 
@@ -67,10 +67,16 @@
               :filename filename
               :cause "rejected by test checker")))))
 
-(test compile-functor-argument-value-bindings-tolerate-whitespace
-  (is (equal '(("compare" . "TyName.compare"))
-             (cl-sml::functor-argument-value-bindings
-              "(type ord_key = TyName.TyName; val  compare = TyName.compare)"))))
+(test compile-functor-argument-structure-expressions
+  ;; A structure identifier is passed by name; other arguments become
+  ;; declarations of an argument module.
+  (is (equal "TyName"
+             (cl-sml::functor-argument-structure-name '(:str-id "TyName"))))
+  (is (null (cl-sml::functor-argument-structure-name
+             '(:struct ((:val (:pat-var "compare") (:var "TyName.compare")))))))
+  (is (equal '((:val (:pat-var "compare") (:var "TyName.compare")))
+             (cl-sml::sml-strexp-body-decs
+              '(:struct ((:val (:pat-var "compare") (:var "TyName.compare"))))))))
 
 (test compile-literal-case-uses-native-common-lisp-case
   (let ((form (cl-sml:compile-sml-expression-string

@@ -1,7 +1,7 @@
 (defpackage #:cl-sml-runtime-tests
   (:use #:cl #:fiveam #:cl-sml)
   (:shadow #:sml-value)
-  (:import-from #:esrap #:parse))
+  )
 
 (in-package #:cl-sml-runtime-tests)
 
@@ -17,7 +17,7 @@
 
 (defun eval-sml-expr (source)
   (let ((cl-sml::*sml-package* (cl-sml::ensure-sml-package *test-sml-package*)))
-    (eval (cl-sml::compile-expr (parse 'cl-sml::sml-expr source)))))
+    (eval (cl-sml::compile-expr (cl-sml:parse-sml-expression source)))))
 
 (defun sml-symbol (name &optional (package *test-sml-package*))
   (find-symbol name package))
@@ -30,14 +30,14 @@
 
 (test runtime-list-and-equality-functions
   (is (equal '(1 2 3 4)
-             (funcall (funcall #'cl-sml::sml-@ '(1 2)) '(3 4))))
+             (cl-sml::sml-@ '(1 2) '(3 4))))
   (is (eql 10 (cl-sml::sml-hd '(10 20 30))))
   (is (equal '(20 30) (cl-sml::sml-tl '(10 20 30))))
   (is (eql 3 (cl-sml::sml-length '(a b c))))
   (is (eq t (cl-sml::sml-null nil)))
   (is (equal '(3 2 1) (cl-sml::sml-rev '(1 2 3))))
-  (is (eq t (funcall (funcall #'cl-sml::sml-= '(1 2)) '(1 2))))
-  (is (eq t (funcall (funcall #'cl-sml::sml-<> '(1 2)) '(2 1)))))
+  (is (eq t (cl-sml::sml-= '(1 2) '(1 2))))
+  (is (eq t (cl-sml::sml-<> '(1 2) '(2 1)))))
 
 (test runtime-pervasive-option-constructors
   (let* ((package (cl-sml::ensure-sml-package "SML.OPTION-BASIS-TEST"))
@@ -54,9 +54,9 @@
   (is (equal '(2 3 4)
              (funcall (cl-sml::sml-map (lambda (x) (+ x 1))) '(1 2 3))))
   (is (= 6
-         (funcall (funcall (cl-sml::sml-foldl #'cl-sml::sml-+) 0) '(1 2 3))))
+         (funcall (funcall (cl-sml::sml-foldl #'cl-sml::sml-op-+) 0) '(1 2 3))))
   (is (= 6
-         (funcall (funcall (cl-sml::sml-foldr #'cl-sml::sml-+) 0) '(1 2 3))))
+         (funcall (funcall (cl-sml::sml-foldr #'cl-sml::sml-op-+) 0) '(1 2 3))))
   (let ((tuple-step
           (lambda (pair)
             (+ (second pair) (* 10 (third pair))))))
@@ -72,12 +72,9 @@
                          (lambda (x) (+ x 1))
                          (lambda (x) (* x 2))))
                   10)))
-  (let ((wrapped (cl-sml::sml-tuple-or-curried-binary
-                  (lambda (x)
-                    (lambda (y)
-                      (+ x y))))))
-    (is (= 5 (funcall wrapped (list :tuple 2 3))))
-    (is (= 5 (funcall (funcall wrapped 2) 3)))))
+  ;; Binary operators are two-argument primitives and pair-taking values.
+  (is (= 5 (cl-sml::sml-+ 2 3)))
+  (is (= 5 (cl-sml::sml-op-+ (list :tuple 2 3)))))
 
 (test runtime-string-and-char-functions
   (is (string= "abcd" (cl-sml::sml-concat '("ab" "cd"))))
@@ -87,8 +84,8 @@
   (is (= 65 (cl-sml::sml-ord #\A)))
   (is (char= #\A (cl-sml::sml-chr 65)))
   (is (string= "Z" (cl-sml::sml-str #\Z)))
-  (is (eq t (funcall (funcall #'cl-sml::sml-< #\A) #\B)))
-  (is (eq t (funcall (funcall #'cl-sml::sml-< "ab") "ac")))
+  (is (eq t (cl-sml::sml-< #\A #\B)))
+  (is (eq t (cl-sml::sml-< "ab" "ac")))
   (is (= 7 (eval-sml-expr "#2 (\"\", 7)"))))
 
 (test runtime-sequence-subscript-raises-sml-exception
@@ -124,7 +121,7 @@
 (test runtime-reference-functions
   (let ((cell (cl-sml::sml-ref 10)))
     (is (= 10 (cl-sml::sml-deref cell)))
-    (is (equal '(:tuple) (funcall (cl-sml::sml-assign cell) 42)))
+    (is (equal '(:tuple) (cl-sml::sml-assign cell 42)))
     (is (= 42 (cl-sml::sml-deref cell)))))
 
 (test runtime-text-io-output-primitives
@@ -955,10 +952,9 @@
     (is (cl-sml::sml-real-nan-p (cl-sml::sml-real-quotient 0d0 0d0)))
     (is (eql infinity (cl-sml::sml-real-quotient 1d0 0d0)))
     (is (eql negative-infinity (cl-sml::sml-real-quotient 1d0 -0d0)))
-    (is (eql infinity (funcall (funcall #'cl-sml::sml-* most-positive-double-float) 2d0)))
+    (is (eql infinity (cl-sml::sml-* most-positive-double-float 2d0)))
     (is (eql negative-infinity
-             (funcall (funcall #'cl-sml::sml-- (- most-positive-double-float))
-                      most-positive-double-float)))
+             (cl-sml::sml-- (- most-positive-double-float) most-positive-double-float)))
     (is (cl-sml::sml-real-nan-p (cl-sml::sml-sqrt -1d0)))
     (is (eql negative-infinity (cl-sml::sml-ln 0d0)))
     (is (eql infinity (cl-sml::sml-exp 1000d0)))
@@ -966,9 +962,9 @@
                                (list :tuple 10d0 400d0))))
     (is (eql infinity (cl-sml::sml-real (expt 10 400))))
     ;; Comparisons with a NaN are false.
-    (is (null (funcall (funcall #'cl-sml::sml-< nan) 1d0)))
-    (is (null (funcall (funcall #'cl-sml::sml->= nan) 1d0)))
-    (is (null (funcall (funcall #'cl-sml::sml-<= 1d0) nan)))
+    (is (null (cl-sml::sml-< nan 1d0)))
+    (is (null (cl-sml::sml->= nan 1d0)))
+    (is (null (cl-sml::sml-<= 1d0 nan)))
     (is (null (cl-sml::sml-real->= nan 1d0)))
     (eval-sml-program "val nanOrdered = let val n = 0.0 / 0.0
                                         in n < 1.0 orelse n >= 1.0 end;")

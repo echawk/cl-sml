@@ -532,7 +532,8 @@ heuristic): capitalized names are constructors."
 (defun sml-type-ast->string (ty)
   "SML syntax for type AST TY."
   (labels ((walk (ty context)
-             ;; CONTEXT: 0 anywhere, 1 tuple component, 2 argument
+             ;; CONTEXT: 0 anywhere, 1 left of ->, 2 tuple component,
+             ;; 3 type constructor argument
              (ecase (car ty)
                (:ty-var (second ty))
                (:ty-con
@@ -540,14 +541,14 @@ heuristic): capitalized names are constructors."
                   (cond
                     ((null args) (second ty))
                     ((null (rest args))
-                     (format nil "~A ~A" (walk (first args) 2) (second ty)))
+                     (format nil "~A ~A" (walk (first args) 3) (second ty)))
                     (t (format nil "(~{~A~^, ~}) ~A"
                                (mapcar (lambda (arg) (walk arg 0)) args)
                                (second ty))))))
                (:ty-tuple
                 (let ((text (format nil "~{~A~^ * ~}"
-                                    (mapcar (lambda (item) (walk item 1)) (rest ty)))))
-                  (if (>= context 1) (format nil "(~A)" text) text)))
+                                    (mapcar (lambda (item) (walk item 2)) (rest ty)))))
+                  (if (>= context 2) (format nil "(~A)" text) text)))
                (:ty-arrow
                 (let ((text (format nil "~A -> ~A" (walk (second ty) 1) (walk (third ty) 0))))
                   (if (>= context 1) (format nil "(~A)" text) text)))
