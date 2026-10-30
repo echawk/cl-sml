@@ -1,0 +1,14 @@
+a/b/c.txt
+a/b c.txt
+foo.tar gz
+NONE
+abs/rel ok
+a/b/c/d
+a/c
+a/b c
+x.sml
+usr|lib|x
+dot is dir
+getDir ok
+name ok
+success

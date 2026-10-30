@@ -1,0 +1,43 @@
+PARSE
+ESRAP-PARSE-ERROR: At
+
+  val == = Real.==
+  
+  ^ (Line 1, Column 0, Position 0)
+
+In context SML-DECS:
+
+While parsing SML-DECS. Problem:
+
+  The production
+  
+    #\=
+  
+  does not satisfy the predicate ALPHA-CHAR-P.
+
+Expected:
+
+     the character Tab
+  or the character Newline
+  or the character Space
+  or the character " (QUOTATION_MARK)
+  or the character # (NUMBER_SIGN)
+  or the character ( (LEFT_PARENTHESIS)
+  or the string "(*"
+  or the string "0w"
+  or the string "0x"
+  or the character [ (LEFT_SQUARE_BRACKET)
+  or the character _ (LOW_LINE)
+  or the string "op"
+  or the string "rec"
+  or the string "ref"
+  or the character { (LEFT_CURLY_BRACKET)
+  or the character ~ (TILDE)
+  or any character satisfying ALPHA-CHAR-P
+  or <end of input>
+  or a character in [A-Z]
+  or a character in [0-9]
+  or anything but the character = (EQUALS_SIGN)
+
+cl-sml frames (innermost first):
+  ESRAP:ESRAP-PARSE-ERROR

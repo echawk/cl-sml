@@ -1,0 +1,21 @@
+fun p n = print (Int.toString n ^ "\n")
+fun b x = print ((if x then "true" else "false") ^ "\n")
+val _ = p (#1 (10, 20))
+val _ = p (#2 (10, 20))
+val _ = p (#3 (1, 2, 3))
+val _ = p (#lab {lab = 5, other = 6})
+val _ = p (foldl op + 0 (map #1 [(1, 2), (3, 4)]))
+val _ = b ({1 = 1, 2 = 2} = (1, 2))
+val _ = b ((3, 4) = {2 = 4, 1 = 3})
+val _ = p (#1 {1 = 5, 2 = 6})
+val {1 = x, 2 = y} = (7, 8)
+val _ = p (x + y)
+val (q, r) = {1 = 9, 2 = 10}
+val _ = p (q + r)
+val t = {2 = "b", 1 = "a"}
+val _ = print (#1 t ^ #2 t ^ "\n")
+val _ = p (case (1, 2) of {1 = a, 2 = b'} => a + b')
+val _ = p (case {1 = 3, 2 = 4} of (a, b') => a * b')
+fun fst ({1 = a, ...} : int * int) = a
+val _ = p (fst (11, 12))
+val _ = b ({} = ())

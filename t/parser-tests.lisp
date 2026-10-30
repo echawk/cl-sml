@@ -16,7 +16,16 @@
 
 (test parse-real-literals
   (is (= 3.8d0 (parse 'cl-sml::sml-real "3.8")))
-  (is (= -0.5d0 (parse 'cl-sml::sml-real "~0.5"))))
+  (is (= -0.5d0 (parse 'cl-sml::sml-real "~0.5")))
+  (is (= (expt 10 22) (rational (parse 'cl-sml::sml-real "1E22"))))
+  (is (= -2500 (rational (parse 'cl-sml::sml-real "~2.5e3"))))
+  ;; The nearest doubles, whatever the host's reader would make of them.
+  (is (= 2833419889721787/18889465931478580854784
+         (rational (parse 'cl-sml::sml-real "1.5E~7"))))
+  (is (= 3602879701896397/36028797018963968
+         (rational (parse 'cl-sml::sml-real "0.1"))))
+  (is (= 99999999999999991611392 (rational (parse 'cl-sml::sml-real "1E23"))))
+  (signals error (parse 'cl-sml::sml-real "1E400")))
 
 (test parse-string-and-char-literals
   (is (equal "hello" (parse 'cl-sml::sml-string "\"hello\"")))
@@ -130,6 +139,8 @@ tab	"
                         (:app (:app (:var "-") (:var "n")) 1)))))))
              (parse 'cl-sml::sml-val-rec
                     "val rec fact = fn 0 => 1 | n => n * fact (n - 1);")))
+  (is (equal '(:program (:val (:pat-var "recorded") 1))
+             (parse 'cl-sml::sml-program "val recorded = 1;")))
   (is (equal '(:val (:pat-tuple (:pat-var "x") (:pat-var "y"))
                     (:tuple 1 2))
              (parse 'cl-sml::sml-val "val (x, y) = (1, 2);")))

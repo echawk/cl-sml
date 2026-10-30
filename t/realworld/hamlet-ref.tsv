@@ -1,0 +1,120 @@
+program	hamlet_ref_elab
+bm-aobench	18.24-18.33: unknown structure RealArray
+bm-barnes-hut	165.27-165.41: unknown identifier Real.realFloor
+bm-binary-trees	OK
+bm-black-scholes	OK
+bm-boyer	OK
+bm-cml-sieve	188.22-188.39: unknown type SMLofNJ.Cont.cont
+bm-count-graphs	OK
+bm-delta-blue	OK
+bm-dlx	2887.10-2889.7: syntax error: deleting  END FUN
+bm-f-arith	159.22-159.32: special constant out of range
+bm-fannkuch	OK
+bm-fft	18.24-18.33: unknown structure RealArray
+bm-id-ray	500.14-507.8: type mismatch between different matches
+bm-iter-pidigits	137.24-137.35: unknown identifier IntInf.quot
+bm-kcfa	OK
+bm-knuth-bendix	OK
+bm-lexgen	OK
+bm-life	OK
+bm-logic	OK
+bm-mandelbrot-rat	OK
+bm-mandelbrot	OK
+bm-mazefun	OK
+bm-mc-ray	852.25-852.33: type mismatch on application
+bm-minimax	OK
+bm-mlyacc	OK
+bm-nbody	154.26-154.30: unresolved flexible record type
+bm-nucleic	146.6-146.51: type mismatch on application
+bm-pidigits	179.16-179.26: unknown type IntInf.int
+bm-pingpong	188.22-188.39: unknown type SMLofNJ.Cont.cont
+bm-plclub-ray	19.26-19.37: unknown type Word64.word
+bm-ratio-regions	OK
+bm-ray	287.29-287.45: unknown identifier TextIO.lookahead
+bm-safe-for-space	OK
+bm-sat	166.16-166.21: special constant out of range
+bm-simple	395.38-395.58: type mismatch on application
+bm-smith-nf	391.11-391.25: unknown identifier IntInf.fromInt
+bm-stream-sieve	OK
+bm-tsp	318.34-318.80: type mismatch on application
+bm-twenty-four	OK
+bm-tyan	OK
+bm-vliw	OK
+ln-core-abstype	OK
+ln-core-capture	OK
+ln-core-datatype-equality	OK
+ln-core-deephandle	OK
+ln-core-equality	49.50-50.33: free type variables in datatype binding
+ln-core-exception	OK
+ln-core-exception2	OK
+ln-core-fib_linear	OK
+ln-core-fib_monoid	OK
+ln-core-fib_slow	OK
+ln-core-fix_by_datatype	OK
+ln-core-fix_by_ref	OK
+ln-core-fizzbuzz	OK
+ln-core-fun	OK
+ln-core-functor_exception_2	OK
+ln-core-functor_exception	OK
+ln-core-functor1	OK
+ln-core-functor2	OK
+ln-core-functor3	OK
+ln-core-listrev	OK
+ln-core-local_datatype	1.33-2.20: free type variables in datatype binding
+ln-core-local_exception	OK
+ln-core-opaque1	OK
+ln-core-opaque2	OK
+ln-core-open	OK
+ln-core-parser_combinator	202.54-202.57: unresolved flexible record type
+ln-core-prime_as_typevar	OK
+ln-core-prime_eratos	OK
+ln-core-prime_trialdiv	OK
+ln-core-signature1	OK
+ln-core-signature2	OK
+ln-core-signature3	OK
+ln-core-signature4	OK
+ln-core-signature5	OK
+ln-core-val_projection	OK
+ln-core-val-rec	OK
+ln-core-xorshift64	OK
+ln-mlbasis-char	OK
+ln-mlbasis-exn-name	OK
+ln-mlbasis-general	OK
+ln-mlbasis-int-inf-factorial-hex	5.45-5.59: unknown identifier IntInf.fromInt
+ln-mlbasis-int-inf-factorial	5.45-5.59: unknown identifier IntInf.fromInt
+ln-mlbasis-int-inf-fib-hex	4.33-4.43: unknown identifier IntInf.fmt
+ln-mlbasis-int-inf-fib-monoid	12.18-12.28: unknown type IntInf.int
+ln-mlbasis-int-inf-fib	4.33-4.48: unknown identifier IntInf.toString
+ln-mlbasis-int-inf-rand	1.25-1.40: unknown identifier IntInf.toString
+ln-mlbasis-int-inf-wilson	1.25-1.35: unknown type IntInf.int
+ln-mlbasis-int-inf	48.99-48.105: syntax error: deleting  UNDERBAR ALPHA RBRACK
+ln-mlbasis-int16	1.25-1.39: unknown identifier Int16.toString
+ln-mlbasis-int32	1.25-1.39: unknown identifier Int32.toString
+ln-mlbasis-int54	1.25-1.39: unknown identifier Int54.toString
+ln-mlbasis-int64	1.25-1.39: unknown identifier Int64.toString
+ln-mlbasis-int8	1.25-1.38: unknown identifier Int8.toString
+ln-mlbasis-overflow	OK
+ln-mlbasis-real-intinf	14.40-14.57: syntax error: deleting  UNDERBAR ALPHA
+ln-mlbasis-real	5.51-5.52: invalid character `.'
+ln-mlbasis-scan-real	OK
+ln-mlbasis-scan-word	10.68-10.74: unknown structure Word16
+ln-mlbasis-seki-bernoulli	22.24-22.34: unknown type IntInf.int
+ln-mlbasis-string_fields	OK
+ln-mlbasis-string-issubstring	OK
+ln-mlbasis-string	OK
+ln-mlbasis-substring	OK
+ln-mlbasis-vector	OK
+ln-mlbasis-widestring-issubstring	1.22-1.44: unknown identifier WideString.isSubstring
+ln-mlbasis-widestring-sub	1.7-1.24: unknown identifier WideChar.toString
+ln-mlbasis-word_law	46.23-46.34: unknown type Word64.word
+ln-mlbasis-word_shift	OK
+ln-mlbasis-word	OK
+ln-mlbasis-word16-law	4.23-4.34: unknown type Word16.word
+ln-mlbasis-word16	1.25-1.40: unknown identifier Word16.toString
+ln-mlbasis-word32-law	4.23-4.34: unknown type Word32.word
+ln-mlbasis-word32	1.25-1.40: unknown identifier Word32.toString
+ln-mlbasis-word64-law	4.23-4.34: unknown type Word64.word
+ln-mlbasis-word64	1.25-1.40: unknown identifier Word64.toString
+ln-mlbasis-word8-law	46.23-46.34: unknown type Word64.word
+ln-mlbasis-word8	OK
+ln-mlbasis-xorshift64-word64	1.3-1.18: unknown identifier Word64.wordSize

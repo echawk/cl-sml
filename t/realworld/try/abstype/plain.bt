@@ -1,0 +1,162 @@
+PARSE
+ESRAP-PARSE-ERROR: At
+
+  abstype t = T of int wit
+  ^ (Line 1, Column 0, Position 0)
+
+In context SML-PROGRAM:
+
+While parsing WS. Expected:
+
+     the character Tab
+  or the character Newline
+  or the character Space
+  or the string "(*"
+
+While parsing SML-RAISE-EXPR. Expected:
+
+     the character ! (EXCLAMATION_MARK)
+  or the character " (QUOTATION_MARK)
+  or the character # (NUMBER_SIGN)
+  or the character ( (LEFT_PARENTHESIS)
+  or the string "0w"
+  or the string "0x"
+  or the character [ (LEFT_SQUARE_BRACKET)
+  or the string "case"
+  or the string "fn"
+  or the string "if"
+  or the string "let"
+  or the string "op"
+  or the string "raise"
+  or the string "while"
+  or the character { (LEFT_CURLY_BRACKET)
+  or the character ~ (TILDE)
+  or the character $ (DOLLAR_SIGN)
+  or the character % (PERCENT_SIGN)
+  or the character & (AMPERSAND)
+  or the character * (ASTERISK)
+  or the character + (PLUS_SIGN)
+  or the character - (HYPHEN-MINUS)
+  or the character / (SOLIDUS)
+  or the character : (COLON)
+  or the character < (LESS-THAN_SIGN)
+  or the character = (EQUALS_SIGN)
+  or the character > (GREATER-THAN_SIGN)
+  or the character ? (QUESTION_MARK)
+  or the character @ (COMMERCIAL_AT)
+  or the character \ (REVERSE_SOLIDUS)
+  or the character ^ (CIRCUMFLEX_ACCENT)
+  or the character ` (GRAVE_ACCENT)
+  or the character | (VERTICAL_LINE)
+  or a character in [0-9]
+  or <end of input>
+  or anything but     the string "abstype"
+                  and the string "and"
+                  and the string "andalso"
+                  and the string "as"
+                  and the string "case"
+                  and the string "datatype"
+                  and the string "do"
+                  and the string "else"
+                  and the string "end"
+                  and the string "eqtype"
+                  and the string "exception"
+                  and the string "fn"
+                  and the string "fun"
+                  and the string "functor"
+                  and the string "handle"
+                  and the string "if"
+                  and the string "in"
+                  and the string "include"
+                  and the string "infix"
+                  and the string "infixr"
+                  and the string "let"
+                  and the string "local"
+                  and the string "nonfix"
+                  and the string "of"
+                  and the string "op"
+                  and the string "open"
+                  and the string "orelse"
+                  and the string "raise"
+                  and the string "rec"
+                  and the string "sharing"
+                  and the string "sig"
+                  and the string "signature"
+                  and the string "struct"
+                  and the string "structure"
+                  and the string "then"
+                  and the string "type"
+                  and the string "val"
+                  and the string "where"
+                  and the string "while"
+                  and the string "with"
+                  and the string "withtype"
+
+While parsing SML-FUN. Expected:
+
+     the string "fun"
+
+While parsing SML-VAL. Expected:
+
+     the string "val"
+
+While parsing SML-VAL-REC. Expected:
+
+     the string "val"
+
+While parsing SML-EXCEPTION. Expected:
+
+     the string "exception"
+
+While parsing SML-EXCEPTION-ALIAS. Expected:
+
+     the string "exception"
+
+While parsing SML-DATATYPE. Expected:
+
+     the string "datatype"
+
+While parsing SML-DATATYPE-REPLICATION. Expected:
+
+     the string "datatype"
+
+While parsing SML-TYPE-DECL. Expected:
+
+     the string "type"
+
+While parsing SML-INFIX-DECL. Expected:
+
+     the string "infix"
+  or the string "infixr"
+  or the string "nonfix"
+
+While parsing SML-LOCAL. Expected:
+
+     the string "local"
+
+While parsing SML-OPEN. Expected:
+
+     the string "open"
+
+While parsing SML-STRUCTURE. Expected:
+
+     the string "structure"
+
+While parsing SML-STRUCTURE-ALIAS. Expected:
+
+     the string "structure"
+
+While parsing SML-STRUCTURE-FUNCTOR-APP. Expected:
+
+     the string "structure"
+
+While parsing SML-FUNCTOR. Expected:
+
+     the string "functor"
+
+While parsing SML-SIGNATURE. Expected:
+
+     the string "signature"
+
+cl-sml frames (innermost first):
+  ESRAP:ESRAP-PARSE-ERROR

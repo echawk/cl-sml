@@ -1,0 +1,15 @@
+fun p s = print (s ^ "\n")
+val cv = CharVector.fromList [#"a", #"b", #"c"]
+val _ = p (cv ^ " " ^ Int.toString (CharVector.length cv) ^ " " ^ str (CharVector.sub (cv, 2)))
+val _ = p (CharVector.tabulate (3, fn i => chr (ord #"x" + i)))
+val wv = Word8Vector.fromList [0w1, 0w2, 0w255]
+val _ = p (Int.toString (Word8Vector.length wv) ^ " " ^ Word8.toString (Word8Vector.sub (wv, 2)))
+val _ = p (Int.toString (Word8Vector.foldl (fn (w, acc) => acc + Word8.toInt w) 0 wv))
+val _ = p (Byte.bytesToString (Word8Vector.fromList [0w72, 0w105]))
+val _ = p (Int.toString (Word8Vector.length (Byte.stringToBytes "hello")))
+val wa = Word8Array.array (2, 0w7)
+val _ = Word8Array.update (wa, 0, 0w9)
+val _ = p (Word8.toString (Word8Array.sub (wa, 0)) ^ Word8.toString (Word8Array.sub (wa, 1)))
+val ca = CharArray.array (3, #"-")
+val _ = CharArray.update (ca, 1, #"+")
+val _ = p (CharArray.vector ca)

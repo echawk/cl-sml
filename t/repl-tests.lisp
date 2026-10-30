@@ -126,3 +126,133 @@
     (is (eq :eof result))
     (is (search "- " output))
     (is (string= "" error-output))))
+
+(test repl-reports-module-and-compound-declarations
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil "structure ReplS = struct val v = 1 end;~%fun replEven 0 = true | replEven n = replOdd (n - 1)~%and replOdd 0 = false | replOdd n = replEven (n - 1);~%local val hidden = 2 in val replShown = hidden end;~%:quit~%")
+       "SML.REPL-REPORT-TEST")
+    (is (eq :quit result))
+    (is (search "structure ReplS" output))
+    (is (not (search ":STRUCTURE" output)))
+    (is (search "val replEven = <fn>" output))
+    (is (search "val replOdd = <fn>" output))
+    (is (search "val replShown = 2" output))
+    (is (not (search "hidden" output)))
+    (is (string= "" error-output))))
+
+;;; REPL commands
+
+(test repl-lisp-command-shows-generated-code-with-location
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil "val replOne = 1;~%fun replSquare x =~%  x * x;~%:lisp replSquare~%:quit~%")
+       "SML.REPL-LISP-COMMAND-TEST")
+    (is (eq :quit result))
+    (is (search ";;; fun replSquare -- stdIn:2" output))
+    (is (search "(defparameter |replSquare|" output))
+    (is (string= "" error-output))))
+
+(test repl-lisp-local-command-shows-enclosing-local
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil "local val step = 2 in fun replNext n = n + step end;~%:lisp-local replNext~%:quit~%")
+       "SML.REPL-LISP-LOCAL-TEST")
+    (is (eq :quit result))
+    (is (search "Shown with its enclosing `local'" output))
+    (is (search "(let ((|step|" output))
+    (is (string= "" error-output))))
+
+(test repl-expand-command-compiles-without-running
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil ":expand val replGhost = 7~%replGhost;~%:expand 1 + 2~%:quit~%")
+       "SML.REPL-EXPAND-TEST")
+    (is (eq :quit result))
+    (is (search "(defparameter |replGhost| 7)" output))
+    (is (search "(funcall (funcall #'cl-sml::sml-+ 1) 2)" output))
+    (is (not (search "val it = 7" output)))
+    (is (search "Error:" error-output))))
+
+(test repl-show-lisp-echoes-each-phrase
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil ":show-lisp on~%val replShown = 3;~%:show-lisp off~%val replHidden = 4;~%:quit~%")
+       "SML.REPL-SHOW-LISP-TEST")
+    (is (eq :quit result))
+    (is (search "(defparameter |replShown| 3)" output))
+    (is (not (search "(defparameter |replHidden|" output)))
+    (is (search "val replHidden = 4" output))
+    (is (string= "" error-output))))
+
+(test repl-time-command-reports-phases
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil ":time on~%val replTimed = 5;~%:quit~%")
+       "SML.REPL-TIME-TEST")
+    (is (eq :quit result))
+    (is (search ";; SML -> Lisp" output))
+    (is (search ";; total" output))
+    (is (search "val replTimed = 5" output))
+    (is (string= "" error-output))))
+
+(test repl-disassemble-command
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil "fun replInc n = n + 1;~%val replNumber = 1;~%:disassemble replInc~%:disassemble replNumber~%:quit~%")
+       "SML.REPL-DISASSEMBLE-TEST")
+    (is (eq :quit result))
+    (is (search "val replInc = <fn>" output))
+    #+sbcl (is (search "disassembly" output))
+    (is (search "replNumber is not a function" error-output))))
+
+(test repl-help-and-unknown-commands
+  (multiple-value-bind (result output error-output)
+      (run-repl-session (format nil ":help~%:frobnicate~%:lisp~%:quit~%"))
+    (is (eq :quit result))
+    (dolist (command '(":lisp NAME" ":expand PHRASE" ":show-lisp on|off"
+                       ":time on|off" ":disassemble NAME"))
+      (is (search command output)))
+    (is (search "Unknown command :frobnicate" error-output))
+    (is (search "Usage: :lisp NAME" error-output))))
+
+(test repl-commands-are-only-recognized-at-the-primary-prompt
+  ;; A continuation line may start with a type constraint.
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil "val replTyped~%:int = 3;~%:quit~%")
+       "SML.REPL-CONTINUATION-TEST")
+    (is (eq :quit result))
+    (is (search "val replTyped = 3" output))
+    (is (string= "" error-output))))
+
+;;; The cl-sml executable's entry point
+
+(defun run-main (&rest arguments)
+  (let ((out (make-string-output-stream))
+        (err (make-string-output-stream)))
+    (let ((status (let ((*standard-output* out)
+                        (*error-output* err))
+                    (cl-sml:main arguments))))
+      (values status
+              (get-output-stream-string out)
+              (get-output-stream-string err)))))
+
+(test main-emits-lisp-runs-files-and-reports-errors
+  (let ((sample (namestring (asdf:system-relative-pathname
+                             "cl-sml" "t/testdata/sample-program.sml"))))
+    (multiple-value-bind (status output) (run-main "--emit-lisp" sample)
+      (is (= 0 status))
+      (is (search ";;; Generated by cl-sml" output))
+      (is (search "sample-program.sml:4: fun fileFact" output)))
+    (multiple-value-bind (status output error-output)
+        (run-main "--time" "--run" sample)
+      (is (= 0 status))
+      ;; The Lisp compiler's report on generated code is not shown.
+      (is (not (search "compiling" output)))
+      (is (search ";; total" error-output)))
+    (multiple-value-bind (status output) (run-main "--help")
+      (is (= 0 status))
+      (is (search "--emit-lisp" output)))
+    (is (= 1 (run-main "--run" "no-such-file.sml")))
+    (is (= 2 (run-main "--no-such-option")))))

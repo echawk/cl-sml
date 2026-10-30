@@ -178,16 +178,61 @@ the indented continuation lines of long types."
                      (if (getf (cddr decl) :arg-type)
                          (format nil " of ~A" (getf (cddr decl) :arg-type))
                          "")))))
+    ((:vals :funs)
+     (mapcan #'repl-report-decl (cdr decl)))
+    (:local
+     (mapcan #'repl-report-decl (third decl)))
+    ((:structure :structure-app :structure-alias)
+     (list (format nil "structure ~A" (second decl))))
+    ((:functor :signature :type)
+     (list (format nil "~(~A~) ~A" (car decl) (second decl))))
+    (:datatype-replication
+     (list (format nil "datatype ~A" (second decl))))
+    (:exception-alias
+     (list (format nil "exception ~A" (second decl))))
+    ((:open :infix)
+     nil)
     (otherwise
      (list (format nil "~S" decl)))))
 
-(defun eval-repl-program (ast)
-  (eval (compile-program ast))
+(defun repl-expression-text (trimmed)
+  "The expression of the REPL phrase TRIMMED, without a final `;'."
+  (string-right-trim '(#\Space #\Tab #\Newline #\Return)
+                     (if (and (plusp (length trimmed))
+                              (char= (char trimmed (1- (length trimmed))) #\;))
+                         (subseq trimmed 0 (1- (length trimmed)))
+                         trimmed)))
+
+(defun compile-repl-phrase (kind source &key (first-line 1))
+  "Check and compile the REPL phrase SOURCE of KIND (:EXPR or :PROGRAM) the
+way files are compiled: generating code with what the static checker
+learned, and recording the Lisp of declared bindings.  FIRST-LINE is the
+session line SOURCE starts on.  Returns the form, the phrase's AST, and the
+recording to commit once the form has been evaluated."
+  (let ((text (trim-repl-input source)))
+    (ecase kind
+      (:expr
+       (multiple-value-bind (form ast)
+           (compile-checked-sml-expression-string (repl-expression-text text)
+                                                  :package *sml-package*)
+         (values form ast nil)))
+      (:program
+       (multiple-value-bind (form ast recording)
+           (check-and-compile-sml-program
+            text (make-sml-source-lines text :source "stdIn"
+                                             :first-line first-line))
+         (values form ast recording))))))
+
+(defun eval-repl-program (form ast recording)
+  (with-sml-phase (:eval)
+    (eval form))
+  (commit-sml-lisp-recording recording)
   (mapcan #'repl-report-decl (cdr ast)))
 
-(defun eval-repl-expression (ast)
+(defun eval-repl-expression (form ast)
   (let* ((type (infer-sml-ast-type ast :package *sml-package*))
-         (value (eval (compile-expr ast))))
+         (value (with-sml-phase (:eval)
+                  (eval form))))
     (setf (symbol-value (repl-it-symbol)) value)
     (register-sml-binding-type (repl-it-symbol) type)
     (export-sml-symbols (list (repl-it-symbol)))
@@ -215,6 +260,61 @@ accepts SOURCE (which then points at a gap in our parser)."
     (handler-case (progn (type-check-repl-input :program source) nil)
       (sml-static-type-error (condition) condition))))
 
+;;; REPL commands are lines starting with `:' and a letter, typed at the
+;;; primary prompt.  No SML phrase starts like that: `:' is reserved, and a
+;;; symbolic identifier such as `:>>' cannot contain letters.
+
+(defparameter *repl-commands*
+  '(("help" "" "List these commands.")
+    ("quit" "" "Leave the REPL (also :q and :exit).")
+    ("lisp" "NAME" "Show the Lisp generated for the binding NAME, e.g. Foo.bar.")
+    ("lisp-local" "NAME"
+     "Show it with its enclosing `local' declaration, if any.")
+    ("expand" "PHRASE" "Show the Lisp for an SML phrase without running it.")
+    ("show-lisp" "on|off" "Print the Lisp of each phrase as it is evaluated.")
+    ("time" "on|off" "Report how long each compilation phase takes.")
+    ("disassemble" "NAME" "Disassemble the compiled function bound to NAME.")))
+
+(defun repl-command-line-p (line)
+  (let ((trimmed (trim-repl-input line)))
+    (and (> (length trimmed) 1)
+         (char= (char trimmed 0) #\:)
+         (alpha-char-p (char trimmed 1)))))
+
+(defun split-repl-command (line)
+  "The command name of LINE, without the colon, and its argument text."
+  (let* ((trimmed (trim-repl-input line))
+         (space (position-if (lambda (ch) (member ch '(#\Space #\Tab)))
+                             trimmed)))
+    (values (string-downcase (subseq trimmed 1 space))
+            (if space (trim-repl-input (subseq trimmed space)) ""))))
+
+(defun repl-on-off-argument (argument command)
+  (cond
+    ((string-equal argument "on") t)
+    ((string-equal argument "off") nil)
+    (t (error "Usage: :~A on|off" command))))
+
+(defun repl-required-argument (argument command what)
+  (if (string= argument "")
+      (error "Usage: :~A ~A" command what)
+      argument))
+
+(defun print-repl-help (output)
+  (format output "~&Commands (other input is evaluated as SML):~%")
+  (loop for (name argument description) in *repl-commands*
+        do (format output "  :~18A ~A~%"
+                   (format nil "~A~@[ ~A~]" name
+                           (and (string/= argument "") argument))
+                   description)))
+
+(defun disassemble-sml-value (name output)
+  (let ((value (sml-value name)))
+    (unless (functionp value)
+      (error "~A is not a function: ~A" name (sml-value->string value)))
+    (let ((*standard-output* output))
+      (disassemble value))))
+
 (defun prompt-string (continuation-p)
   (if continuation-p "= " "- "))
 
@@ -225,48 +325,154 @@ accepts SOURCE (which then points at a gap in our parser)."
                   (package "SML-USER"))
   (let ((*sml-package* (ensure-sml-package package))
         (*repl-checked-value-types* nil)
-        (buffer ""))
+        (buffer "")
+        ;; Session line numbers, for the locations of REPL declarations.
+        (line-number 0)
+        (buffer-line 1)
+        (show-lisp nil)
+        (time-phases nil))
     (labels ((emit-prompt ()
                (when prompt
                  (write-string (prompt-string (not (string= buffer ""))) output)
                  (finish-output output)))
              (reset-buffer ()
-               (setf buffer "")))
+               (setf buffer ""))
+             (run-command (line)
+               (multiple-value-bind (command argument) (split-repl-command line)
+                 (cond
+                   ((member command '("help" "h" "?") :test #'string=)
+                    (print-repl-help output))
+                   ((member command '("lisp" "lisp-local") :test #'string=)
+                    (show-sml-lisp (repl-required-argument argument command "NAME")
+                                   :stream output
+                                   :enclosing (string= command "lisp-local")))
+                   ((string= command "expand")
+                    (print-sml-lisp
+                     (sml->lisp (repl-required-argument argument command "PHRASE"))
+                     :stream output))
+                   ((string= command "show-lisp")
+                    (setf show-lisp (repl-on-off-argument argument command)))
+                   ((string= command "time")
+                    (setf time-phases (repl-on-off-argument argument command)))
+                   ((string= command "disassemble")
+                    (disassemble-sml-value
+                     (repl-required-argument argument command "NAME")
+                     output))
+                   (t
+                    (error "Unknown command :~A; :help lists the commands."
+                           command)))))
+             (evaluate (kind)
+               (multiple-value-bind (form ast recording)
+                   (compile-repl-phrase kind buffer :first-line buffer-line)
+                 (setf *repl-checked-value-types*
+                       (and (hamlet-type-checker-p *sml-type-checker*)
+                            (hamlet-description-value-types
+                             (hamlet-type-checker-last-description
+                              *sml-type-checker*))))
+                 (when show-lisp
+                   (print-sml-lisp form :stream output))
+                 (ecase kind
+                   (:program (eval-repl-program form ast recording))
+                   (:expr (eval-repl-expression form ast)))))
+             (evaluate-and-report (kind)
+               (dolist (line (if time-phases
+                                 (with-sml-phase-timings (output)
+                                   (evaluate kind))
+                                 (evaluate kind)))
+                 (format output "~A~%" line))))
       (loop
         (emit-prompt)
         (let ((line (read-line input nil :eof)))
           (when (eql line :eof)
             (return :eof))
+          (incf line-number)
           (when (member (string-downcase (trim-repl-input line))
                         '(":quit" ":q" ":exit")
                         :test #'string=)
             (return :quit))
-          (setf buffer (concatenate 'string buffer line (string #\Newline)))
-          (multiple-value-bind (kind ast error) (parse-repl-input buffer)
-            (let ((trimmed-buffer (trim-repl-input buffer)))
-            (cond
-              (kind
-               (handler-case
-                   (progn
-                     (type-check-repl-input kind buffer)
-                     (setf *repl-checked-value-types*
-                           (and (hamlet-type-checker-p *sml-type-checker*)
-                                (hamlet-description-value-types
-                                 (hamlet-type-checker-last-description
-                                  *sml-type-checker*))))
-                     (dolist (line (ecase kind
-                                     (:program (eval-repl-program ast))
-                                     (:expr (eval-repl-expression ast))))
-                       (format output "~A~%" line)))
-                 (error (condition)
-                   (format error-output "Error: ~A~%" condition)))
-               (reset-buffer))
-              ((or (and (> (length trimmed-buffer) 0)
-                        (char= (char trimmed-buffer
-                                     (1- (length trimmed-buffer)))
-                               #\;))
-                   (string= (trim-repl-input line) ""))
-               (when error
-                 (format error-output "Error: ~A~%"
-                         (or (static-checker-diagnostic buffer) error)))
-               (reset-buffer))))))))))
+          (if (and (string= buffer "") (repl-command-line-p line))
+              (handler-case (run-command line)
+                (error (condition)
+                  (format error-output "Error: ~A~%" condition)))
+              (progn
+                (when (string= buffer "")
+                  (setf buffer-line line-number))
+                (setf buffer (concatenate 'string buffer line (string #\Newline)))
+                (multiple-value-bind (kind ast error) (parse-repl-input buffer)
+                  (declare (ignore ast))
+                  (let ((trimmed-buffer (trim-repl-input buffer)))
+                    (cond
+                      (kind
+                       (handler-case (evaluate-and-report kind)
+                         (sml-raised-exception (condition)
+                           (format error-output "uncaught exception ~A~%"
+                                   (sml-exception-description
+                                    (sml-exception-value condition))))
+                         (error (condition)
+                           (format error-output "Error: ~A~%" condition)))
+                       (reset-buffer))
+                      ((or (and (> (length trimmed-buffer) 0)
+                                (char= (char trimmed-buffer
+                                             (1- (length trimmed-buffer)))
+                                       #\;))
+                           (string= (trim-repl-input line) ""))
+                       (when error
+                         (format error-output "Error: ~A~%"
+                                 (or (static-checker-diagnostic buffer) error)))
+                       (reset-buffer))))))))))))
+
+;;; The cl-sml executable (see build-repl.sh).
+
+(defparameter *main-usage*
+  "Usage: cl-sml [--time] [--run FILE.sml | --emit-lisp FILE.sml | --help]
+
+Without --run or --emit-lisp, start the SML REPL (:help lists its commands).
+  --run FILE.sml        Load and run FILE.sml, then exit.
+  --emit-lisp FILE.sml  Print the Common Lisp generated for FILE.sml, then exit.
+  --time                Report how long each compilation phase takes.
+  --help                Show this message.
+")
+
+(defun write-sml-file-lisp (pathname stream)
+  "Write the Lisp artifact for the SML file PATHNAME to STREAM."
+  (multiple-value-bind (form package declarations) (compile-sml-file pathname)
+    (write-sml-lisp-artifact form package pathname stream declarations)))
+
+(defun main (&optional (arguments (portable-command-line-arguments)))
+  "Entry point of the cl-sml executable: act on the command line ARGUMENTS
+and return the exit status."
+  (let ((time-phases nil)
+        (action nil))
+    (loop while arguments
+          do (let ((argument (pop arguments)))
+               (cond
+                 ((string= argument "--time")
+                  (setf time-phases t))
+                 ((member argument '("--help" "-h") :test #'string=)
+                  (setf action (list :help)))
+                 ((and (member argument '("--run" "--emit-lisp") :test #'string=)
+                       arguments)
+                  (setf action (list (if (string= argument "--run") :run :emit)
+                                     (pop arguments))))
+                 (t
+                  (format *error-output* "cl-sml: unexpected argument ~A~%~A"
+                          argument *main-usage*)
+                  (return-from main 2)))))
+    (flet ((run ()
+             (ecase (first action)
+               ((nil) (repl))
+               (:help (write-string *main-usage*))
+               (:run (load-sml-file (second action)))
+               (:emit (write-sml-file-lisp (second action) *standard-output*)))))
+      (handler-case
+          (progn
+            (if time-phases
+                (with-sml-phase-timings (*error-output*)
+                  (run))
+                (run))
+            (finish-output)
+            0)
+        (error (condition)
+          (finish-output)
+          (format *error-output* "~&cl-sml: ~A~%" condition)
+          1)))))

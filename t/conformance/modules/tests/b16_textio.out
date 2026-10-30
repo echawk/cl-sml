@@ -1,0 +1,13 @@
+SOME [line one\n]
+SOME [line two\n]
+SOME [x\n]
+NONE
+eof
+19
+line
+[ ]
+29
+to stdOut
+TextIO.print
+Io raised
+done

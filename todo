@@ -37,7 +37,7 @@
   into the `cl-sml` image.  The REPL prints HaMLet's inferred types.
 - [x] Use HaMLet's elaboration in code generation.  `src/hamlet-check.sml`
   reports facts keyed by source position (`src/static-facts.lisp`), which the
-  parser and compiler consult:
+  parser and compiler consult, for files and REPL phrases alike:
   - identifier status decides constructor vs variable patterns
   - overloaded operators are compiled for their resolved type (modular
     word/word8 arithmetic, flooring `div`, char/string comparisons)
@@ -53,8 +53,23 @@
 - [ ] Complete the Basis features required by HaMLet, especially TextIO input,
   files, OS paths, command-line handling, arrays, and vectors.
 - [x] Emit inspectable Common Lisp from expressions, declarations, and files.
-- [ ] Add deterministic project artifacts, dependency manifests, and SML-to-CL
-  source maps.
+- [x] Show the Lisp generated for a binding after it was compiled
+  (`sml-lisp-source`, `show-sml-lisp`; REPL `:lisp`), for a phrase without
+  running it (`sml->lisp`; REPL `:expand`), echo it (`:show-lisp`), and
+  `:disassemble`.  Records are kept per SML package with the binding's SML
+  file and line; the HaMLet checker's own package is not recorded.
+- [x] Report per-phase compile times (`with-sml-phase-timings`, REPL `:time`,
+  `cl-sml --time`); `cl-sml --run FILE` and `--emit-lisp FILE`.
+- [x] Emitted artifacts are deterministic (gensyms numbered per program),
+  have one top-level form per declaration with a `;;; file.sml:LINE: fun f`
+  comment, print in the SML package, and shadow SML names that collide with
+  CL symbols.  The Lisp compiler's notes on generated code are hidden unless
+  `*show-lisp-compiler-output*`.
+- [ ] Add dependency manifests for `use`, full SML-to-CL source maps (below
+  declaration level), and a compile-project API returning source, FASL and
+  dependency paths.
+- [ ] Cache the FASLs of loaded SML files, keyed by a hash of the source, the
+  checker state and the cl-sml version.
 - [x] Add basic CL interop through `sml-value`, `(setf sml-value)`,
   `sml-function`, `call-sml`, and `with-sml-package`.
 - [ ] Add module handles, generated uncurried wrappers, and a conservative
@@ -65,6 +80,10 @@
   stack that `build-hamlet` bakes in via `:save-runtime-options`).
 - [ ] Preload/cache the elaborated basis in the `cl-hamlet` image so startup
   does not re-elaborate `hamlet/basis` each time.
+- [ ] Portability (ECL, ABCL): self tail calls are compiled as jumps, but
+  other tail calls (`fun even ... and odd ...`, CPS) still take a stack
+  frame per call outside SBCL.  ABCL's interpreter (REPL, `:compile nil`)
+  overflows its fixed thread stack at around a thousand nested SML calls.
 - [ ] Evaluate `cl-iparse` as a future grammar implementation.
 - [ ] Evaluate `rewrite-cl` for typed normalization and backend rewrites.
 - [ ] Prototype an optional Coalton backend only after a backend-neutral typed

@@ -1,0 +1,3 @@
+[loading standard basis library]
+[processing nucleic.sml]
+nucleic.sml:146.6-146.51: type mismatch on application

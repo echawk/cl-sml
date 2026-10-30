@@ -1,0 +1,15 @@
+0,5,0 len=3
+update Subscript
+sub Subscript
+3
+0,1,4,9,16
+10
+1234
+10,20,30,40
+10,21,32,43
+~1,10,21,32,43,~1
+copy Subscript
+array Size
+1:21
+distinct
+self equal

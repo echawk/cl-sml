@@ -1,0 +1,14 @@
+RUNTIME
+SIMPLE-ERROR: All clauses in a fun binding must name the same function: (("~"
+                                                                          ((:PAT-VAR
+                                                                            "f")
+                                                                           1)
+                                                                          0)
+                                                                         ("f"
+                                                                          ((:PAT-VAR
+                                                                            "n"))
+                                                                          (:VAR
+                                                                           "n")))
+
+cl-sml frames (innermost first):
+  CL-SML::BUILD-FUN-BINDING-AST

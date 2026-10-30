@@ -1,0 +1,7 @@
+fun p s = print (s ^ "\n")
+val _ = p (str (chr 97))
+val _ = p ((str (chr 300)) handle Chr => "Chr")
+val _ = p ((str (chr ~1)) handle Chr => "Chr")
+val _ = p (Int.toString (ord #"z"))
+val _ = p ((Int.toString (hd [])) handle Empty => "Empty")
+val _ = p ((Int.toString (hd (tl [1]))) handle Empty => "Empty")

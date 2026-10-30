@@ -24,4 +24,13 @@
            #:hamlet-type-checker-last-description
            #:enable-hamlet-type-checker
            #:disable-type-checker
-           #:repl))
+           #:*record-sml-lisp-source*
+           #:*show-lisp-compiler-output*
+           #:sml-lisp-source
+           #:show-sml-lisp
+           #:print-sml-lisp
+           #:clear-sml-lisp-source
+           #:sml->lisp
+           #:with-sml-phase-timings
+           #:repl
+           #:main))

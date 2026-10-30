@@ -1,0 +1,5 @@
+fun p s = print (s ^ "\n")
+val _ = p (Bool.toString true ^ " " ^ Bool.toString false)
+val _ = p (case Bool.fromString "true" of SOME b => Bool.toString b | NONE => "NONE")
+val _ = p (case Bool.fromString "nope" of SOME b => Bool.toString b | NONE => "NONE")
+val _ = p (Bool.toString (Bool.not true))

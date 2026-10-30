@@ -1,0 +1,5 @@
+val f = let val y = 20 in fn () => y end
+val _ = print (Int.toString (f ()) ^ "\n")
+fun g y = fn () => y
+val g1 = g 1
+val _ = print (Int.toString (g1 ()) ^ "\n")

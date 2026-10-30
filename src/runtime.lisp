@@ -724,6 +724,13 @@ constructor names are unique within a datatype."
   (and (consp value)
        (eq (car value) :record)))
 
+(defun sml-record-or-tuple-p (value)
+  "Can VALUE be the value of a record type?  Tuples (and the unit) are the
+records whose labels are 1, ..., n."
+  (and (consp value)
+       (or (eq (car value) :record)
+           (eq (car value) :tuple))))
+
 (defun sml-record-fields (record)
   (if (sml-record-p record)
       (cdr record)
@@ -749,10 +756,25 @@ constructor names are unique within a datatype."
      (error "Expected SML record or tuple, got ~S" record))))
 
 (define-condition sml-raised-exception (error)
-  ((value :initarg :value :reader sml-exception-value))
+  ((value :initarg :value :reader sml-exception-value)
+   ;; For Match and Bind raised by a failed match: the function (or "fn",
+   ;; "case", "val") and source offset of the match, for diagnostics.
+   (context :initarg :context :initform nil :reader sml-exception-context))
   (:report (lambda (condition stream)
-             (format stream "Unhandled SML exception: ~A"
-                     (sml-exception-value condition)))))
+             (format stream "uncaught exception ~A~@[ (~{no match in ~A~@[ at offset ~D~]~})~]"
+                     (sml-exception-description (sml-exception-value condition))
+                     (sml-exception-context condition)))))
+
+(defun sml-exception-description (value)
+  "How the REPL shows exception VALUE, e.g. `Match` or `Fail \"msg\"`."
+  (cond
+    ((sml-exception-tag-p value) (sml-exception-name value))
+    ((sml-exception-p value)
+     (format nil "~A ~A"
+             (sml-exception-name value)
+             ;; Defined with the REPL's printer.
+             (funcall 'sml-value->string (sml-exception-payload value))))
+    (t (princ-to-string value))))
 
 (defun sml-raise (value)
   (error 'sml-raised-exception :value value))
@@ -795,10 +817,15 @@ constructor names are unique within a datatype."
 ;; --- Curried Standard Library ---
 ;; SML functions are auto-curried. Lisp's standard functions are not.
 ;; We must wrap Lisp's binary operators into curried closures.
-(defun sml-+ (a) (lambda (b) (+ a b)))
+(defmacro sml-arithmetic (operator a b)
+  "A and B combined by OPERATOR, with IEEE semantics when either is a real."
+  `(if (or (floatp ,a) (floatp ,b))
+       (with-portable-float-traps-masked (,operator ,a ,b))
+       (,operator ,a ,b)))
+(defun sml-+ (a) (lambda (b) (sml-arithmetic + a b)))
 (defun sml-~ (a) (- a))
-(defun sml-- (a) (lambda (b) (- a b)))
-(defun sml-* (a) (lambda (b) (* a b)))
+(defun sml-- (a) (lambda (b) (sml-arithmetic - a b)))
+(defun sml-* (a) (lambda (b) (sml-arithmetic * a b)))
 (defun sml-int-div (a b)
   "SML `div`: quotient rounded towards negative infinity."
   (if (zerop b)
@@ -815,29 +842,76 @@ constructor names are unique within a datatype."
 ;;; Words are non-negative integers below 2^bits.  Code generation uses the
 ;;; static checker's resolution of overloaded operators to reduce the results
 ;;; of word arithmetic modulo the word type's size.
-(defconstant +sml-word-size+ (integer-length most-positive-fixnum)
+;;; The sizes are fixed rather than taken from the host's fixnums (62 bits on
+;;; SBCL, 61 on ECL, 31 on ABCL) so that programs compute the same results on
+;;; every Common Lisp; 62 keeps words fixnums on 64-bit SBCL.
+(defconstant +sml-word-size+ 62
   "Word.wordSize.")
+
+(defconstant +sml-word-mask+ (1- (ash 1 +sml-word-size+)))
+
+;;; Int.int is unbounded at run time (integers never raise Overflow), but
+;;; Int.minInt and Int.maxInt report the 63-bit range, the same on every
+;;; Common Lisp.
+(defconstant +sml-min-int+ (- (ash 1 62)))
+(defconstant +sml-max-int+ (1- (ash 1 62)))
 
 (defun sml-word-type-bits (tyname)
   "The size in bits of word type TYNAME (as named by the static checker), or
 NIL if TYNAME is not a word type."
   (cond ((string= tyname "word") +sml-word-size+)
         ((string= tyname "word8") 8)))
+
+(defun sml-word-from-int (bits value)
+  (ldb (byte bits 0) value))
+
+(defun sml-word-to-int-x (bits word)
+  "WORD read as a BITS-bit two's complement integer."
+  (if (logbitp (1- bits) word)
+      (- word (ash 1 bits))
+      word))
+
+(defun sml-word-shift (bits word shift)
+  "WORD shifted left by SHIFT (right when SHIFT is negative), within BITS."
+  (if (>= (abs shift) bits)
+      0
+      (ldb (byte bits 0) (ash word shift))))
+
+(defun sml-word-arithmetic-shift-right (bits word shift)
+  (ldb (byte bits 0) (ash (sml-word-to-int-x bits word) (- (min shift bits)))))
+
 (defun sml-real-infinity (negativep)
   (portable-float-infinity negativep))
 
+(defun sml-real-quotient (a b)
+  "IEEE division: a zero divisor gives an infinity or a NaN."
+  (with-portable-float-traps-masked
+    (/ (float a 1d0) (float b 1d0))))
+
 (defun sml-/ (a)
-  (lambda (b)
-    (if (zerop b)
-        (sml-real-infinity (minusp a))
-        (/ a b))))
+  (lambda (b) (sml-real-quotient a b)))
+
+;;; Comparisons involving a NaN are false.  They are tested for explicitly:
+;;; comparing a NaN traps on some hosts, and SBCL's constraint propagation
+;;; assumes numbers are totally ordered (once (< x y) is false it folds
+;;; (>= x y) to true), so a real comparison must also be a call of its own.
+(declaim (notinline sml-real-< sml-real-> sml-real-<= sml-real->=))
+(defun sml-real-unordered-p (a b)
+  (or (portable-float-nan-p a) (portable-float-nan-p b)))
+(defun sml-real-< (a b) (and (not (sml-real-unordered-p a b)) (< a b)))
+(defun sml-real-> (a b) (and (not (sml-real-unordered-p a b)) (> a b)))
+(defun sml-real-<= (a b) (and (not (sml-real-unordered-p a b)) (<= a b)))
+(defun sml-real->= (a b) (and (not (sml-real-unordered-p a b)) (>= a b)))
 
 (defun sml-ordered-compare (a b)
+  "-1, 0 or 1 as A is less than, equal to or greater than B; NIL when they
+are unordered (a NaN is involved)."
   (cond
     ((and (numberp a) (numberp b))
-     (cond ((< a b) -1)
-           ((> a b) 1)
-           (t 0)))
+     (unless (sml-real-unordered-p a b)
+       (cond ((< a b) -1)
+             ((> a b) 1)
+             (t 0))))
     ((and (characterp a) (characterp b))
      (cond ((char< a b) -1)
            ((char> a b) 1)
@@ -849,10 +923,16 @@ NIL if TYNAME is not a word type."
     (t
      (error "Unsupported SML ordered comparison: ~S and ~S" a b))))
 
-(defun sml-< (a) (lambda (b) (minusp (sml-ordered-compare a b))))
-(defun sml-> (a) (lambda (b) (plusp (sml-ordered-compare a b))))
-(defun sml->= (a) (lambda (b) (not (minusp (sml-ordered-compare a b)))))
-(defun sml-<= (a) (lambda (b) (not (plusp (sml-ordered-compare a b)))))
+(defun sml-< (a) (lambda (b) (eql -1 (sml-ordered-compare a b))))
+(defun sml-> (a) (lambda (b) (eql 1 (sml-ordered-compare a b))))
+(defun sml->= (a)
+  (lambda (b)
+    (let ((order (sml-ordered-compare a b)))
+      (and order (>= order 0)))))
+(defun sml-<= (a)
+  (lambda (b)
+    (let ((order (sml-ordered-compare a b)))
+      (and order (<= order 0)))))
 (defun sml-= (a) (lambda (b) (equal a b)))
 (defun sml-<> (a) (lambda (b) (not (equal a b))))
 
@@ -893,13 +973,19 @@ NIL if TYNAME is not a word type."
 (defun sml-ceil (v) (ceiling v))
 (defun sml-round (v) (round v))
 (defun sml-trunc (v) (truncate v))
-(defun sml-sqrt (v) (coerce (sqrt v) 'double-float))
-(defun sml-sin (v) (coerce (sin v) 'double-float))
-(defun sml-cos (v) (coerce (cos v) 'double-float))
-(defun sml-arctan (v) (coerce (atan v) 'double-float))
-(defun sml-exp (v) (coerce (exp v) 'double-float))
-(defun sml-ln (v) (coerce (log v) 'double-float))
-(defun sml-real (v) (coerce v 'double-float))
+(defun sml-sqrt (v) (sml-math-guarded #'sqrt v))
+(defun sml-sin (v) (sml-math-guarded #'sin v))
+(defun sml-cos (v) (sml-math-guarded #'cos v))
+(defun sml-arctan (v) (sml-math-guarded #'atan v))
+(defun sml-exp (v) (sml-math-guarded #'exp v))
+(defun sml-ln (v) (sml-math-guarded #'log v))
+(defun sml-real (v)
+  "Real.fromInt: the nearest double; integers beyond the double range become
+infinities."
+  (if (floatp v)
+      (coerce v 'double-float)
+      (or (portable-rational-to-double v)
+          (sml-real-infinity (minusp v)))))
 
 (defun sml-int-to-string (value)
   (if (minusp value)
@@ -945,17 +1031,39 @@ NIL if TYNAME is not a word type."
   (char-code char))
 
 (defun sml-chr (code)
-  (code-char code))
+  "Char.chr: SML characters are the 8-bit codes 0 to 255."
+  (if (and (integerp code) (<= 0 code 255))
+      (code-char code)
+      (sml-raise-named-exception "Chr")))
 
 (defun sml-str (char)
   (string char))
 
+(defvar *sml-initial-exceptions* (make-hash-table :test #'equal)
+  "The exceptions of the initial basis by name.  There is one of each, shared
+by every SML package.")
+
+(defun sml-initial-exception (name)
+  "The initial basis' exception NAME (`Match`, `Div`, `Fail`, ...)."
+  (or (gethash name *sml-initial-exceptions*)
+      (setf (gethash name *sml-initial-exceptions*)
+            (if (string= name "Fail")
+                (make-sml-exception-function name)
+                (make-sml-exception-constructor name)))))
+
 (defun sml-raise-named-exception (name)
-  (let ((symbol (sml-symbol name *sml-package*)))
-    (sml-raise
-     (if (boundp symbol)
-         (symbol-value symbol)
-         (make-sml-exception-constructor name)))))
+  "Raise the initial basis' exception NAME.  A program that binds the name to
+another exception does not change what the primitives raise."
+  (sml-raise (sml-initial-exception name)))
+
+(declaim (ftype (function (t &optional t t) nil) sml-raise-match-failure))
+(defun sml-raise-match-failure (exception-name &optional where position)
+  "Raise `Match` or `Bind` (EXCEPTION-NAME) because no rule of a match
+applied.  WHERE names the function, or is \"fn\", \"case\" or \"val\";
+POSITION is the source offset of the match, when known."
+  (error 'sml-raised-exception
+         :value (sml-initial-exception exception-name)
+         :context (and where (list where position))))
 
 (defun sml-sequence-sub (sequence index)
   (if (and (integerp index)
@@ -1030,13 +1138,13 @@ NIL if TYNAME is not a word type."
   (third tuple))
 
 (defun sml-word-not (value)
-  (logand most-positive-fixnum (lognot value)))
+  (logand +sml-word-mask+ (lognot value)))
 
-(defun sml-word-shift-left (tuple)
-  (ash (sml-tuple-first tuple) (sml-tuple-second tuple)))
+(defun sml-word-shift-left (tuple &optional (bits +sml-word-size+))
+  (sml-word-shift bits (sml-tuple-first tuple) (sml-tuple-second tuple)))
 
-(defun sml-word-shift-right (tuple)
-  (ash (sml-tuple-first tuple) (- (sml-tuple-second tuple))))
+(defun sml-word-shift-right (tuple &optional (bits +sml-word-size+))
+  (sml-word-shift bits (sml-tuple-first tuple) (- (sml-tuple-second tuple))))
 
 (defun sml-text-io-stream (stream)
   (case stream
@@ -1048,15 +1156,23 @@ NIL if TYNAME is not a word type."
          stream
          (error "Invalid SML TextIO stream: ~S" stream)))))
 
+(defparameter *sml-external-format* :utf-8
+  "The encoding of SML source files, of the files TextIO opens and of the
+Common Lisp cl-sml writes.  Implementations disagree on the default (ECL
+follows the locale, ABCL the JVM), so it is always given explicitly.")
+
 (defun sml-text-io-open-in (path)
-  (open path :direction :input :element-type 'character))
+  (open path :direction :input :element-type 'character
+             :external-format *sml-external-format*))
 
 (defun sml-text-io-open-out (path)
   (open path :direction :output :element-type 'character
+             :external-format *sml-external-format*
              :if-exists :supersede :if-does-not-exist :create))
 
 (defun sml-text-io-open-append (path)
   (open path :direction :output :element-type 'character
+             :external-format *sml-external-format*
              :if-exists :append :if-does-not-exist :create))
 
 (defun sml-text-io-close-in (stream)
@@ -1152,9 +1268,10 @@ NIL if TYNAME is not a word type."
   (not (or (sml-real-nan-p x) (sml-real-infinite-p x))))
 
 (defun sml-real-to-integer (x rounder)
-  (if (sml-real-finite-p x)
-      (values (funcall rounder x))
-      (sml-raise-named-exception "Overflow")))
+  "Real.floor and friends: a NaN raises Domain, an infinity Overflow."
+  (cond ((sml-real-nan-p x) (sml-raise-named-exception "Domain"))
+        ((sml-real-infinite-p x) (sml-raise-named-exception "Overflow"))
+        (t (values (funcall rounder x)))))
 
 (defun sml-real-to-string (x)
   (cond
@@ -1175,7 +1292,9 @@ NIL if TYNAME is not a word type."
                      (if (>= k n)
                          (format nil "~A~A.0" digits
                                  (make-string (- k n) :initial-element #\0))
-                         (format nil "~A.~A" (subseq digits 0 k) (subseq digits k))))
+                         (format nil "~A.~A"
+                                 (if (zerop k) "0" (subseq digits 0 k))
+                                 (subseq digits k))))
                     ((and (< k 0) (> k -3))
                      (format nil "0.~A~A" (make-string (- k) :initial-element #\0)
                              digits))
@@ -1195,13 +1314,14 @@ NIL if TYNAME is not a word type."
                          (- least-positive-double-float)))
           (t
            (let ((ulp (scale-float 1d0 (- (nth-value 1 (decode-float x)) 53))))
-             (if (eq (> y x) (plusp x))
-                 (+ x (* (signum x) ulp))
-                 (- x (* (signum x) ulp))))))))
+             (with-sml-float-traps-masked
+               (if (eq (> y x) (plusp x))
+                   (+ x (* (signum x) ulp))
+                   (- x (* (signum x) ulp)))))))))
 
 (defun sml-math-guarded (function value)
   (with-sml-float-traps-masked
-    (let ((result (funcall function value)))
+    (let ((result (funcall function (float value 1d0))))
       (if (complexp result)
           (sml-nan)
           (coerce result 'double-float)))))
@@ -1232,7 +1352,7 @@ NIL if TYNAME is not a word type."
 (defun sml-basis-primitive (name)
   (or (cdr (assoc name
                   `(("General.exnName" . ,#'sml-exn-name-primitive)
-                    ("String.maxSize" . ,(sml-constant-primitive most-positive-fixnum))
+                    ("String.maxSize" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("String.size" . ,#'sml-size)
                     ("String.sub" . ,(lambda (tuple)
                                        (sml-sequence-sub (second tuple) (third tuple))))
@@ -1241,16 +1361,18 @@ NIL if TYNAME is not a word type."
                     ("Char.ord" . ,#'sml-ord)
                     ("Char.chr" . ,#'sml-chr)
                     ("Int.precision" . ,(sml-constant-primitive (sml-none-value)))
-                    ("Int.minInt" . ,(sml-constant-primitive (sml-some-value most-negative-fixnum)))
-                    ("Int.maxInt" . ,(sml-constant-primitive (sml-some-value most-positive-fixnum)))
+                    ("Int.minInt" . ,(sml-constant-primitive (sml-some-value +sml-min-int+)))
+                    ("Int.maxInt" . ,(sml-constant-primitive (sml-some-value +sml-max-int+)))
                     ("Int.quot" . ,(lambda (tuple)
                                       (truncate (second tuple) (third tuple))))
                     ("Int.rem" . ,(lambda (tuple)
                                      (rem (second tuple) (third tuple))))
                     ("Word.wordSize" . ,(sml-constant-primitive +sml-word-size+))
                     ("Word.toInt" . ,#'identity)
-                    ("Word.toIntX" . ,#'identity)
-                    ("Word.fromInt" . ,#'identity)
+                    ("Word.toIntX" . ,(lambda (word)
+                                        (sml-word-to-int-x +sml-word-size+ word)))
+                    ("Word.fromInt" . ,(lambda (value)
+                                         (sml-word-from-int +sml-word-size+ value)))
                     ("Word.notb" . ,#'sml-word-not)
                     ("Word.orb" . ,(lambda (tuple)
                                      (logior (sml-tuple-first tuple) (sml-tuple-second tuple))))
@@ -1260,12 +1382,18 @@ NIL if TYNAME is not a word type."
                                       (logand (sml-tuple-first tuple) (sml-tuple-second tuple))))
                     ("Word.<<" . ,#'sml-word-shift-left)
                     ("Word.>>" . ,#'sml-word-shift-right)
-                    ("Word.~>>" . ,#'sml-word-shift-right)
+                    ("Word.~>>" . ,(lambda (tuple)
+                                     (sml-word-arithmetic-shift-right
+                                      +sml-word-size+
+                                      (sml-tuple-first tuple)
+                                      (sml-tuple-second tuple))))
                     ("Word8.toLarge" . ,#'identity)
-                    ("Word8.toLargeX" . ,#'identity)
+                    ("Word8.toLargeX" . ,(lambda (word)
+                                           (sml-word-from-int +sml-word-size+
+                                                              (sml-word-to-int-x 8 word))))
                     ("Word8.fromLarge" . ,(lambda (value) (logand value #xff)))
                     ("Word8.toInt" . ,#'identity)
-                    ("Word8.toIntX" . ,#'identity)
+                    ("Word8.toIntX" . ,(lambda (word) (sml-word-to-int-x 8 word)))
                     ("Word8.fromInt" . ,(lambda (value) (logand value #xff)))
                     ("Word8.notb" . ,(lambda (value) (logand #xff (lognot value))))
                     ("Word8.orb" . ,(lambda (tuple)
@@ -1277,11 +1405,12 @@ NIL if TYNAME is not a word type."
                     ("Word8.andb" . ,(lambda (tuple)
                                        (logand #xff (logand (sml-tuple-first tuple)
                                                             (sml-tuple-second tuple)))))
-                    ("Word8.<<" . ,(lambda (tuple)
-                                     (logand #xff (sml-word-shift-left tuple))))
-                    ("Word8.>>" . ,#'sml-word-shift-right)
-                    ("Word8.~>>" . ,#'sml-word-shift-right)
-                    ("Vector.maxLen" . ,(sml-constant-primitive most-positive-fixnum))
+                    ("Word8.<<" . ,(lambda (tuple) (sml-word-shift-left tuple 8)))
+                    ("Word8.>>" . ,(lambda (tuple) (sml-word-shift-right tuple 8)))
+                    ("Word8.~>>" . ,(lambda (tuple)
+                                      (sml-word-arithmetic-shift-right
+                                       8 (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                    ("Vector.maxLen" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("Vector.length" . ,#'length)
                     ("Vector.sub" . ,(lambda (tuple)
                                        (sml-sequence-sub (sml-tuple-first tuple)
@@ -1321,9 +1450,10 @@ NIL if TYNAME is not a word type."
                     ("Math.acos" . ,(lambda (v) (sml-math-guarded #'acos v)))
                     ("Math.atan" . ,(lambda (v) (sml-math-guarded #'atan v)))
                     ("Math.atan2" . ,(lambda (tuple)
-                                       (coerce (atan (sml-tuple-first tuple)
-                                                     (sml-tuple-second tuple))
-                                               'double-float)))
+                                       (with-sml-float-traps-masked
+                                         (coerce (atan (sml-tuple-first tuple)
+                                                       (sml-tuple-second tuple))
+                                                 'double-float))))
                     ("Math.sinh" . ,(lambda (v) (sml-math-guarded #'sinh v)))
                     ("Math.cosh" . ,(lambda (v) (sml-math-guarded #'cosh v)))
                     ("Math.tanh" . ,(lambda (v) (sml-math-guarded #'tanh v)))
@@ -1338,12 +1468,14 @@ NIL if TYNAME is not a word type."
                                              (coerce result 'double-float))))))
                     ("Real.fromInt" . ,#'sml-real)
                     ("Real.==" . ,(lambda (tuple)
-                                    (= (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                                    (with-sml-float-traps-masked
+                                      (= (sml-tuple-first tuple) (sml-tuple-second tuple)))))
                     ("Real.?=" . ,(lambda (tuple)
                                     (let ((x (sml-tuple-first tuple))
                                           (y (sml-tuple-second tuple)))
-                                      (or (= x y)
-                                          (and (sml-real-nan-p x) (sml-real-nan-p y))))))
+                                      ;; True when unordered, as well as when equal.
+                                      (or (sml-real-nan-p x) (sml-real-nan-p y)
+                                          (= x y)))))
                     ("Real.floor" . ,(lambda (x) (sml-real-to-integer x #'floor)))
                     ("Real.ceil" . ,(lambda (x) (sml-real-to-integer x #'ceiling)))
                     ("Real.trunc" . ,(lambda (x) (sml-real-to-integer x #'truncate)))
@@ -1476,9 +1608,7 @@ NIL if TYNAME is not a word type."
                     "Overflow" "Size" "Subscript" "Fail"))
       (let ((symbol (sml-symbol-in-package-name name package)))
         (unless (boundp symbol)
-          (if (string= name "Fail")
-              (setf (symbol-value symbol) (make-sml-exception-function name))
-              (setf (symbol-value symbol) (make-sml-exception-constructor name)))
+          (setf (symbol-value symbol) (sml-initial-exception name))
           (register-sml-binding-type symbol
                                      (if (string= name "Fail")
                                          '(:fn "string" "exn")

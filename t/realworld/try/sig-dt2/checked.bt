@@ -1,0 +1,61 @@
+PARSE
+ESRAP-PARSE-ERROR: At
+
+  structure S : sig
+      datatype p = A | B
+  
+                     ^ (Line 2, Column 19, Position 37)
+
+In context SML-PROGRAM:
+
+While parsing SML-PROGRAM. Problem:
+
+  The production
+  
+    #\|
+  
+  does not satisfy the predicate ALPHA-CHAR-P.
+
+Expected:
+
+     the character Tab
+  or the character Newline
+  or the character Space
+  or the character ! (EXCLAMATION_MARK)
+  or the character " (QUOTATION_MARK)
+  or the character # (NUMBER_SIGN)
+  or the character ( (LEFT_PARENTHESIS)
+  or the string "(*"
+  or the string "0w"
+  or the string "0x"
+  or the character ; (SEMICOLON)
+  or the character [ (LEFT_SQUARE_BRACKET)
+  or the string "case"
+  or the string "datatype"
+  or the string "exception"
+  or the string "fn"
+  or the string "fun"
+  or the string "functor"
+  or the string "if"
+  or the string "infix"
+  or the string "infixr"
+  or the string "let"
+  or the string "local"
+  or the string "nonfix"
+  or the string "op"
+  or the string "open"
+  or the string "raise"
+  or the string "signature"
+  or the string "structure"
+  or the string "type"
+  or the string "val"
+  or the string "while"
+  or the character { (LEFT_CURLY_BRACKET)
+  or the character ~ (TILDE)
+  or any character satisfying ALPHA-CHAR-P
+  or a character in [0-9]
+  or <end of input>
+  or anything but the character | (VERTICAL_LINE)
+
+cl-sml frames (innermost first):
+  ESRAP:ESRAP-PARSE-ERROR

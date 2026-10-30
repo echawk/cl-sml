@@ -1,0 +1,20 @@
+fun p s = print (s ^ "\n")
+val ss = Substring.full "  hello, world  "
+val _ = p ("[" ^ Substring.string ss ^ "]")
+val t = Substring.dropl Char.isSpace (Substring.dropr Char.isSpace ss)
+val _ = p ("[" ^ Substring.string t ^ "] " ^ Int.toString (Substring.size t))
+val _ = p (Substring.string (Substring.slice (t, 7, SOME 5)))
+val _ = p (Substring.string (Substring.triml 2 t) ^ "|" ^ Substring.string (Substring.trimr 2 t))
+val (a, rest) = Substring.splitl (fn c => c <> #",") t
+val _ = p (Substring.string a ^ "|" ^ Substring.string rest)
+val _ = p (Substring.string (Substring.takel Char.isAlpha t))
+val _ = p (case Substring.getc t of SOME (c, r) => str c ^ "+" ^ Substring.string r | NONE => "NONE")
+val _ = p (case Substring.first t of SOME c => str c | NONE => "NONE")
+val _ = p (if Substring.isEmpty (Substring.full "") then "empty" else "nonempty")
+val _ = p (Substring.string (Substring.substring ("abcdef", 1, 3)))
+val _ = p (str (Substring.sub (t, 1)))
+val _ = p (if Substring.isPrefix "hel" t then "prefix" else "no prefix")
+val (pre, suf) = Substring.position "wor" t
+val _ = p (Substring.string pre ^ "|" ^ Substring.string suf)
+val _ = p (Substring.concat [Substring.full "ab", Substring.full "cd"])
+val _ = p (let val (s, i, n) = Substring.base (Substring.extract ("abcdef", 2, NONE)) in s ^ " " ^ Int.toString i ^ " " ^ Int.toString n end)

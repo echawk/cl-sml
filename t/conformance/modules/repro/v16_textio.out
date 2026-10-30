@@ -1,0 +1,4 @@
+SOME [a\n]
+SOME [last\n]
+NONE
+Io TextIO.openIn
