@@ -107,6 +107,11 @@ use "TextIO.sml";
 use "BIN_IO-sig.sml";
 use "BinIO.sml";
 
+use "TIME-sig.sml";         (* cl-sml *)
+use "Time.sml";             (* cl-sml *)
+use "TIMER-sig.sml";        (* cl-sml *)
+use "Timer.sml";            (* cl-sml *)
+
 use "OS_FILE_SYS-sig.sml";
 use "OS_PATH-sig.sml";
 use "OS_PROCESS-sig.sml";
@@ -121,10 +126,6 @@ use "COMMAND_LINE-sig.sml";
 use "CommandLine.sml";
 (*use "DATE-sig.sml";*)
 (*use "Date.sml";*)
-(*use "TIME-sig.sml";*)
-(*use "Time.sml";*)
-(*use "TIMER-sig.sml";*)
-(*use "Timer.sml";*)
 
 use "values.sml";
 

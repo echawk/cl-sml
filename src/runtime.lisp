@@ -1547,6 +1547,58 @@ end."
           do (write-byte (ldb (byte 8 0) byte) out))
     (sml-unit)))
 
+;;; Time and Timer: times are integer nanoseconds.
+
+(defconstant +unix-epoch-universal-time+ 2208988800
+  "1970-01-01T00:00:00Z as a universal time.")
+
+(defvar *sml-real-time-base* nil
+  "A universal time and the internal real time at that moment.")
+
+(defun internal-time-nanoseconds (internal-time)
+  (round (* internal-time 1000000000) internal-time-units-per-second))
+
+(defun sml-time-now (unit)
+  "Time.now: nanoseconds since the Unix epoch, to the precision of the
+internal real time."
+  (declare (ignore unit))
+  (destructuring-bind (universal . internal)
+      (or *sml-real-time-base*
+          (setf *sml-real-time-base*
+                (cons (get-universal-time) (get-internal-real-time))))
+    (+ (* (- universal +unix-epoch-universal-time+) 1000000000)
+       (internal-time-nanoseconds (- (get-internal-real-time) internal)))))
+
+(defun sml-raise-sys-err (message)
+  "Raise OS.SysErr (MESSAGE, NONE)."
+  (sml-raise (sml-io-cause message)))
+
+(defmacro with-sml-sys-err (&body body)
+  "BODY, with file errors raised as OS.SysErr."
+  `(handler-case (progn ,@body)
+     (file-error (condition)
+       (sml-raise-sys-err (princ-to-string condition)))))
+
+(defun sml-os-file-sys-file-size (path)
+  (with-sml-sys-err
+    (with-open-file (stream path :element-type '(unsigned-byte 8))
+      (file-length stream))))
+
+(defun sml-os-file-sys-mod-time (path)
+  (with-sml-sys-err
+    (* (- (or (file-write-date path)
+              (sml-raise-sys-err (format nil "~A: no modification time" path)))
+          +unix-epoch-universal-time+)
+       1000000000)))
+
+(defun sml-os-file-sys-tmp-name (unit)
+  (declare (ignore unit))
+  (let ((pathname (temporary-sml-artifact-pathname)))
+    ;; Created, so that no other caller gets the name.
+    (with-open-file (stream pathname :direction :output :if-does-not-exist :create)
+      (declare (ignore stream)))
+    (namestring pathname)))
+
 (defun sml-os-file-sys-get-dir (unit)
   (declare (ignore unit))
   (namestring (truename *default-pathname-defaults*)))
@@ -2036,7 +2088,37 @@ is NIL; results beyond the range raise Overflow."
                     ("OS.FileSys.isDir" . ,#'sml-os-file-sys-is-dir)
                     ("OS.FileSys.mkDir" . ,#'sml-os-file-sys-mk-dir)
                     ("OS.FileSys.rmDir" . ,#'sml-os-file-sys-rm-dir)
-                    ("OS.Process.terminate" . ,#'sml-os-process-terminate))
+                    ("OS.Process.terminate" . ,#'sml-os-process-terminate)
+                    ("OS.FileSys.fullPath" . ,(lambda (path)
+                                                (with-sml-sys-err
+                                                  (namestring (truename path)))))
+                    ("OS.FileSys.modTime" . ,#'sml-os-file-sys-mod-time)
+                    ("OS.FileSys.fileSize" . ,#'sml-os-file-sys-file-size)
+                    ("OS.FileSys.remove" . ,(lambda (path)
+                                              (with-sml-sys-err
+                                                (or (probe-file path)
+                                                    (sml-raise-sys-err
+                                                     (format nil "~A: no such file" path)))
+                                                (delete-file path))
+                                              (sml-unit)))
+                    ("OS.FileSys.rename" . ,(lambda (record)
+                                              (with-sml-sys-err
+                                                (uiop:rename-file-overwriting-target
+                                                 (sml-record-select record "old")
+                                                 (sml-record-select record "new")))
+                                              (sml-unit)))
+                    ("OS.FileSys.exists" . ,(lambda (path)
+                                              (and (or (probe-file path)
+                                                       (uiop:directory-exists-p path))
+                                                   t)))
+                    ("OS.FileSys.tmpName" . ,#'sml-os-file-sys-tmp-name)
+                    ("Time.now" . ,#'sml-time-now)
+                    ("Timer.cpuTime" . ,(lambda (unit)
+                                          (declare (ignore unit))
+                                          (internal-time-nanoseconds (get-internal-run-time))))
+                    ("Timer.realTime" . ,(lambda (unit)
+                                           (declare (ignore unit))
+                                           (internal-time-nanoseconds (get-internal-real-time)))))
                   :test #'string=))
       (sml-primitive-stub name)))
 

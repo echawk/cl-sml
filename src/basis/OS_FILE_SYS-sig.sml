@@ -23,16 +23,22 @@ sig
 (*
   val isLink : string -> bool
   val readLink : string -> string
+*)
+  (* cl-sml *)
   val fullPath : string -> string
   val realPath : string -> string
   val modTime : string -> Time.time
   val fileSize : string -> Position.int
+(*
   val setTime : string * Time.time option -> unit
+*)
+  (* cl-sml *)
   val remove : string -> unit
   val rename : {old : string, new : string} -> unit
   datatype access_mode = A_READ | A_WRITE | A_EXEC
   val access : string * access_mode list -> bool
   val tmpName : unit -> string
+(*
   eqtype file_id
   val fileId : string -> file_id
   val hash : file_id -> word
