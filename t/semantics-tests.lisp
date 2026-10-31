@@ -346,3 +346,52 @@ val g = let val x = 1 local val x = 10 in val y = x + 1 end in y end
 val _ = print (Int.toString g ^ \"\\n\")
 val h = let local val x = 2 in val x = x + 3 end in x end
 val _ = print (Int.toString h ^ \"\\n\")"))))
+
+;;; The Basis Library, which every package sees (src/basis/).
+
+(test basis-is-visible-and-programs-shadow-it-locally
+  (is (string= (lines "3" "Empty" "LESS" "2" "1")
+               (run-sml "val _ = print (Int.toString (List.length [1, 2, 3]) ^ \"\\n\")
+val _ = print ((Int.toString (hd [])) handle Empty => \"Empty\\n\")
+val _ = print (case Int.compare (1, 2) of LESS => \"LESS\\n\" | _ => \"other\\n\")
+structure List = struct fun length _ = 2 end
+val _ = print (Int.toString (List.length [1]) ^ \"\\n\")"
+                        "val _ = print (Int.toString (length [1]) ^ \"\\n\")")))
+  ;; The program's List did not replace the basis's.
+  (is (string= (lines "1")
+               (run-sml "val _ = print (Int.toString (List.length [1]) ^ \"\\n\")"))))
+
+(test int-arithmetic-raises-overflow
+  (is (string= (lines "Overflow" "Overflow" "Overflow" "Overflow" "Div" "4611686018427387903")
+               (run-sml "fun t f = print ((Int.toString (f ()); \"none\\n\") handle Overflow => \"Overflow\\n\" | Div => \"Div\\n\")
+val mx = valOf Int.maxInt
+val _ = t (fn () => mx + 1)
+val _ = t (fn () => valOf Int.minInt - 1)
+val _ = t (fn () => mx * 2)
+val _ = t (fn () => floor 1E30)
+val _ = t (fn () => Int.quot (1, 0))
+val _ = print (Int.toString mx ^ \"\\n\")"))))
+
+(test real-to-string-is-gen-12
+  (is (string= (lines "1.0" "0.333333333333" "10000000000.0" "1E22" "~2.5" "3.142")
+               (run-sml "fun p r = print (r ^ \"\\n\")
+val _ = p (Real.toString 1.0)
+val _ = p (Real.toString (1.0 / 3.0))
+val _ = p (Real.toString 1E10)
+val _ = p (Real.toString 1E22)
+val _ = p (Real.toString ~2.5)
+val _ = p (Real.fmt (StringCvt.FIX (SOME 3)) 3.14159)"))))
+
+(test equality-is-structural-except-for-references
+  (is (string= (lines "true" "false" "true")
+               (run-sml "fun b x = print ((if x then \"true\" else \"false\") ^ \"\\n\")
+val _ = b (vector [1, 2] = vector [1, 2])
+val _ = b (Array.fromList [1] = Array.fromList [1])
+val a = Array.fromList [1]
+val _ = b (a = a)"))))
+
+(test intinf-and-sized-integers
+  (is (string= (lines "1267650600228229401496703205376" "Overflow" "FFFFFFFFFFFFFFFF")
+               (run-sml "val _ = print (IntInf.toString (IntInf.pow (IntInf.fromInt 2, 100)) ^ \"\\n\")
+val _ = print ((Int32.toString (Int32.+ (valOf Int32.maxInt, Int32.fromInt 1))) handle Overflow => \"Overflow\\n\")
+val _ = print (Word64.toString (Word64.fromInt ~1) ^ \"\\n\")"))))
