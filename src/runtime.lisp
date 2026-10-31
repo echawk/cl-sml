@@ -405,6 +405,14 @@ missing when called."
                  else if (string= sub-prefix "")
                         collect (cons "" (sml-substructure substructure name))))))))
 
+(defun restrict-sml-structure (structure names)
+  "STRUCTURE with only the members NAMES (a signature ascribed to it)."
+  (make-sml-structure
+   (loop for name in names
+         for (value presentp) = (multiple-value-list (sml-structure-member structure name))
+         when presentp
+           collect (cons name value))))
+
 (defun apply-sml-functor (package-name functor-name argument instance-name)
   "The structure that functor FUNCTOR-NAME builds from the structure value
 ARGUMENT.  INSTANCE-NAME, the qualified name of the structure being bound,

@@ -606,7 +606,7 @@ separated by blanks."
                           (second dec) structure-members)
                          members))))
         (:structure-app
-         (let ((structure-members (compile-time-functor-members (third dec))))
+         (let ((structure-members (structure-application-members dec)))
            (push (cons (second dec) structure-members) structures)
            (setf members
                  (append (qualify-structure-member-names
@@ -1294,12 +1294,29 @@ declarations, those of later declarations first."
         append (local-datatype-constructor-bindings dec)
         append (local-open-constructor-bindings dec)))
 
+(defun open-shadowing-lexical-bindings (dec lexical-env)
+  "The bindings of `open' declaration DEC (see LOCAL-OPEN-SYMBOL-BINDINGS) of
+names LEXICAL-ENV binds, which they shadow."
+  (remove-if-not (lambda (binding) (lexical-symbol-for-name (car binding) lexical-env))
+                 (local-open-symbol-bindings dec)))
+
+(defun declarations-body-lexical-env (decs lexical-env)
+  "The lexical environment after the local declarations DECS."
+  (let ((env lexical-env))
+    (dolist (dec decs env)
+      (setf env (append (if (eq (car dec) :open)
+                            (open-shadowing-lexical-bindings dec env)
+                            (local-declaration-lexical-bindings dec))
+                        env)))))
+
 (defun compile-local-decls-into-body (decs body &optional (local-exceptions nil) lexical-env)
   (if (null decs)
       body
       (let* ((dec (first decs))
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
-             (dec-bindings (local-declaration-lexical-bindings dec))
+             (dec-bindings (if (eq (car dec) :open)
+                               (open-shadowing-lexical-bindings dec lexical-env)
+                               (local-declaration-lexical-bindings dec)))
              (open-symbol-bindings (local-open-symbol-bindings dec))
              (open-constructor-bindings (local-open-constructor-bindings dec))
              (wrapped-body
@@ -1321,8 +1338,7 @@ declarations, those of later declarations first."
          (structure-prefixes (module-local-structure-prefixes
                               decs
                               (or *sml-module-prefix* "")))
-         (body-env (append (declarations-lexical-bindings decs)
-                           lexical-env))
+         (body-env (declarations-body-lexical-env decs lexical-env))
          (body-exceptions (append (declarations-exposed-exceptions decs)
                                   local-exceptions))
          (open-symbol-bindings (declarations-local-open-symbol-bindings decs))
@@ -2157,10 +2173,10 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
     ((eq (car ast) :structure)
      (let* ((module-name (current-qualified-sml-name (second ast)))
             (members (structure-declaration-members ast))
-            (structure-prefixes (module-local-structure-prefixes (third ast) module-name))
-            (forms (let ((*sml-module-prefix* module-name)
-                         (*sml-local-structure-prefixes* (append structure-prefixes
-                                                                 *sml-local-structure-prefixes*)))
+            ;; A substructure's name denotes it after its declaration (see
+            ;; COMPILE-PROGRAM-DECLS); before, e.g. in its own body, it
+            ;; denotes the structure the name had outside.
+            (forms (let ((*sml-module-prefix* module-name))
                      (compile-program-decls (third ast)
                                             local-exceptions
                                             lexical-env))))
@@ -2255,8 +2271,18 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
         specs
         (lookup-sml-functor-member-specs (target-sml-package-name) name))))
 
-(defun compile-time-functor-members (name)
-  (mapcar #'first (compile-time-functor-member-specs name)))
+(defun structure-application-member-specs (dec)
+  "The member specs of the structure (:structure-app name funid strexp
+[:sigexp S]) declaration DEC binds, as far as they are known."
+  (let ((specs (compile-time-functor-member-specs (resolve-functor-name (third dec))))
+        (names (functor-scope-signature-names (getf (cddddr dec) :sigexp) dec)))
+    (if (eq names :all)
+        specs
+        (remove-if-not (lambda (spec) (member (first spec) names :test #'string=))
+                       specs))))
+
+(defun structure-application-members (dec)
+  (mapcar #'first (structure-application-member-specs dec)))
 
 (defvar *functor-scope-constructors* nil
   "While a functor body is compiled: the variable holding a datatype
@@ -2329,11 +2355,37 @@ structure bound at top level that the body does not name otherwise."
           (unless descriptor
             (return nil)))))))
 
+(defun functor-scope-opened-structure (opened name substructurep)
+  "The structure among OPENED (descriptors, the newest first) whose member
+NAME (a substructure when SUBSTRUCTUREP) a structure that opened them has."
+  (flet ((has-member-p (descriptor)
+           (ecase (first descriptor)
+             (:global
+              (let ((members (lookup-sml-module-members-for-compiler
+                              (second descriptor) nil)))
+                (if substructurep
+                    (let ((prefix (format nil "~A." name)))
+                      (some (lambda (member) (string-prefix-p prefix member)) members))
+                    (member name members :test #'string=))))
+             (:value
+              (let ((members (functor-value-known-members (second descriptor)
+                                                          (third descriptor))))
+                (if substructurep
+                    (let ((prefix (format nil "~A." name)))
+                      (some (lambda (member) (string-prefix-p prefix member)) members))
+                    (member name members :test #'string=))))
+             (:lexical
+              (assoc name (if substructurep (third descriptor) (second descriptor))
+                     :test #'string=)))))
+    (or (find-if #'has-member-p opened)
+        ;; Members of a structure known by its value need not be known yet.
+        (find :value opened :key #'first))))
+
 (defun functor-scope-substructure (descriptor name)
   (ecase (first descriptor)
     (:lexical
      (or (cdr (assoc name (third descriptor) :test #'string=))
-         (let ((opened (first (fourth descriptor))))
+         (let ((opened (functor-scope-opened-structure (fourth descriptor) name t)))
            (and opened (functor-scope-substructure opened name)))))
     (:value
      (list :value (second descriptor) (qualify-sml-name (third descriptor) name)))
@@ -2350,7 +2402,7 @@ holds member NAME of the structure DESCRIPTOR describes, or NIL."
   (ecase (first descriptor)
     (:lexical
      (or (cdr (assoc name (second descriptor) :test #'string=))
-         (let ((opened (first (fourth descriptor))))
+         (let ((opened (functor-scope-opened-structure (fourth descriptor) name nil)))
            (and opened (functor-scope-member opened name)))))
     (:value
      (functor-value-member-variable (second descriptor)
@@ -2409,6 +2461,13 @@ the functor body being compiled."
            `(sml-substructure ,variable ,path))))
     (:global
      `(sml-global-structure ,(target-sml-package-name) ,(second descriptor)))))
+
+(defun restrict-structure-value-form (form names)
+  "A form for the value of FORM, a structure, restricted to the members
+NAMES (or FORM when NAMES is :ALL)."
+  (if (eq names :all)
+      form
+      `(restrict-sml-structure ,form ',names)))
 
 (defun structure-value-form (name)
   "A form for the value of the structure that long identifier NAME denotes."
@@ -2732,17 +2791,28 @@ symbols named after the instance (SML-INSTANCE-CONSTRUCTOR-TAG)."
 
 (defun functor-scope-open (scope name)
   "SCOPE after `open NAME'."
-  (let ((descriptor (with-functor-scope (scope) (functor-scope-structure name))))
-    (ecase (and descriptor (first descriptor))
+  (functor-scope-open-structure
+   scope
+   (with-functor-scope (scope)
+     (or (functor-scope-structure name)
+         (list :global (resolve-structure-prefix name))))))
+
+(defun functor-scope-open-structure (scope descriptor)
+  "SCOPE after opening the structure DESCRIPTOR describes."
+  (ecase (first descriptor)
       (:lexical
        (destructuring-bind (members substructures opened) (rest descriptor)
-         (updated-functor-scope
-          scope
-          :env (append members (functor-scope-env scope))
-          :members (append members (functor-scope-members scope))
-          :structures (append substructures (functor-scope-structures scope))
-          :substructures (append substructures (functor-scope-substructures scope))
-          :opened (append opened (functor-scope-opened scope)))))
+         (let ((new scope))
+           ;; What the structure opened is visible again, then its own
+           ;; members.
+           (dolist (structure (reverse opened))
+             (setf new (functor-scope-open-structure new structure)))
+           (updated-functor-scope
+            new
+            :env (append members (functor-scope-env new))
+            :members (append members (functor-scope-members new))
+            :structures (append substructures (functor-scope-structures new))
+            :substructures (append substructures (functor-scope-substructures new))))))
       (:value
        (let ((new (updated-functor-scope
                    scope :opened (cons descriptor (functor-scope-opened scope))))
@@ -2758,8 +2828,8 @@ symbols named after the instance (SML-INSTANCE-CONSTRUCTOR-TAG)."
                                 new head (functor-scope-substructure descriptor head)))))
                  (setf new (functor-scope-bind-value
                             new member (functor-scope-member descriptor member))))))))
-      ((:global nil)
-       (let* ((global-name (if descriptor (second descriptor) name))
+      (:global
+       (let* ((global-name (second descriptor))
               (open-dec `(:open (,global-name)))
               (symbol-bindings (with-functor-scope (scope)
                                  (declaration-binding-symbol-bindings open-dec)))
@@ -2776,9 +2846,7 @@ symbols named after the instance (SML-INSTANCE-CONSTRUCTOR-TAG)."
           :symbol-env (append symbol-bindings (functor-scope-symbol-env scope))
           :constructor-env (append constructor-bindings
                                    (functor-scope-constructor-env scope))
-          :opened (cons (list :global (with-functor-scope (scope)
-                                        (resolve-structure-prefix global-name)))
-                        (functor-scope-opened scope))))))))
+          :opened (cons descriptor (functor-scope-opened scope)))))))
 
 (defun compile-functor-scope-local (dec scope continuation)
   "`local DECS1 in DECS2 end': the bindings of DECS1 are visible in DECS2
@@ -2823,7 +2891,8 @@ returns, and its members are bound when the body refers to them."
         ;; The argument is a structure of its own.
         (compile-functor-scope-dec
          `(:local (,(sml-structure-binding-node "%ARG" nil (fourth dec)))
-                  ((:structure-app ,(second dec) ,(third dec) (:str-id "%ARG"))))
+                  ((:structure-app ,(second dec) ,(third dec) (:str-id "%ARG")
+                                   ,@(cddddr dec))))
          scope continuation)
         (let* ((name (second dec))
                (functor-name (resolve-functor-name (third dec)))
@@ -2831,7 +2900,7 @@ returns, and its members are bound when the body refers to them."
                        (note-functor-scope-variable (make-symbol name))))
                (argument-form (with-functor-scope (scope)
                                 (structure-value-form (second argument)))))
-          (dolist (spec (compile-time-functor-member-specs functor-name))
+          (dolist (spec (structure-application-member-specs dec))
             (let ((variable (functor-value-member-variable value (first spec))))
               (push (cons variable (second spec)) *functor-scope-types*)
               (when (third spec)
@@ -2841,10 +2910,13 @@ returns, and its members are bound when the body refers to them."
                                (functor-scope-bind-structure scope name
                                                              (list :value value "")))))
             `(let* ((,(functor-value-variable value)
-                      (apply-sml-functor
-                       ,(target-sml-package-name) ,functor-name ,argument-form
-                       (format nil "~A.~A" ,*functor-scope-instance-name*
-                               ,(qualify-sml-name (functor-scope-path scope) name))))
+                      ,(restrict-structure-value-form
+                        `(apply-sml-functor
+                          ,(target-sml-package-name) ,functor-name ,argument-form
+                          (format nil "~A.~A" ,*functor-scope-instance-name*
+                                  ,(qualify-sml-name (functor-scope-path scope) name)))
+                        (with-functor-scope (scope)
+                          (functor-scope-signature-names (getf (cddddr dec) :sigexp) dec))))
                     ,@(functor-value-bindings value))
                (declare (ignorable ,(functor-value-variable value)
                                    ,@(mapcar #'first (functor-value-bindings value))))
@@ -2961,11 +3033,7 @@ bound to the package's symbols, and the members known only at run time."
                                 (declarations-bound-names argument-decs)))
          (argument-forms
            (and argument-decs
-                (let ((*sml-module-prefix* argument-module)
-                      (*sml-local-structure-prefixes*
-                        (append (module-local-structure-prefixes argument-decs
-                                                                 argument-module)
-                                *sml-local-structure-prefixes*)))
+                (let ((*sml-module-prefix* argument-module))
                   (compile-program-decls argument-decs local-exceptions lexical-env))))
          (argument-form
            (cond (argument-module
@@ -2974,7 +3042,8 @@ bound to the package's symbols, and the members known only at run time."
                   `(sml-global-structure ,(target-sml-package-name)
                                          ,(current-qualified-sml-name nested-name)))
                  (t (structure-value-form argument))))
-         (specs (compile-time-functor-member-specs functor-name))
+         (specs (structure-application-member-specs ast))
+         (exports (functor-scope-signature-names (getf (cddddr ast) :sigexp) ast))
          (value-specs (remove-if #'third specs))
          (instance (make-symbol "INSTANCE")))
     (note-sml-instance-bindings target-name)
@@ -2994,8 +3063,10 @@ bound to the package's symbols, and the members known only at run time."
                                                ',argument-members)))
          ,@(when cells
              `((declaim (special ,@cells))))
-         (let ((,instance (apply-sml-functor ,(target-sml-package-name) ,functor-name
-                                             ,argument-form ,target-name)))
+         (let ((,instance ,(restrict-structure-value-form
+                            `(apply-sml-functor ,(target-sml-package-name) ,functor-name
+                                                ,argument-form ,target-name)
+                            exports)))
            ,@(loop for spec in value-specs
                    for cell in cells
                    collect `(defparameter ,cell
@@ -3014,9 +3085,8 @@ bound to the package's symbols, and the members known only at run time."
          (list (cons name members)
                (cons full-name members))))
       (:structure-app
-       (let* ((full-name (current-qualified-sml-name name))
-              (source-name (resolve-functor-name (third dec)))
-              (members (compile-time-functor-members source-name)))
+       (let ((full-name (current-qualified-sml-name name))
+             (members (structure-application-members dec)))
          (list (cons name members)
                (cons full-name members))))
       (:structure-alias
@@ -3126,10 +3196,15 @@ environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
              (module-bindings (declaration-local-module-member-bindings dec))
              (symbol-bindings (declaration-binding-symbol-bindings dec))
-             (constructor-bindings (declaration-constructor-symbol-bindings dec)))
+             (constructor-bindings (declaration-constructor-symbol-bindings dec))
+             (structure-prefixes (and *sml-module-prefix*
+                                      (module-local-structure-prefixes
+                                       (list dec) *sml-module-prefix*))))
         (cons form
               (let ((*sml-local-structure-members* (append module-bindings
                                                            *sml-local-structure-members*))
+                    (*sml-local-structure-prefixes* (append structure-prefixes
+                                                           *sml-local-structure-prefixes*))
                     (*sml-binding-symbol-env* (append symbol-bindings
                                                      *sml-binding-symbol-env*))
                     (*sml-constructor-symbol-env* (append constructor-bindings
