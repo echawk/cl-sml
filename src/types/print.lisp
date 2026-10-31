@@ -120,18 +120,13 @@ TypeScheme.normalise)."
 
 (defun describe-env (env)
   "ENV's bindings, as HaMLet prints a basis: abstract types, type
-abbreviations, datatypes, exceptions, values, each group sorted by name."
+abbreviations, datatypes, exceptions, values, each group sorted by name.
+HaMLet prints an abstype's type as an abbreviation of itself."
   (let ((te (sort (env-latest (env-te env)) #'string< :key #'car))
         (ve (sort (env-latest (env-ve env)) #'string< :key #'car)))
     (with-output-to-string (out)
       (loop for (name . tystr) in te
-            when (eq (tystr-kind tystr) :abstype)
-              do (format out "~:[type~;eqtype~] ~A~A~%"
-                         (let ((tyname (tyfcn-tyname (tystr-tyfcn tystr))))
-                           (and tyname (tyname-equality tyname)))
-                         (tyvarseq-string (tyfcn-params (tystr-tyfcn tystr))) name))
-      (loop for (name . tystr) in te
-            when (eq (tystr-kind tystr) :type)
+            when (member (tystr-kind tystr) '(:type :abstype))
               do (format out "type ~A~A = ~A~%"
                          (tyvarseq-string (tyfcn-params (tystr-tyfcn tystr))) name
                          (type->string (tyfcn-body (tystr-tyfcn tystr)))))

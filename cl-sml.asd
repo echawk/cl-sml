@@ -67,6 +67,7 @@
                (:file "hamlet-tests")
                (:file "semantics-tests")
                (:file "reader-tests")
+               (:file "typecheck-tests")
                (:file "run"))
   :perform (test-op (operation component)
              (declare (ignore operation component))

@@ -122,6 +122,10 @@ VAR (side condition of rule 4)."
   (adjust-levels var type)
   (when (tvar-equality var)
     (enforce-equality type))
+  ;; What an unchecked long identifier's type is made of stays unknown.
+  (when (tvar-unknown var)
+    (dolist (free (free-tvars type))
+      (setf (tvar-unknown free) t)))
   (setf (tvar-link var) type))
 
 ;;;; Unification

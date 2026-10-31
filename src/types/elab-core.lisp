@@ -922,13 +922,19 @@ equality."
 
 (defun elab-top-level-decs (c decs)
   "Elaborate the top-level declarations DECS in context C, resolving
-overloading at the end of each.  Returns the environment they bind."
-  (let ((env (make-env)))
-    (dolist (group (dec-groups decs) env)
+overloading at the end of each.  Returns the environment they bind.  As in
+HaMLet, the types of the bindings must be determined by the end of the
+program (a `;'-terminated top-level declaration), not of each declaration."
+  (let ((env (make-env))
+        (saw-unknown nil))
+    (dolist (group (dec-groups decs))
       (let* ((*overloaded* nil)
              (*saw-unknown* nil)
              (*level* 0)
              (increment (elab-dec (context-plus-env c env) group)))
         (resolve-overloading)
-        (check-top-level-env (first group) increment)
-        (setf env (env-plus env increment))))))
+        (when *saw-unknown* (setf saw-unknown t))
+        (setf env (env-plus env increment))))
+    (let ((*saw-unknown* saw-unknown))
+      (check-top-level-env (first (last decs)) (make-env (env-latest (env-ve env)))))
+    env))
