@@ -16,12 +16,22 @@ struct
   structure Math              = Math
   structure IEEE              = IEEEReal
 
-  val radix                   = use{b = "Real.radix"} () : int
-  val precision               = use{b = "Real.precision"} () : int
+  (* cl-sml: computed, as HaMLet, which evaluates this file, lacks these
+   * primitives; the doubles' powers of 2 are exact. *)
+  local
+    fun scale(x, 0)           = x
+      | scale(x, n)           = if Int.<(n, 0)
+                                then scale(x * 0.5, Int.+(n, 1))
+                                else scale(x * 2.0, Int.-(n, 1))
+  in
+  val radix                   = 2
+  val precision               = 53
 
-  val maxFinite               = use{b = "Real.maxFinite"} () : real
-  val minPos                  = use{b = "Real.minPos"} () : real
-  val minNormalPos            = use{b = "Real.minNormalPos"} () : real
+  val maxFinite               = let val h = scale(1.0, 1023)
+                                in h + (h - scale(1.0, 971)) end
+  val minPos                  = scale(1.0, ~1074)
+  val minNormalPos            = scale(1.0, ~1022)
+  end
   val posInf                  = 1.0/0.0
   val negInf                  = ~1.0/0.0
 
@@ -112,11 +122,11 @@ struct
   (* (kind, digits) -> real -> string; kind 0 is SCI, 1 FIX, 2 GEN, 3 EXACT *)
   val fmt'                    = use{b = "Real.fmt"} : int * int -> real -> string
   fun fmt (StringCvt.SCI NONE)     = fmt'(0, 6)
-    | fmt (StringCvt.SCI (SOME n)) = if n < 0 then raise Size else fmt'(0, n)
+    | fmt (StringCvt.SCI (SOME n)) = if Int.<(n, 0) then raise Size else fmt'(0, n)
     | fmt (StringCvt.FIX NONE)     = fmt'(1, 6)
-    | fmt (StringCvt.FIX (SOME n)) = if n < 0 then raise Size else fmt'(1, n)
+    | fmt (StringCvt.FIX (SOME n)) = if Int.<(n, 0) then raise Size else fmt'(1, n)
     | fmt (StringCvt.GEN NONE)     = fmt'(2, 12)
-    | fmt (StringCvt.GEN (SOME n)) = if n < 1 then raise Size else fmt'(2, n)
+    | fmt (StringCvt.GEN (SOME n)) = if Int.<(n, 1) then raise Size else fmt'(2, n)
     | fmt StringCvt.EXACT          = fmt'(3, 0)
 
   fun value c = fromInt(Int.-(Char.ord c, Char.ord #"0"))

@@ -41,11 +41,27 @@ Returns THUNK's value and the captured text."
 
 (defun initialize-hamlet-type-checker (package)
   (with-sml-package (package)
-    (%make-hamlet-type-checker
-     (package-name (ensure-sml-package package))
-     ;; Loading the library prints "[loading standard basis library]".
-     (call-capturing-hamlet-diagnostics
-      (lambda () (call-sml "ClSmlHamlet.initial" (sml-unit)))))))
+    (multiple-value-bind (initial-argument diagnostics)
+        (call-capturing-hamlet-diagnostics
+         (lambda () (call-sml "ClSmlHamlet.initial" (sml-unit))))
+      ;; Loading the library prints "[loading standard basis library]".
+      ;; HaMLet reports an error in a basis file and carries on without the
+      ;; rest, which would leave every program checked against a partial
+      ;; basis.
+      (let ((errors (string-trim '(#\Space #\Newline)
+                                 (remove-substring "[loading standard basis library]"
+                                                   diagnostics))))
+        (unless (string= errors "")
+          (error "HaMLet could not elaborate the basis:~%~A" errors)))
+      (%make-hamlet-type-checker (package-name (ensure-sml-package package))
+                                 initial-argument))))
+
+(defun remove-substring (part string)
+  (let ((start (search part string)))
+    (if start
+        (concatenate 'string (subseq string 0 start)
+                     (remove-substring part (subseq string (+ start (length part)))))
+        string)))
 
 (defun make-hamlet-type-checker (&key
                                    (package "SML.HAMLET-TYPE-CHECKER")

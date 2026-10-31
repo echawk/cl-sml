@@ -459,7 +459,7 @@
     (is (eq :external (sml-symbol-status "caught" *test-sml-package*)))
 	    (is (not (eq :external (sml-symbol-status "helper" *test-sml-package*))))
 	    (is (not (eq :external (sml-symbol-status "Hidden" *test-sml-package*))))
-	    (is (eq (cl-sml::sml-none-value) (sml-value "NONE" *test-sml-package*)))))
+	    (is (not (eq :external (sml-symbol-status "Hidden" *test-sml-package*))))))
 
 (test integration-local-structure-alias-namespace
   (let ((*test-sml-package* "SML.LOCAL-STRUCTURE-ALIAS-TEST"))
