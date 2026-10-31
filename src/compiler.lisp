@@ -1671,8 +1671,9 @@ also be matched against a tuple."
                                       (eq (car ,it) (sml-constructor-value-tag ,ctor)))
                                  (cdr ,it) ,payload)))
                      (t
-                       ;; Not resolvable now (e.g. reached through a functor
-                       ;; parameter): compare against the run-time constructor.
+                       ;; Not resolvable now (e.g. a member of a functor
+                       ;; instance bound at run time): compare against the
+                       ;; run-time constructor.
                        ;; The value may be a nullary constructor (a symbol)
                        ;; of the same datatype, so test for a cons rather
                        ;; than assert one.

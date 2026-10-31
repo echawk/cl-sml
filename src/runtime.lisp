@@ -191,9 +191,6 @@ FUNCTOR-SCOPE-MEMBER-SPECS)."
 (defun lookup-sml-functor-member-specs (package-name functor-name)
   (copy-list (gethash (sml-module-key package-name functor-name) *sml-functor-members*)))
 
-(defun lookup-sml-functor-members (package-name functor-name)
-  (mapcar #'first (lookup-sml-functor-member-specs package-name functor-name)))
-
 (defun register-sml-functor-instantiator (package-name functor-name instantiator)
   (setf (gethash (sml-module-key package-name functor-name)
                  *sml-functor-instantiators*)
