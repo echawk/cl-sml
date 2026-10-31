@@ -14,9 +14,9 @@
  * SML.BASIS, which every SML package sees (src/basis.lisp), and HaMLet's
  * checker elaborates the same files as the initial basis of the programs it
  * checks (src/type-checker.lisp).  `use{b = "Name"}' is the primitive Name
- * of cl-sml's run time (SML-BASIS-PRIMITIVE in src/runtime.lisp).  HaMLet
- * evaluates this basis when a checker starts, so primitives HaMLet does not
- * know may only be applied inside functions, never at load time.
+ * of cl-sml's run time (SML-BASIS-PRIMITIVE in src/runtime.lisp).  The
+ * checker only elaborates these files (in the order of the uses below),
+ * so HaMLet's evaluator need not know cl-sml's primitives.
  *)
 
 local val use : string -> unit = use in val _ = let in

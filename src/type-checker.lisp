@@ -39,29 +39,24 @@ Returns THUNK's value and the captured text."
                   (funcall thunk))))
     (values value (get-output-stream-string diagnostics))))
 
-(defun initialize-hamlet-type-checker (package)
+(defun initialize-hamlet-type-checker (package basis-path)
+  "A checker whose sessions start from the static basis of the library in
+BASIS-PATH, which HaMLet, loaded into PACKAGE, elaborates (and does not
+run; see ClSmlHamlet.initialFrom)."
   (with-sml-package (package)
     (multiple-value-bind (initial-argument diagnostics)
         (call-capturing-hamlet-diagnostics
-         (lambda () (call-sml "ClSmlHamlet.initial" (sml-unit))))
-      ;; Loading the library prints "[loading standard basis library]".
+         (lambda ()
+           (call-sml "ClSmlHamlet.initialFrom"
+                     (mapcar #'namestring (sml-basis-source-files basis-path)))))
       ;; HaMLet reports an error in a basis file and carries on without the
-      ;; rest, which would leave every program checked against a partial
+      ;; file, which would leave every program checked against a partial
       ;; basis.
-      (let ((errors (string-trim '(#\Space #\Newline)
-                                 (remove-substring "[loading standard basis library]"
-                                                   diagnostics))))
+      (let ((errors (string-trim '(#\Space #\Newline) diagnostics)))
         (unless (string= errors "")
           (error "HaMLet could not elaborate the basis:~%~A" errors)))
       (%make-hamlet-type-checker (package-name (ensure-sml-package package))
                                  initial-argument))))
-
-(defun remove-substring (part string)
-  (let ((start (search part string)))
-    (if start
-        (concatenate 'string (subseq string 0 start)
-                     (remove-substring part (subseq string (+ start (length part)))))
-        string)))
 
 (defun make-hamlet-type-checker (&key
                                    (package "SML.HAMLET-TYPE-CHECKER")
@@ -85,8 +80,7 @@ basis agree."
     (when load
       (load-sml-file hamlet-source :package package)
       (load-sml-file (hamlet-adapter-source) :package package))
-    (configure-hamlet-basis-path package basis-path)
-    (initialize-hamlet-type-checker package)))
+    (initialize-hamlet-type-checker package basis-path)))
 
 (defvar *hamlet-type-checker* nil
   "The checker installed by ENABLE-HAMLET-TYPE-CHECKER, created on first use.")

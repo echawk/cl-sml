@@ -16,22 +16,12 @@ struct
   structure Math              = Math
   structure IEEE              = IEEEReal
 
-  (* cl-sml: computed, as HaMLet, which evaluates this file, lacks these
-   * primitives; the doubles' powers of 2 are exact. *)
-  local
-    fun scale(x, 0)           = x
-      | scale(x, n)           = if Int.<(n, 0)
-                                then scale(x * 0.5, Int.+(n, 1))
-                                else scale(x * 2.0, Int.-(n, 1))
-  in
-  val radix                   = 2
-  val precision               = 53
+  val radix                   = use{b = "Real.radix"} () : int
+  val precision               = use{b = "Real.precision"} () : int
 
-  val maxFinite               = let val h = scale(1.0, 1023)
-                                in h + (h - scale(1.0, 971)) end
-  val minPos                  = scale(1.0, ~1074)
-  val minNormalPos            = scale(1.0, ~1022)
-  end
+  val maxFinite               = use{b = "Real.maxFinite"} () : real
+  val minPos                  = use{b = "Real.minPos"} () : real
+  val minNormalPos            = use{b = "Real.minNormalPos"} () : real
   val posInf                  = 1.0/0.0
   val negInf                  = ~1.0/0.0
 
