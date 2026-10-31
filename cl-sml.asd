@@ -53,6 +53,7 @@
                (:file "inspect-tests")
                (:file "hamlet-tests")
                (:file "semantics-tests")
+               (:file "reader-tests")
                (:file "run"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
