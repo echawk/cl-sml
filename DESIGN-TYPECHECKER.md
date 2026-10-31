@@ -1,8 +1,32 @@
 # Design: a native type checker, and a Coalton backend
 
-Status: design only, nothing implemented yet (2026-10-31). This expands
+Status: milestone M1 implemented in `src/types/` (2026-10-31), opt-in through
+`cl-sml:typecheck-sml-string`; M2-M4 are still design. This expands
 ROADMAP.md items 18-20 (core elaboration, typed IR, modules elaboration) and
 item 22 (Coalton backend).
+
+M1 as built, where it settles what this document left open:
+
+- Files: `objects`, `unify`, `env`, `print`, `initial`, `scope-tyvars`,
+  `check-pattern`, `elab-core`, `annotations`, `typecheck` under
+  `src/types/`, in package `cl-sml.types`. Tests: `t/typecheck-tests.lisp`.
+  Differential against HaMLet: `t/conformance/core/native-diff.lisp`.
+- Overloading is defaulted at the end of each top-level declaration (HaMLet
+  defaults at the innermost value declaration). Flexible records must be
+  resolved by the innermost value declaration, as in HaMLet. Undetermined
+  types are an error at the end of the program, as in HaMLet.
+- A type name may not be substituted for a type variable older than it
+  (HaMLet's time stamps); `let` additionally checks its result type.
+- `*native-relaxed-value-restriction*` generalises the variables of an
+  expansive binding that occur only covariantly (list, option, vector and
+  records are covariant; every other type constructor counts as invariant).
+- `*native-unchecked-long-ids*` gives each long identifier a fresh type
+  printed as `?`; without it a long identifier is an error, like structure,
+  signature, functor and `open` declarations.
+- Match warnings (`*native-match-warnings*`, default on) use Maranget's
+  usefulness algorithm rather than a port of HaMLet's CheckPattern.
+- Printing follows HaMLet's text but puts each binding on one line and
+  omits the leading comment listing type names.
 
 ## 1. Goals
 
