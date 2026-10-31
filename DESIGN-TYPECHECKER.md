@@ -228,12 +228,17 @@ Caveats:
   issue the user remembered) could make Coalton accept something our checker
   rejected. That is harmless, because our checker runs first.
 
-## 9. Open questions
+## 9. Decisions and open questions
 
-- Should a relaxed value restriction be an opt-in mode? It is not SML '97, so
-  the default must stay strict.
-- Should the checker warn about non-exhaustive matches by default? Poly and
-  MLton do.
+Decided with the user (2026-10-31):
+
+- The value restriction is strict SML '97 by default. A relaxed
+  (OCaml-style) mode is available as an opt-in.
+- Non-exhaustive and redundant matches give warnings by default. They can be
+  turned off, and they are never errors.
+
+Open:
+
 - Where should the typed IR live? It could be a separate AST copy with types,
   or the annotation table plus the existing AST. The table is the smaller
   change, and it is enough for ROADMAP 13-16.
