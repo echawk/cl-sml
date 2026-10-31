@@ -88,6 +88,9 @@ use "ArraySlice.sml";
 use "MONO_ARRAY_SLICE-sig.sml";
 use "Word8ArraySlice.sml";
 use "CharArraySlice.sml";
+use "RealArray.sml";        (* cl-sml: RealVector, RealArray *)
+use "ARRAY2-sig.sml";       (* cl-sml *)
+use "Array2.sml";           (* cl-sml *)
 
 use "BYTE-sig.sml";
 use "Byte.sml";
