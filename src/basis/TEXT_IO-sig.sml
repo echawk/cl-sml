@@ -28,8 +28,8 @@ sig
   val inputAll : instream -> vector
 (*
   val canInput : instream * int -> int option
-  val lookahead : instream -> elem option
 *)
+  val lookahead : instream -> elem option
   val closeIn : instream -> unit
   val endOfStream : instream -> bool
   val output : outstream * vector -> unit
@@ -51,9 +51,7 @@ sig
   val openIn : string -> instream
   val openOut : string -> outstream
   val openAppend : string -> outstream
-(*
   val openString : string -> instream
-*)
   val stdIn : instream
   val stdOut : outstream
   val stdErr : outstream

@@ -100,8 +100,8 @@ use "IMPERATIVE_IO-sig.sml";
 use "TEXT_STREAM_IO-sig.sml";
 use "TEXT_IO-sig.sml";
 use "TextIO.sml";
-(*use "BIN_IO-sig.sml";*)
-(*use "BinIO.sml";*)
+use "BIN_IO-sig.sml";
+use "BinIO.sml";
 
 use "OS_FILE_SYS-sig.sml";
 use "OS_PATH-sig.sml";

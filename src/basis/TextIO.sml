@@ -34,6 +34,8 @@ struct
   val inputN      = use{b = "TextIO.inputN"} : instream * int -> vector
   val inputAll    = use{b = "TextIO.inputAll"} : instream -> vector
   val inputLine   = use{b = "TextIO.inputLine"} : instream -> string option
+  val lookahead   = use{b = "TextIO.lookahead"} : instream -> elem option
+  val openString  = use{b = "TextIO.openString"} : string -> instream
   val endOfStream = use{b = "TextIO.endOfStream"} : instream -> bool
 
   val output      = use{b = "TextIO.output"} : outstream * vector -> unit

@@ -1466,6 +1466,12 @@ the stream ends without one; NONE at the end of the stream."
                  do (write-char (or char #\Newline) output)
                  until (or (null char) (char= char #\Newline))))))))
 
+(defun sml-text-io-lookahead (stream)
+  (let ((char (peek-char nil (sml-text-io-stream stream) nil nil)))
+    (if char
+        (sml-some-value char)
+        (sml-none-value))))
+
 (defun sml-text-io-end-of-stream (stream)
   (null (peek-char nil (sml-text-io-stream stream) nil nil)))
 
@@ -1482,6 +1488,64 @@ the stream ends without one; NONE at the end of the stream."
 (defun sml-text-io-flush-out (stream)
   (finish-output (sml-text-io-stream stream))
   (sml-unit))
+
+;;; BinIO.  An input stream is an SML-BIN-INSTREAM: CL has no PEEK-BYTE, so
+;;; lookahead keeps the byte it read.  Output streams are octet streams.
+
+(defstruct (sml-bin-instream (:constructor make-sml-bin-instream (stream)))
+  stream
+  (pending nil))
+
+(defun sml-bin-io-open-in (path)
+  (make-sml-bin-instream
+   (sml-open-file "BinIO.openIn" path
+                  :direction :input :element-type '(unsigned-byte 8)
+                  :if-does-not-exist nil)))
+
+(defun sml-bin-io-open-out (path)
+  (sml-open-file "BinIO.openOut" path
+                 :direction :output :element-type '(unsigned-byte 8)
+                 :if-exists :supersede :if-does-not-exist :create))
+
+(defun sml-bin-io-open-append (path)
+  (sml-open-file "BinIO.openAppend" path
+                 :direction :output :element-type '(unsigned-byte 8)
+                 :if-exists :append :if-does-not-exist :create))
+
+(defun sml-bin-io-read-byte (in)
+  "The next byte of IN, an SML-BIN-INSTREAM, or NIL at its end."
+  (let ((pending (sml-bin-instream-pending in)))
+    (if pending
+        (progn (setf (sml-bin-instream-pending in) nil) pending)
+        (read-byte (sml-bin-instream-stream in) nil nil))))
+
+(defun sml-bin-io-peek-byte (in)
+  (or (sml-bin-instream-pending in)
+      (setf (sml-bin-instream-pending in)
+            (read-byte (sml-bin-instream-stream in) nil nil))))
+
+(defun sml-bin-io-read-n (in count)
+  "A Word8Vector.vector of the next COUNT bytes of IN, or of fewer at its
+end."
+  (when (minusp count)
+    (sml-raise-named-exception "Size"))
+  (coerce (loop repeat count
+                for byte = (sml-bin-io-read-byte in)
+                while byte
+                collect byte)
+          'simple-vector))
+
+(defun sml-bin-io-input-all (in)
+  (coerce (loop for byte = (sml-bin-io-read-byte in)
+                while byte
+                collect byte)
+          'simple-vector))
+
+(defun sml-bin-io-output (tuple)
+  (let ((out (sml-tuple-first tuple)))
+    (loop for byte across (sml-tuple-second tuple)
+          do (write-byte (ldb (byte 8 0) byte) out))
+    (sml-unit)))
 
 (defun sml-os-file-sys-get-dir (unit)
   (declare (ignore unit))
@@ -1775,6 +1839,33 @@ arithmetic (see SML-ARITHMETIC), so they reduce them modulo 2^BITS first."
 	                    ("TextIO.inputN" . ,#'sml-text-io-input-n)
 	                    ("TextIO.inputAll" . ,#'sml-text-io-input-all)
 	                    ("TextIO.inputLine" . ,#'sml-text-io-input-line)
+                    ("TextIO.lookahead" . ,#'sml-text-io-lookahead)
+                    ("TextIO.openString" . ,#'make-string-input-stream)
+                    ("BinIO.openIn" . ,#'sml-bin-io-open-in)
+                    ("BinIO.openOut" . ,#'sml-bin-io-open-out)
+                    ("BinIO.openAppend" . ,#'sml-bin-io-open-append)
+                    ("BinIO.closeIn" . ,(lambda (in)
+                                          (close (sml-bin-instream-stream in))
+                                          (sml-unit)))
+                    ("BinIO.closeOut" . ,(lambda (out) (close out) (sml-unit)))
+                    ("BinIO.input" . ,(lambda (in) (sml-bin-io-read-n in 4096)))
+                    ("BinIO.input1" . ,(lambda (in)
+                                         (let ((byte (sml-bin-io-read-byte in)))
+                                           (if byte (sml-some-value byte) (sml-none-value)))))
+                    ("BinIO.inputN" . ,(lambda (tuple)
+                                         (sml-bin-io-read-n (sml-tuple-first tuple)
+                                                            (sml-tuple-second tuple))))
+                    ("BinIO.inputAll" . ,#'sml-bin-io-input-all)
+                    ("BinIO.lookahead" . ,(lambda (in)
+                                            (let ((byte (sml-bin-io-peek-byte in)))
+                                              (if byte (sml-some-value byte) (sml-none-value)))))
+                    ("BinIO.endOfStream" . ,(lambda (in) (null (sml-bin-io-peek-byte in))))
+                    ("BinIO.output" . ,#'sml-bin-io-output)
+                    ("BinIO.output1" . ,(lambda (tuple)
+                                          (write-byte (ldb (byte 8 0) (sml-tuple-second tuple))
+                                                      (sml-tuple-first tuple))
+                                          (sml-unit)))
+                    ("BinIO.flushOut" . ,(lambda (out) (finish-output out) (sml-unit)))
 	                    ("TextIO.endOfStream" . ,#'sml-text-io-end-of-stream)
 	                    ("TextIO.output" . ,#'sml-text-io-output)
                     ("TextIO.output1" . ,#'sml-text-io-output1)
