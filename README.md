@@ -40,6 +40,17 @@ preloaded (`CL_SML_NO_TYPE_CHECKER=1` builds one without it):
 Loading HaMLet needs a deep control stack: start SBCL with
 `--control-stack-size 1GB` (the executable has it built in).
 
+## The Basis Library
+
+cl-sml's Basis Library is in `src/basis/`: SML sources derived from
+HaMLet's (see `src/basis/all.sml` and `src/basis/LICENSE.txt`) over run-time
+primitives (`use{b = "Name"}`, implemented by `sml-basis-primitive` in
+`src/runtime.lisp`).  Compiling cl-sml compiles them once, into the package
+`SML.BASIS` and the FASL of `src/basis.lisp`; every SML package sees the
+basis's bindings, and its own bindings shadow them without changing them.
+HaMLet's checker elaborates the same sources as the initial basis of the
+programs it checks.
+
 ## Tests
 
 `./test.sh` runs the fiveam suites in `t/` (set `LISP=ecl` or `LISP=abcl`
