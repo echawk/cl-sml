@@ -87,9 +87,11 @@ the order its unifier links variables."
   (let ((text (substitute #\Space #\Newline text)))
     (subseq text 0 (min max (length text)))))
 
-(defun main (&key (names nil) (verbose t))
+(defun main (&key (names nil) (verbose t) (directory (merge-pathnames "tests/" *here*)))
+  "Compare the checkers on the .sml files of DIRECTORY (by default this
+corpus; HaMLet's own hamlet/test/ is another)."
   (let* ((checker (cl-sml:make-hamlet-type-checker))
-         (files (sort (directory (merge-pathnames "tests/*.sml" *here*))
+         (files (sort (directory (merge-pathnames "*.sml" directory))
                       #'string< :key #'pathname-name))
          (counts (list :both-accept 0 :both-reject 0 :only-hamlet-accepts 0
                        :only-native-accepts 0 :types-agree 0 :types-differ 0

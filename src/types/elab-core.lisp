@@ -632,6 +632,9 @@ bindings ((pat exp)...) and recursive bindings ((name :exp exp ty node) or
 (defun elab-val-dec (c node)
   "[Rule 15] val tyvarseq valbind, and its derived forms."
   (multiple-value-bind (explicit plain recursive) (val-dec-parts node)
+    (dolist (name explicit)
+      (when (lookup-tyvar c name)
+        (elab-error node "type variable ~A shadows one already in scope" name)))
     (let* ((outer *level*)
            (*level* (1+ outer))
            (implicit (remove-if (lambda (name) (lookup-tyvar c name))
@@ -817,7 +820,16 @@ equality."
 ;;;; Exception declarations [rules 20, 30, 31]
 
 (defun elab-exbinds (c nodes)
+  "Type variables not in scope may occur in an exception declaration (as in
+HaMLet); they must not reach the top level (rule 87)."
   (check-distinct-labels (first nodes) (mapcar #'second nodes))
+  (let ((free (remove-if (lambda (name) (lookup-tyvar c name))
+                         (loop for node in nodes
+                               for ty = (and (eq (car node) :exception)
+                                             (getf (cddr node) :arg-type))
+                               when ty append (ty-tyvars ty)))))
+    (setf c (context-plus-u c (mapcar (lambda (name) (cons name (make-rigid-tvar name)))
+                                      (remove-duplicates free :test #'string=)))))
   (loop for node in nodes
         collect (cons (second node)
                       (ecase (car node)

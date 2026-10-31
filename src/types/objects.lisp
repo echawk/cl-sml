@@ -92,7 +92,11 @@ is the one that survives (HaMLet OverloadingClass.intersection)."
   (name nil)                            ; the name of an explicit type variable
   (rigid nil)                           ; explicit type variable (Section 4.6)
   (row nil)                             ; the rest of a flexible record
-  (unknown nil))                        ; stands for an unchecked long identifier
+  (unknown nil)                         ; stands for an unchecked long identifier
+  ;; The stamp of the oldest variable merged into this one: no type name
+  ;; newer than that may be substituted for it (HaMLet's `time'), which
+  ;; keeps a datatype from escaping its scope (rule 4).
+  (time 0 :type fixnum))
 
 (defmethod print-object ((tvar tvar) stream)
   (print-unreadable-object (tvar stream :type t)
@@ -100,13 +104,17 @@ is the one that survives (HaMLet OverloadingClass.intersection)."
             (tvar-name tvar) (tvar-id tvar) (tvar-level tvar) (tvar-link tvar))))
 
 (defun fresh-tvar (&key equality overload row unknown (level *level*))
-  (%make-tvar :level level :equality equality :overload overload :row row
-              :unknown unknown))
+  (let ((var (%make-tvar :level level :equality equality :overload overload :row row
+                         :unknown unknown)))
+    (setf (tvar-time var) (tvar-id var))
+    var))
 
 (defun make-rigid-tvar (name &key (level *level*))
   "The explicit type variable NAME ('a or ''a)."
-  (%make-tvar :level level :name name :rigid t
-              :equality (and (> (length name) 1) (char= (char name 1) #\'))))
+  (let ((var (%make-tvar :level level :name name :rigid t
+                         :equality (and (> (length name) 1) (char= (char name 1) #\')))))
+    (setf (tvar-time var) (tvar-id var))
+    var))
 
 (defun repr (type)
   "TYPE with links followed (with path compression)."

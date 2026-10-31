@@ -226,7 +226,8 @@ overloading, value restriction, match checks and annotations")
 
 (test error-escaping-local-datatype
   (is (rejects "val x = let datatype t = A in A end" "escapes"))
-  (is (rejects "fun f y = let datatype t = A in y = A end" "escape")))
+  (is (rejects "fun f y = let datatype t = A in y = A end" "escape"))
+  (is (rejects "val u = let val r = ref nil datatype t = C in r := [C] end" "escape")))
 
 (test error-explicit-type-variables
   (is (binds "fun f (x : 'a) = let val y : 'a = x in y end" "val f : 'a -> 'a"))
@@ -234,7 +235,11 @@ overloading, value restriction, match checks and annotations")
   (is (binds "val f = fn x => let val g = fn (y : 'a) => (x, y) in x end" "val f : 'a -> 'a"))
   (is (rejects "val f = fn x => let val g = fn (y : 'a) => [x, y] in x end" "generalised"))
   (is (rejects "val 'a x = ref (fn (y : 'a) => y)" "generalised"))
-  (is (rejects "exception E of 'a" "unbound type variable")))
+  (is (rejects "exception E of 'a" "free type variable"))
+  (is (binds "local exception E of 'a in end val x = 1" "val x : int"))
+  (is (rejects "val x : 'a = 1" "explicit type variable"))
+  (is (rejects "type t = 'a list" "unbound type variable"))
+  (is (rejects "val 'a x = let val 'a y = () in () end" "shadows")))
 
 (test error-modules-not-supported
   (is (rejects "structure S = struct end" "modules are not supported"))

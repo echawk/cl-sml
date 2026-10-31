@@ -59,18 +59,21 @@
 ;;;; Occurs check and levels
 
 (defun adjust-levels (var type)
-  "Check that VAR does not occur in TYPE, lower the levels of TYPE's
-variables to VAR's, and check that no type name in TYPE is more local than
-VAR (side condition of rule 4)."
-  (let ((level (tvar-level var)))
+  "Check that VAR does not occur in TYPE, lower the levels and times of
+TYPE's variables to VAR's, and check that no type name in TYPE is newer
+than VAR (side condition of rule 4)."
+  (let ((level (tvar-level var))
+        (time (tvar-time var)))
     (labels ((walk (type)
                (let ((type (repr type)))
                  (cond ((eq type var) (unify-fail "circular type"))
                        ((tvar-p type)
                         (when (> (tvar-level type) level)
-                          (setf (tvar-level type) level)))
+                          (setf (tvar-level type) level))
+                        (when (> (tvar-time type) time)
+                          (setf (tvar-time type) time)))
                        (t (ecase (car type)
-                            (:con (when (> (tyname-level (second type)) level)
+                            (:con (when (> (tyname-stamp (second type)) time)
                                     (unify-fail
                                      (format nil "local type ~A would escape its scope"
                                              (tyname-name (second type)))))
@@ -90,7 +93,8 @@ VAR (side condition of rule 4)."
       (unify-fail "explicit type variable cannot be an overloaded or record type"))
     (when (and (tvar-equality var) (not (tvar-equality target)))
       (unify-fail "type variable does not admit equality"))
-    (setf (tvar-level target) (min (tvar-level target) (tvar-level var)))
+    (setf (tvar-level target) (min (tvar-level target) (tvar-level var))
+          (tvar-time target) (min (tvar-time target) (tvar-time var)))
     (setf (tvar-link var) target)
     (return-from merge-tvars))
   (let ((overload (cond ((null (tvar-overload var)) (tvar-overload target))
@@ -106,6 +110,7 @@ VAR (side condition of rule 4)."
           (tvar-equality target) equality
           (tvar-unknown target) (or (tvar-unknown var) (tvar-unknown target))
           (tvar-level target) (min (tvar-level target) (tvar-level var))
+          (tvar-time target) (min (tvar-time target) (tvar-time var))
           (tvar-link var) target)))
 
 (defun bind-tvar (var type)
@@ -176,6 +181,7 @@ variable)."
                                        :level (min (tvar-level row1) (tvar-level row2))
                                        :equality (or (tvar-equality row1)
                                                      (tvar-equality row2)))))
+                 (setf (tvar-time rest) (min (tvar-time row1) (tvar-time row2)))
                  (bind-row row1 extra2 rest)
                  (bind-row row2 extra1 rest)))
               (row1 (bind-row row1 extra2 nil))
