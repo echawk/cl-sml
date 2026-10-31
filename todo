@@ -45,8 +45,7 @@
 - [ ] Further uses of HaMLet's types: specialize `=` (vectors compare
   structurally), declare CL types from inferred types, and retire
   `register-sml-binding-type` / `infer-sml-ast-type` once the checker is
-  always on.  Functor bodies instantiated at application time are compiled
-  without facts.
+  always on.
 - [x] Keep one checker session per SML package.
 - [ ] Complete the Basis features required by HaMLet, especially TextIO input,
   files, OS paths, command-line handling, arrays, and vectors.

@@ -79,6 +79,81 @@ fun describe (Shapes.Circle r) = \"circle \" ^ Int.toString r
 val _ = print (describe (Shapes.Circle 3) ^ \"\\n\")
 val _ = print (describe Shapes.Empty ^ \"\\n\")"))))
 
+(test nested-structure-may-refer-to-the-outer-one-of-its-name
+  (is (string= (lines "2")
+               (run-sml "structure U = struct
+  structure Array = struct val sub = Array.sub end
+end
+val a = Array.fromList [1, 2, 3]
+val _ = print (Int.toString (U.Array.sub (a, 1)) ^ \"\\n\")"))))
+
+;;; Functors are generative: each application evaluates the body afresh.
+
+(test functor-applications-have-state-of-their-own
+  (let ((program "functor Counter (X : sig val start : int end) = struct
+  val r = ref X.start
+  fun next () = (r := !r + 1; !r)
+  structure Inner = struct fun get () = !r end
+end
+structure Z = struct val start = 0 end
+structure C1 = Counter (Z)
+structure C2 = Counter (struct val start = 100 end)
+val _ = print (Int.toString (C1.next ()) ^ \"\\n\")
+val _ = print (Int.toString (C1.next ()) ^ \"\\n\")
+val _ = print (Int.toString (C2.next ()) ^ \"\\n\")
+val _ = print (Int.toString (C1.Inner.get ()) ^ \"\\n\")
+val _ = print (Int.toString (!C2.r) ^ \"\\n\")"))
+    (is (string= (lines "1" "2" "101" "2" "101") (run-sml program)))
+    (is (string= (lines "1" "2" "101" "2" "101") (load-sml program))))
+  ;; A functor declared by an earlier compilation unit, applied twice in
+  ;; a functor body.
+  (multiple-value-bind (output package)
+      (run-sml "functor Cell () = struct val r = ref 0 fun bump () = (r := !r + 1; !r) end"
+               "functor Pair () = struct structure A = Cell () structure B = Cell () end
+structure P = Pair ()
+val _ = (P.A.bump (); P.A.bump ())
+val _ = print (Int.toString (P.A.bump ()) ^ \" \" ^ Int.toString (P.B.bump ()) ^ \"\\n\")")
+    (is (string= (lines "3 1") output))
+    (is (= 4 (funcall (cl-sml:sml-value "P.A.bump" package) (cl-sml::sml-unit))))))
+
+(test functor-applications-have-exceptions-of-their-own
+  (is (string= (lines "A.E 1" "B.E 2" "G1.X" "Y.E")
+               (run-sml "functor F () = struct exception E of int fun raiseIt n = raise E n end
+structure A = F ()
+structure B = F ()
+fun test f = (f (); \"none\")
+  handle B.E n => \"B.E \" ^ Int.toString n | A.E n => \"A.E \" ^ Int.toString n
+val _ = print (test (fn () => A.raiseIt 1) ^ \"\\n\")
+val _ = print (test (fn () => B.raiseIt 2) ^ \"\\n\")
+functor G () = struct exception X fun boom () = raise X end
+structure G1 = G ()
+structure G2 = G ()
+val _ = print (((G1.boom (); \"none\") handle G2.X => \"G2.X\" | G1.X => \"G1.X\") ^ \"\\n\")
+functor H (X : sig exception E end) = struct fun boom () = raise X.E end
+structure Y = struct exception E end
+structure HY = H (Y)
+val _ = print (((HY.boom (); \"none\") handle Y.E => \"Y.E\") ^ \"\\n\")"))))
+
+(test functor-applications-have-datatype-constructors-of-their-own
+  (multiple-value-bind (output package)
+      (run-sml "functor F () = struct
+  datatype t = C | D of int
+  fun isC C = true | isC _ = false
+  fun get (D n) = n | get C = 0
+end
+structure A = F ()
+structure B = F ()
+open B
+val _ = print (Int.toString (A.get (A.D 3) + get (D 4)) ^ \"\\n\")
+val _ = print (Bool.toString (A.isC A.C) ^ \" \" ^ Bool.toString (A.C = A.C) ^ \"\\n\")
+val _ = print ((case B.D 5 of B.D n => Int.toString n | B.C => \"C\") ^ \"\\n\")")
+    (is (string= (lines "7" "true true" "5") output))
+    ;; The instances' constructors differ (only an ill-typed program could
+    ;; tell them apart).
+    (is (not (eq (cl-sml:sml-value "A.C" package) (cl-sml:sml-value "B.C" package))))
+    (is (not (funcall (cl-sml:sml-value "A.isC" package)
+                      (cl-sml:sml-value "B.C" package))))))
+
 ;;; Match and Bind
 
 (test failed-matches-raise-match
