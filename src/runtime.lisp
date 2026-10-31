@@ -487,14 +487,6 @@ by functor FUNCTOR-NAME, that the compiled code did not bind itself
                                          (format nil "~A.~A" structure-name name)
                                          value source)))))
     (register-sml-structure-members package-name structure-name names)
-    ;; Later compilation units know the members of the functor's results.
-    (let ((specs (lookup-sml-functor-member-specs package-name functor-name)))
-      (register-sml-functor-members
-       package-name functor-name
-       (append specs
-               (loop for name in names
-                     unless (assoc name specs :test #'string=)
-                       collect (list name :unknown nil)))))
     structure-name))
 
 (defun alias-sml-structure-alias (package-name target-structure source-structure)
