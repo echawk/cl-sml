@@ -199,6 +199,30 @@
   (functors nil)    ; funid -> environment of its result, or :unknown
   (opaque-p nil))
 
+;;; The basis's environment is saved in its FASL (src/basis.lisp).  Hash
+;;; tables are not externalizable, so a scope is rebuilt from alists.
+(defmethod make-load-form ((scope sml-scope) &optional environment)
+  (declare (ignore environment))
+  (values `(make-sml-scope)
+          `(restore-sml-scope
+            ,scope
+            ',(sml-scope-opaque-p scope)
+            ',(loop for namespace in '(:values :structures :tycons :fixity
+                                       :signatures :functors)
+                    for table = (sml-scope-table scope namespace)
+                    when table
+                      collect (cons namespace
+                                    (loop for name being the hash-keys of table
+                                            using (hash-value value)
+                                          collect (cons name value)))))))
+
+(defun restore-sml-scope (scope opaque-p tables)
+  (setf (sml-scope-opaque-p scope) opaque-p)
+  (loop for (namespace . entries) in tables
+        do (loop for (name . value) in entries
+                 do (sml-scope-bind namespace name value scope)))
+  scope)
+
 (defvar *sml-scopes* nil
   "The identifier status and fixity environment of the current parse.")
 
@@ -323,8 +347,15 @@
   "SML package -> the environment its top-level declarations have built.")
 
 (defun sml-package-parse-scopes (package)
-  (or (gethash (ensure-sml-package package) *sml-package-scopes*)
-      (list *sml-builtin-scope*)))
+  "The environment PACKAGE's top-level declarations have built; for a
+package without declarations yet, the basis's (see SML-BASIS-PACKAGE)."
+  (let ((package (ensure-sml-package package)))
+    (or (gethash package *sml-package-scopes*)
+        (let ((basis (sml-basis-package)))
+          (and basis
+               (not (eq basis package))
+               (gethash basis *sml-package-scopes*)))
+        (list *sml-builtin-scope*))))
 
 (defun (setf sml-package-parse-scopes) (scopes package)
   (setf (gethash (ensure-sml-package package) *sml-package-scopes*) scopes))

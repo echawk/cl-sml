@@ -102,16 +102,9 @@
         (*error-output* (make-broadcast-stream)))
     (funcall thunk)))
 
+;;; The Basis (String.compare and friends) is cl-sml's, which every SML
+;;; package sees and the checker elaborates.
 (quietly #'enable-hamlet-type-checker)
-
-;;; User packages have no Basis structures of their own yet (String.compare
-;;; and friends); HaMLet's basis sources provide them on top of the run-time
-;;; primitives.
-(let ((*sml-type-checker* nil))
-  (quietly (lambda ()
-             (load-sml-file (asdf:system-relative-pathname
-                             "cl-sml" "hamlet/basis/all.sml")
-                            :package *package-name*))))
 
 (defvar *failures* nil)
 

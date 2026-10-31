@@ -234,6 +234,14 @@ struct
 
   fun initial () = Sml.elabArg (Sml.lib ())
 
+  (* The static basis of the library whose source files are FILES, in the
+   * order all.sml uses them.  HaMLet only elaborates them: cl-sml runs its
+   * own basis, which uses primitives HaMLet's evaluator does not have. *)
+  fun initialFrom files =
+      List.foldl
+        (fn (name, arg) => Sml.fromFileQuiet (Sml.elab, arg, true) name)
+        (Sml.elabArg Sml.initialArg') files
+
   fun elabProgram (B, Program(topdec, NONE)@@_) =
       let
         val B1 = ElabModule.elabTopDec(B, topdec)

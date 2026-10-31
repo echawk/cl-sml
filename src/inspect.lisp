@@ -363,8 +363,8 @@ SML-LISP-SOURCE), with comments saying where each definition came from."
       (error "No generated Lisp is recorded for ~A in ~A~:[~;; it is bound, ~
               but was not compiled from SML here (e.g. it is part of the Basis)~]."
              name (package-name (ensure-sml-package package))
-             (let ((symbol (find-symbol name (ensure-sml-package package))))
-               (and symbol (boundp symbol)))))
+             ;; The basis's bindings are bound in every package.
+             (sml-name-bound-p (sml-visible-symbol name package))))
     (dolist (definition definitions)
       (let* ((local (sml-lisp-definition-enclosing definition))
              (shown (or (and enclosing local) definition))

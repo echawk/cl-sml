@@ -68,8 +68,11 @@ signature is unknown), and whether the list is complete."
       (values nil nil)
       (ecase (car sigexp)
         (:sig-id
-         (let ((found (gethash (list (target-sml-package-name) (second sigexp))
-                               *sml-signature-expressions*)))
+         (let ((found (or (gethash (list (target-sml-package-name) (second sigexp))
+                                   *sml-signature-expressions*)
+                          ;; A signature of the basis.
+                          (gethash (list *sml-basis-package-name* (second sigexp))
+                                   *sml-signature-expressions*))))
            (if found
                (sml-signature-exports found (1+ depth))
                (values nil nil))))
@@ -143,13 +146,16 @@ into scope to those of the replicated datatype."
           for builtin = (and (null source-prefix)
                              (not (compile-time-sml-env-symbol-shadowed-p name))
                              (assoc name *sml-env* :test #'string=))
-          for source = (if builtin
-                           (cdr builtin)
-                           (resolved-sml-symbol
-                            (if source-prefix
+          for source-name = (if source-prefix
                                 (qualify-sml-name source-prefix name)
-                                name)))
+                                name)
           for target = (target-sml-symbol name)
+          for source = (cond (builtin (cdr builtin))
+                             ((let ((resolved (resolved-sml-symbol source-name)))
+                                (and (not (eq resolved target)) resolved)))
+                             ;; The name resolves to the binding being made;
+                             ;; the replicated datatype may be the basis's.
+                             (t (sml-visible-symbol source-name)))
           unless (and (not builtin) (eq source target))
             collect (if (and (symbolp source) (not builtin))
                         `(alias-sml-constructor ',target ',source)
@@ -275,12 +281,18 @@ binding cell SYMBOL is."
 its newest binding, or the package's symbol for it."
   (let* ((symbol (sml-symbol qualified-name))
          (unit-cell (and *sml-unit-cells*
-                         (gethash qualified-name *sml-unit-cells*))))
+                         (gethash qualified-name *sml-unit-cells*)))
+         ;; A name the package does not bind denotes the basis's binding.
+         (basis-symbol (and (not unit-cell)
+                            (not (sml-name-bound-p symbol))
+                            (sml-basis-symbol (symbol-name symbol)
+                                              (symbol-package symbol)))))
     (cond
-      (*sml-compiling-functor* symbol)
+      ((and *sml-compiling-functor* (not basis-symbol)) symbol)
       ((eq unit-cell :plain) symbol)
       (unit-cell)
       ((sml-binding-cell symbol))
+      (basis-symbol (or (sml-binding-cell basis-symbol) basis-symbol))
       (t symbol))))
 
 (defun current-binding-symbol (name)
@@ -627,7 +639,7 @@ separated by blanks."
     (remove-duplicates (nreverse members) :test #'string=)))
 
 (defun compile-structure-alias-form (structure-name member-name)
-  (let ((source (sml-symbol member-name))
+  (let ((source (sml-visible-symbol member-name))
         (alias (sml-symbol (format nil "~A.~A" structure-name member-name))))
     `(progn
        (when (boundp ',source)
@@ -638,7 +650,7 @@ separated by blanks."
          ,(compile-export-form (list alias))))))
 
 (defun compile-qualified-structure-alias-form (target-structure source-structure member-name)
-  (let ((source (sml-symbol (format nil "~A.~A" source-structure member-name)))
+  (let ((source (sml-visible-symbol (format nil "~A.~A" source-structure member-name)))
         (alias (sml-symbol (format nil "~A.~A" target-structure member-name))))
     `(progn
        (when (boundp ',source)
@@ -1671,6 +1683,7 @@ name it is used at (\"int\", \"word\", \"word8\", \"real\", \"char\" or
 applied to the compiled ARGS (one for unary, two for binary operators).
 Returns NIL for combinations without a specialization."
   (let ((bits (sml-word-type-bits tyname))
+        (int-p (string= tyname "int"))
         (comparison (cdr (assoc name '(("<" . <) (">" . >)
                                        ("<=" . <=) (">=" . >=))
                                 :test #'string=))))
@@ -1684,6 +1697,9 @@ Returns NIL for combinations without a specialization."
         ((= (length args) 1)
          (let ((x (first args)))
            (cond
+             ;; Int arithmetic raises Overflow (see SML-INT-+).
+             ((and int-p (string= name "~")) `(sml-int-negate ,x))
+             ((and int-p (string= name "abs")) `(sml-int-abs ,x))
              ((string= name "~") (wrap `(- ,x)))
              ((and (string= name "abs") (not bits)) `(abs ,x)))))
         ((/= (length args) 2) nil)
@@ -1704,6 +1720,10 @@ Returns NIL for combinations without a specialization."
                                           (<= . sml-real-<=) (>= . sml-real->=))))
                 ,x ,y))
              (t `(,comparison ,x ,y)))))
+        ((and int-p (member name '("+" "-" "*") :test #'string=))
+         `(,(cdr (assoc name '(("+" . sml-int-+) ("-" . sml-int--) ("*" . sml-int-*))
+                        :test #'string=))
+           ,@args))
         ((member name '("+" "-" "*") :test #'string=)
          (destructuring-bind (x y) args
            (wrap `(,(intern name :cl) ,x ,y))))
@@ -1767,10 +1787,20 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
   (when (and (consp ast) (eq (car ast) :app)
              (consp (third ast)) (eq (car (third ast)) :tuple)
              (= (length (third ast)) 3))
-    (let ((primitive (builtin-binary-primitive (second ast) lexical-env)))
+    (let ((primitive (builtin-binary-primitive (second ast) lexical-env))
+          (x (second (third ast)))
+          (y (third (third ast))))
       (when primitive
-        `(,primitive ,(compile-expr (second (third ast)) local-exceptions lexical-env)
-                     ,(compile-expr (third (third ast)) local-exceptions lexical-env))))))
+        (let ((args (list (compile-expr x local-exceptions lexical-env)
+                          (compile-expr y local-exceptions lexical-env)))
+              (word-operation (cdr (assoc primitive '((sml-+ . +) (sml-- . -) (sml-* . *))))))
+          (if (and word-operation
+                   (or (and (consp x) (eq (car x) :word))
+                       (and (consp y) (eq (car y) :word))))
+              ;; Without the checker's resolution, an operand that is a
+              ;; word literal still makes this word arithmetic.
+              `(ldb (byte +sml-word-size+ 0) (,word-operation ,@args))
+              `(,primitive ,@args)))))))
 
 (defun compile-expr (ast &optional local-exceptions lexical-env)
   "Compiles an SML expression AST into a Common Lisp form."
@@ -2322,7 +2352,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
            (dolist (member (lookup-sml-module-members-for-compiler
                             name
                             *sml-local-structure-members*))
-             (let* ((source-symbol (sml-symbol (qualify-sml-name source member)))
+             (let* ((source-symbol (sml-visible-symbol (qualify-sml-name source member)))
                     (canonical (sml-constructor-canonical-symbol source-symbol)))
                (when canonical
                  (push (cons member canonical) bindings))))))))

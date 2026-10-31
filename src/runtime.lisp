@@ -30,6 +30,49 @@
       (initialize-sml-package package))
     package))
 
+;;; The Basis Library (src/basis/) is compiled once into the package
+;;; SML.BASIS (src/basis.lisp).  Every other SML package sees its bindings:
+;;; a name that a package does not bind itself denotes the basis's binding
+;;; of that name, if there is one.  Packages do not inherit the basis's
+;;; symbols (USE-PACKAGE), so that a program's own bindings, which set the
+;;; package's symbols, can never change the basis.
+
+(defparameter *sml-basis-package-name* "SML.BASIS")
+
+(defun sml-basis-package ()
+  (find-package *sml-basis-package-name*))
+
+(defun sml-name-bound-p (symbol)
+  "Does SYMBOL, a package's symbol for an SML name, hold a binding?"
+  (or (boundp symbol) (get symbol 'sml-binding-cell)))
+
+(defun sml-basis-symbol (name package)
+  "The basis's symbol for NAME when PACKAGE sees the basis and the basis
+binds NAME, else NIL."
+  (let ((basis (sml-basis-package)))
+    (when (and basis (not (eq basis package)))
+      (let ((symbol (find-symbol name basis)))
+        (and symbol
+             (eq (symbol-package symbol) basis)
+             (sml-name-bound-p symbol)
+             symbol)))))
+
+(defun sml-visible-symbol (name &optional (package *sml-package*))
+  "The symbol holding the binding of NAME that PACKAGE sees: PACKAGE's own,
+or else the basis's."
+  (let* ((package (ensure-sml-package package))
+         (symbol (sml-symbol name package)))
+    (if (sml-name-bound-p symbol)
+        symbol
+        (or (sml-basis-symbol (symbol-name symbol) package) symbol))))
+
+(defun sml-basis-package-key (package-name)
+  "The registry key of the basis package when PACKAGE-NAME (a key of the
+module registries below) sees the basis, else NIL."
+  (let ((basis (string-upcase *sml-basis-package-name*)))
+    (unless (string= (string-upcase (string package-name)) basis)
+      basis)))
+
 (defun current-sml-package-name (&optional (package *package*))
   (let ((name (package-name (find-package package))))
     (cond
@@ -135,7 +178,9 @@
   (copy-list
    (or (gethash (sml-module-key package-name structure-name)
                 *sml-structure-members*)
-       (projected-sml-structure-members package-name structure-name))))
+       (projected-sml-structure-members package-name structure-name)
+       (let ((basis (sml-basis-package-key package-name)))
+         (and basis (lookup-sml-structure-members basis structure-name))))))
 
 (defun register-sml-functor-members (package-name functor-name member-names
                                       &optional param-name)
@@ -275,7 +320,7 @@ constructor names are unique within a datatype."
                                                        member)
                                                    package-name))
                      (target-symbol
-                       (sml-symbol-in-package-name target-name package-name)))
+                       (sml-visible-symbol target-name package-name)))
                  (proclaim `(special ,param-symbol))
                  (unless (assoc param-symbol pairs)
                    (push (cons param-symbol target-symbol) pairs))))
@@ -344,8 +389,8 @@ constructor names are unique within a datatype."
 
 (defun alias-sml-module-member-to-name (package-name target-name source-module member-name
                                         &optional dynamic-bindings)
-  (let* ((source (sml-symbol-in-package-name (format nil "~A.~A" source-module member-name)
-                                             package-name))
+  (let* ((source (sml-visible-symbol (format nil "~A.~A" source-module member-name)
+                                     package-name))
          (target (sml-symbol-in-package-name target-name package-name)))
     (when (boundp source)
       (proclaim `(special ,target))
@@ -574,8 +619,9 @@ package's symbol for its SML name."
   symbol)
 
 (defun sml-value (name &optional (package *sml-package*))
-  "Return the SML value named NAME in PACKAGE, or signal an unbound error."
-  (let ((symbol (sml-symbol name package)))
+  "Return the SML value named NAME in PACKAGE (or in the basis, which every
+package sees), or signal an unbound error."
+  (let ((symbol (sml-visible-symbol name package)))
     (if (boundp symbol)
         (symbol-value symbol)
         (error "Unbound SML value ~A in package ~A"
@@ -633,8 +679,12 @@ package's symbol for its SML name."
         target))
 
 (defun lookup-sml-type-alias (name &optional (package *sml-package*))
-  (gethash (list (package-name (ensure-sml-package package)) name)
-           *sml-type-aliases*))
+  (let ((package (ensure-sml-package package)))
+    (multiple-value-bind (target presentp)
+        (gethash (list (package-name package) name) *sml-type-aliases*)
+      (if (or presentp (eq package (sml-basis-package)))
+          target
+          (gethash (list *sml-basis-package-name* name) *sml-type-aliases*)))))
 
 (defun lookup-sml-binding-type (symbol-or-name &optional (package *sml-package*))
   (etypecase symbol-or-name
@@ -642,6 +692,9 @@ package's symbol for its SML name."
     (string (or (cdr (assoc symbol-or-name *sml-builtin-type-env* :test #'string=))
                 (let ((symbol (find-symbol symbol-or-name
                                            (package-name (ensure-sml-package package)))))
+                  (and symbol (gethash symbol *sml-binding-types*)))
+                (let ((symbol (sml-basis-symbol symbol-or-name
+                                                (ensure-sml-package package))))
                   (and symbol (gethash symbol *sml-binding-types*)))))))
 
 (defun sml-type->cl-type (type)
@@ -885,26 +938,98 @@ records whose labels are 1, ..., n."
      (defun ,pair-name (pair)
        (,name (sml-tuple-first pair) (sml-tuple-second pair)))))
 
-(defmacro sml-arithmetic (operator a b)
-  "A and B combined by OPERATOR, with IEEE semantics when either is a real."
-  `(if (or (floatp ,a) (floatp ,b))
-       (with-portable-float-traps-masked (,operator ,a ,b))
-       (,operator ,a ,b)))
-(define-sml-binary-primitive sml-+ sml-op-+ (a b) (sml-arithmetic + a b))
-(defun sml-~ (a) (- a))
-(define-sml-binary-primitive sml-- sml-op-- (a b) (sml-arithmetic - a b))
-(define-sml-binary-primitive sml-* sml-op-* (a b) (sml-arithmetic * a b))
+;;; Int.int is the 63-bit two's complement range, the same on every Common
+;;; Lisp (64-bit SBCL's fixnums); arithmetic whose result leaves it raises
+;;; Overflow.  The operators below are what the compiler calls for `+' and
+;;; friends at type int (COMPILE-OVERLOADED-OPERATION), with a fast path for
+;;; fixnum operands.
+(defconstant +sml-min-int+ (- (ash 1 62)))
+(defconstant +sml-max-int+ (1- (ash 1 62)))
+
+(deftype sml-int () `(integer ,+sml-min-int+ ,+sml-max-int+))
+
+(declaim (ftype (function () nil) sml-int-overflow))
+(defun sml-int-overflow ()
+  (sml-raise-named-exception "Overflow"))
+
+(declaim (inline sml-check-int))
+(defun sml-check-int (value)
+  "VALUE, an Int.int result, or raise Overflow."
+  (if (typep value 'sml-int) value (sml-int-overflow)))
+
+(defmacro define-sml-int-operation (name lambda-list form)
+  "Define NAME, the Int.int operation computing FORM from the integers of
+LAMBDA-LIST, inline, with the result checked against Int's range."
+  `(progn
+     (declaim (inline ,name))
+     (defun ,name ,lambda-list
+       (if (and ,@(mapcar (lambda (var) `(typep ,var 'fixnum)) lambda-list))
+           (let ,(mapcar (lambda (var) `(,var (the fixnum ,var))) lambda-list)
+             (sml-check-int ,form))
+           (sml-check-int ,form)))))
+
+(define-sml-int-operation sml-int-+ (a b) (+ a b))
+(define-sml-int-operation sml-int-- (a b) (- a b))
+(define-sml-int-operation sml-int-* (a b) (* a b))
+(define-sml-int-operation sml-int-negate (a) (- a))
+(define-sml-int-operation sml-int-abs (a) (abs a))
+
 (defun sml-int-div (a b)
   "SML `div`: quotient rounded towards negative infinity."
   (if (zerop b)
       (sml-raise-named-exception "Div")
-      (values (floor a b))))
+      (sml-check-int (values (floor a b)))))
 (defun sml-int-mod (a b)
   "SML `mod`: remainder with the sign of the divisor."
   (if (zerop b)
       (sml-raise-named-exception "Div")
       (mod a b)))
-(define-sml-binary-primitive sml-div sml-op-div (a b) (sml-int-div a b))
+(defun sml-int-quot (a b)
+  "Int.quot: quotient rounded towards zero."
+  (if (zerop b)
+      (sml-raise-named-exception "Div")
+      (sml-check-int (values (truncate a b)))))
+(defun sml-int-rem (a b)
+  "Int.rem: remainder with the sign of the dividend."
+  (if (zerop b)
+      (sml-raise-named-exception "Div")
+      (rem a b)))
+
+;;; Without the static checker's resolution of overloading, `+' and friends
+;;; are applied to values of any numeric type.  Reals follow IEEE; integers
+;;; follow Int, except that an operand already beyond Int's range must be an
+;;; IntInf.int, whose results are not checked.  (Words are integers below
+;;; 2^62, so word arithmetic is only reduced modulo 2^wordSize when the
+;;; checker resolves it, or the Word structure's functions are used.)
+(defmacro sml-arithmetic (operator a b)
+  "A and B combined by OPERATOR, with IEEE semantics when either is a real."
+  `(cond
+     ((and (typep ,a 'fixnum) (typep ,b 'fixnum))
+      (sml-check-int (,operator (the fixnum ,a) (the fixnum ,b))))
+     ((or (floatp ,a) (floatp ,b))
+      (with-portable-float-traps-masked (,operator ,a ,b)))
+     (t (sml-check-unchecked-int (,operator ,a ,b) ,a ,b))))
+
+(defun sml-check-unchecked-int (value &rest operands)
+  "VALUE, the result of integer OPERANDS of unknown type: Overflow if they
+are all in Int's range and it is not."
+  (if (or (typep value 'sml-int)
+          (notevery (lambda (operand) (typep operand 'sml-int)) operands))
+      value
+      (sml-int-overflow)))
+
+(define-sml-binary-primitive sml-+ sml-op-+ (a b) (sml-arithmetic + a b))
+(defun sml-~ (a)
+  (cond ((typep a 'fixnum) (sml-check-int (- a)))
+        ((floatp a) (- a))
+        (t (sml-check-unchecked-int (- a) a))))
+(define-sml-binary-primitive sml-- sml-op-- (a b) (sml-arithmetic - a b))
+(define-sml-binary-primitive sml-* sml-op-* (a b) (sml-arithmetic * a b))
+(defun sml-unchecked-div (a b)
+  (if (zerop b)
+      (sml-raise-named-exception "Div")
+      (sml-check-unchecked-int (values (floor a b)) a b)))
+(define-sml-binary-primitive sml-div sml-op-div (a b) (sml-unchecked-div a b))
 (define-sml-binary-primitive sml-mod sml-op-mod (a b) (sml-int-mod a b))
 
 ;;; Words are non-negative integers below 2^bits.  Code generation uses the
@@ -917,12 +1042,6 @@ records whose labels are 1, ..., n."
   "Word.wordSize.")
 
 (defconstant +sml-word-mask+ (1- (ash 1 +sml-word-size+)))
-
-;;; Int.int is unbounded at run time (integers never raise Overflow), but
-;;; Int.minInt and Int.maxInt report the 63-bit range, the same on every
-;;; Common Lisp.
-(defconstant +sml-min-int+ (- (ash 1 62)))
-(defconstant +sml-max-int+ (1- (ash 1 62)))
 
 (defun sml-word-type-bits (tyname)
   "The size in bits of word type TYNAME (as named by the static checker), or
@@ -998,8 +1117,39 @@ are unordered (a NaN is involved)."
 (define-sml-binary-primitive sml-<= sml-op-<= (a b)
   (let ((order (sml-ordered-compare a b)))
     (and order (<= order 0))))
-(define-sml-binary-primitive sml-= sml-op-= (a b) (equal a b))
-(define-sml-binary-primitive sml-<> sml-op-<> (a b) (not (equal a b)))
+(defun sml-ref-p (value)
+  (and (simple-vector-p value)
+       (= (length value) 2)
+       (eq (svref value 0) :ref)))
+
+(defun sml-equal (a b)
+  "SML's polymorphic equality: structural on lists, tuples, records,
+constructed values, strings and vectors; references (and arrays, which are
+made of them) are only equal to themselves."
+  (loop
+    (cond
+      ((eq a b) (return t))
+      ((consp a)
+       (unless (and (consp b) (sml-equal (car a) (car b)))
+         (return nil))
+       (setf a (cdr a)
+             b (cdr b)))
+      ((numberp a)
+       (return (and (numberp b)
+                    (if (or (floatp a) (floatp b))
+                        (with-portable-float-traps-masked (= a b))
+                        (= a b)))))
+      ((stringp a) (return (and (stringp b) (string= a b))))
+      ((simple-vector-p a)
+       (return (and (simple-vector-p b)
+                    (not (sml-ref-p a))
+                    (not (sml-ref-p b))
+                    (= (length a) (length b))
+                    (every #'sml-equal a b))))
+      (t (return nil)))))
+
+(define-sml-binary-primitive sml-= sml-op-= (a b) (sml-equal a b))
+(define-sml-binary-primitive sml-<> sml-op-<> (a b) (not (sml-equal a b)))
 
 (define-sml-binary-primitive sml-^ sml-op-^ (a b) (concatenate 'string a b))
 (define-sml-binary-primitive sml-@ sml-op-@ (a b) (append a b))
@@ -1014,11 +1164,14 @@ are unordered (a NaN is involved)."
 (defun sml-andalso (a) (lambda (b) (and a b)))
 (defun sml-orelse (a) (lambda (b) (or a b)))
 (defun sml-not (v) (not v))
-(defun sml-abs (v) (abs v))
-(defun sml-floor (v) (floor v))
-(defun sml-ceil (v) (ceiling v))
-(defun sml-round (v) (round v))
-(defun sml-trunc (v) (truncate v))
+(defun sml-abs (v)
+  (cond ((typep v 'fixnum) (sml-check-int (abs v)))
+        ((floatp v) (abs v))
+        (t (sml-check-unchecked-int (abs v) v))))
+(defun sml-floor (v) (sml-real-to-integer v #'floor))
+(defun sml-ceil (v) (sml-real-to-integer v #'ceiling))
+(defun sml-round (v) (sml-real-to-integer v #'round))
+(defun sml-trunc (v) (sml-real-to-integer v #'truncate))
 (defun sml-sqrt (v) (sml-math-guarded #'sqrt v))
 (defun sml-sin (v) (sml-math-guarded #'sin v))
 (defun sml-cos (v) (sml-math-guarded #'cos v))
@@ -1089,13 +1242,29 @@ infinities."
   "The exceptions of the initial basis by name.  There is one of each, shared
 by every SML package.")
 
+(defparameter *sml-basis-declared-exceptions*
+  '(("Empty" . "Empty") ("Fail" . "Fail") ("Span" . "Span")
+    ("Option" . "Option.Option"))
+  "The initial basis' exceptions that the Basis Library declares itself
+(HaMLet's static basis does not have them), and their names there.  The run
+time raises the basis' exceptions, so that a program's handlers catch them.")
+
+(defparameter *sml-exceptions-with-payload* '("Fail" "Io")
+  "The run time's exceptions that carry a value.")
+
 (defun sml-initial-exception (name)
   "The initial basis' exception NAME (`Match`, `Div`, `Fail`, ...)."
-  (or (gethash name *sml-initial-exceptions*)
-      (setf (gethash name *sml-initial-exceptions*)
-            (if (string= name "Fail")
-                (make-sml-exception-function name)
-                (make-sml-exception-constructor name)))))
+  (let* ((basis-name (cdr (assoc name *sml-basis-declared-exceptions*
+                                 :test #'string=)))
+         (basis (and basis-name (sml-basis-package)))
+         (symbol (and basis (find-symbol basis-name basis))))
+    (if (and symbol (boundp symbol))
+        (symbol-value symbol)
+        (or (gethash name *sml-initial-exceptions*)
+            (setf (gethash name *sml-initial-exceptions*)
+                  (if (member name *sml-exceptions-with-payload* :test #'string=)
+                      (make-sml-exception-function name)
+                      (make-sml-exception-constructor name)))))))
 
 (defun sml-raise-named-exception (name)
   "Raise the initial basis' exception NAME.  A program that binds the name to
@@ -1167,10 +1336,12 @@ POSITION is the source offset of the match, when known."
     value))
 
 (defun sml-none-value ()
-  (sml-symbol "NONE"))
+  "The basis's NONE, which every package sees (see INITIALIZE-SML-PACKAGE)."
+  (sml-symbol "NONE" *sml-basis-package-name*))
 
 (defun sml-some-value (value)
-  (let ((some (sml-symbol "SOME")))
+  "The basis's SOME VALUE."
+  (let ((some (sml-symbol "SOME" *sml-basis-package-name*)))
     (if (and (boundp some) (functionp (symbol-value some)))
         (funcall (symbol-value some) value)
         (cons some value))))
@@ -1205,19 +1376,46 @@ POSITION is the source offset of the match, when known."
 Common Lisp cl-sml writes.  Implementations disagree on the default (ECL
 follows the locale, ABCL the JVM), so it is always given explicitly.")
 
+(defun sml-io-cause (message)
+  "The cause of an IO.Io exception: OS.SysErr (MESSAGE, NONE)."
+  (let ((sys-err (sml-basis-symbol "OS.SysErr" nil)))
+    (if (and sys-err (functionp (symbol-value sys-err)))
+        (funcall (symbol-value sys-err) (list :tuple message (sml-none-value)))
+        (funcall (sml-initial-exception "Fail") message))))
+
+(defun sml-raise-io (function name message)
+  "Raise IO.Io {name = NAME, function = FUNCTION, cause = ...}."
+  (sml-raise (funcall (sml-initial-exception "Io")
+                      (make-sml-record
+                       (list (cons "cause" (sml-io-cause message))
+                             (cons "function" function)
+                             (cons "name" name))))))
+
+(defun sml-open-file (function path &rest options)
+  "OPEN PATH with OPTIONS for the Basis function FUNCTION, raising IO.Io
+when the file cannot be opened."
+  (or (handler-case (apply #'open path options)
+        (file-error (condition)
+          (sml-raise-io function path (princ-to-string condition))))
+      (sml-raise-io function path "No such file or directory")))
+
 (defun sml-text-io-open-in (path)
-  (open path :direction :input :element-type 'character
-             :external-format *sml-external-format*))
+  (sml-open-file "TextIO.openIn" path
+                 :direction :input :element-type 'character
+                 :external-format *sml-external-format*
+                 :if-does-not-exist nil))
 
 (defun sml-text-io-open-out (path)
-  (open path :direction :output :element-type 'character
-             :external-format *sml-external-format*
-             :if-exists :supersede :if-does-not-exist :create))
+  (sml-open-file "TextIO.openOut" path
+                 :direction :output :element-type 'character
+                 :external-format *sml-external-format*
+                 :if-exists :supersede :if-does-not-exist :create))
 
 (defun sml-text-io-open-append (path)
-  (open path :direction :output :element-type 'character
-             :external-format *sml-external-format*
-             :if-exists :append :if-does-not-exist :create))
+  (sml-open-file "TextIO.openAppend" path
+                 :direction :output :element-type 'character
+                 :external-format *sml-external-format*
+                 :if-exists :append :if-does-not-exist :create))
 
 (defun sml-text-io-close-in (stream)
   (close (sml-text-io-stream stream))
@@ -1257,16 +1455,22 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
             do (write-char char output)))))
 
 (defun sml-text-io-input-line (stream)
+  "TextIO.inputLine: the next line with its newline, which is supplied when
+the stream ends without one; NONE at the end of the stream."
   (let ((input (sml-text-io-stream stream)))
     (if (null (peek-char nil input nil nil))
         (sml-none-value)
         (sml-some-value
          (with-output-to-string (output)
            (loop for char = (read-char input nil nil)
-                 while char
-                 do (write-char char output)
-                 when (char= char #\Newline)
-                   do (return)))))))
+                 do (write-char (or char #\Newline) output)
+                 until (or (null char) (char= char #\Newline))))))))
+
+(defun sml-text-io-lookahead (stream)
+  (let ((char (peek-char nil (sml-text-io-stream stream) nil nil)))
+    (if char
+        (sml-some-value char)
+        (sml-none-value))))
 
 (defun sml-text-io-end-of-stream (stream)
   (null (peek-char nil (sml-text-io-stream stream) nil nil)))
@@ -1284,6 +1488,116 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
 (defun sml-text-io-flush-out (stream)
   (finish-output (sml-text-io-stream stream))
   (sml-unit))
+
+;;; BinIO.  An input stream is an SML-BIN-INSTREAM: CL has no PEEK-BYTE, so
+;;; lookahead keeps the byte it read.  Output streams are octet streams.
+
+(defstruct (sml-bin-instream (:constructor make-sml-bin-instream (stream)))
+  stream
+  (pending nil))
+
+(defun sml-bin-io-open-in (path)
+  (make-sml-bin-instream
+   (sml-open-file "BinIO.openIn" path
+                  :direction :input :element-type '(unsigned-byte 8)
+                  :if-does-not-exist nil)))
+
+(defun sml-bin-io-open-out (path)
+  (sml-open-file "BinIO.openOut" path
+                 :direction :output :element-type '(unsigned-byte 8)
+                 :if-exists :supersede :if-does-not-exist :create))
+
+(defun sml-bin-io-open-append (path)
+  (sml-open-file "BinIO.openAppend" path
+                 :direction :output :element-type '(unsigned-byte 8)
+                 :if-exists :append :if-does-not-exist :create))
+
+(defun sml-bin-io-read-byte (in)
+  "The next byte of IN, an SML-BIN-INSTREAM, or NIL at its end."
+  (let ((pending (sml-bin-instream-pending in)))
+    (if pending
+        (progn (setf (sml-bin-instream-pending in) nil) pending)
+        (read-byte (sml-bin-instream-stream in) nil nil))))
+
+(defun sml-bin-io-peek-byte (in)
+  (or (sml-bin-instream-pending in)
+      (setf (sml-bin-instream-pending in)
+            (read-byte (sml-bin-instream-stream in) nil nil))))
+
+(defun sml-bin-io-read-n (in count)
+  "A Word8Vector.vector of the next COUNT bytes of IN, or of fewer at its
+end."
+  (when (minusp count)
+    (sml-raise-named-exception "Size"))
+  (coerce (loop repeat count
+                for byte = (sml-bin-io-read-byte in)
+                while byte
+                collect byte)
+          'simple-vector))
+
+(defun sml-bin-io-input-all (in)
+  (coerce (loop for byte = (sml-bin-io-read-byte in)
+                while byte
+                collect byte)
+          'simple-vector))
+
+(defun sml-bin-io-output (tuple)
+  (let ((out (sml-tuple-first tuple)))
+    (loop for byte across (sml-tuple-second tuple)
+          do (write-byte (ldb (byte 8 0) byte) out))
+    (sml-unit)))
+
+;;; Time and Timer: times are integer nanoseconds.
+
+(defconstant +unix-epoch-universal-time+ 2208988800
+  "1970-01-01T00:00:00Z as a universal time.")
+
+(defvar *sml-real-time-base* nil
+  "A universal time and the internal real time at that moment.")
+
+(defun internal-time-nanoseconds (internal-time)
+  (round (* internal-time 1000000000) internal-time-units-per-second))
+
+(defun sml-time-now (unit)
+  "Time.now: nanoseconds since the Unix epoch, to the precision of the
+internal real time."
+  (declare (ignore unit))
+  (destructuring-bind (universal . internal)
+      (or *sml-real-time-base*
+          (setf *sml-real-time-base*
+                (cons (get-universal-time) (get-internal-real-time))))
+    (+ (* (- universal +unix-epoch-universal-time+) 1000000000)
+       (internal-time-nanoseconds (- (get-internal-real-time) internal)))))
+
+(defun sml-raise-sys-err (message)
+  "Raise OS.SysErr (MESSAGE, NONE)."
+  (sml-raise (sml-io-cause message)))
+
+(defmacro with-sml-sys-err (&body body)
+  "BODY, with file errors raised as OS.SysErr."
+  `(handler-case (progn ,@body)
+     (file-error (condition)
+       (sml-raise-sys-err (princ-to-string condition)))))
+
+(defun sml-os-file-sys-file-size (path)
+  (with-sml-sys-err
+    (with-open-file (stream path :element-type '(unsigned-byte 8))
+      (file-length stream))))
+
+(defun sml-os-file-sys-mod-time (path)
+  (with-sml-sys-err
+    (* (- (or (file-write-date path)
+              (sml-raise-sys-err (format nil "~A: no modification time" path)))
+          +unix-epoch-universal-time+)
+       1000000000)))
+
+(defun sml-os-file-sys-tmp-name (unit)
+  (declare (ignore unit))
+  (let ((pathname (temporary-sml-artifact-pathname)))
+    ;; Created, so that no other caller gets the name.
+    (with-open-file (stream pathname :direction :output :if-does-not-exist :create)
+      (declare (ignore stream)))
+    (namestring pathname)))
 
 (defun sml-os-file-sys-get-dir (unit)
   (declare (ignore unit))
@@ -1312,41 +1626,153 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
   (not (or (sml-real-nan-p x) (sml-real-infinite-p x))))
 
 (defun sml-real-to-integer (x rounder)
-  "Real.floor and friends: a NaN raises Domain, an infinity Overflow."
+  "Real.floor and friends: a NaN raises Domain, an infinity or a result
+beyond Int's range Overflow."
   (cond ((sml-real-nan-p x) (sml-raise-named-exception "Domain"))
         ((sml-real-infinite-p x) (sml-raise-named-exception "Overflow"))
-        (t (values (funcall rounder x)))))
+        (t (sml-check-int (values (funcall rounder x))))))
 
-(defun sml-real-to-string (x)
+;;; Real.fmt.  The digits are computed from the double's exact rational
+;;; value with integer arithmetic, rounded to nearest even, so that every
+;;; host prints the same; the layout is C's printf (%e, %f, %G) with SML's
+;;; `~' for minus and unpadded exponents without `+', as Poly/ML has it.
+
+(defun sml-decimal-exponent (q)
+  "The E with 10^E <= Q < 10^(E+1), for a positive rational Q."
+  (let ((e (floor (log (coerce q 'double-float) 10d0))))
+    (loop while (< q (expt 10 e)) do (decf e))
+    (loop while (>= q (expt 10 (1+ e))) do (incf e))
+    e))
+
+(defun sml-significant-digits (q n)
+  "Q, a positive rational, rounded to N significant digits: the digits, as
+an integer M with 10^(N-1) <= M < 10^N, and the exponent E of Q's
+scientific notation M/10^(N-1) * 10^E."
+  (let* ((e (sml-decimal-exponent q))
+         (m (round (* q (expt 10 (- n 1 e))))))
+    (if (>= m (expt 10 n))
+        (values (/ m 10) (1+ e))
+        (values m e))))
+
+(defun sml-digits-with-point (m decimals)
+  "The integer M divided by 10^DECIMALS, written with DECIMALS digits after
+the point (and no point when DECIMALS is 0)."
+  (multiple-value-bind (whole fraction) (floor m (expt 10 decimals))
+    (if (zerop decimals)
+        (princ-to-string whole)
+        (format nil "~D.~V,'0D" whole decimals fraction))))
+
+(defun sml-exponent-string (e)
+  "An exponent, with `~', unpadded as Poly/ML writes it (C pads it to two
+digits)."
+  (format nil "E~:[~;~~~]~D" (minusp e) (abs e)))
+
+(defun sml-real-fixed (q decimals)
+  (sml-digits-with-point (round (* q (expt 10 decimals))) decimals))
+
+(defun sml-real-scientific (q decimals)
+  (if (zerop q)
+      (concatenate 'string (sml-digits-with-point 0 decimals) (sml-exponent-string 0))
+      (multiple-value-bind (m e) (sml-significant-digits q (1+ decimals))
+        (concatenate 'string (sml-digits-with-point m decimals)
+                     (sml-exponent-string e)))))
+
+(defun sml-strip-fraction-zeros (string)
+  "STRING, a number with a decimal point, without the fraction's trailing
+zeros (and without the point if the fraction is all zeros)."
+  (if (find #\. string)
+      (let ((end (length string)))
+        (loop while (char= (char string (1- end)) #\0) do (decf end))
+        (when (char= (char string (1- end)) #\.) (decf end))
+        (subseq string 0 end))
+      string))
+
+(defun sml-real-general (q digits)
+  "%.DIGITSG: fixed notation when the exponent E is at least -4 and below
+DIGITS, else scientific, with trailing zeros dropped."
+  (let ((e (if (zerop q) 0 (nth-value 1 (sml-significant-digits q digits)))))
+    (if (and (<= -4 e) (< e digits))
+        (sml-strip-fraction-zeros (sml-real-fixed q (- digits 1 e)))
+        (multiple-value-bind (m e) (sml-significant-digits q digits)
+          (concatenate 'string
+                       (sml-strip-fraction-zeros (sml-digits-with-point m (1- digits)))
+                       (sml-exponent-string e))))))
+
+(defun sml-real-exact (magnitude)
+  "IEEEReal.toString of Real.toDecimal: 0.DIGITSEk, the shortest digits."
+  (if (zerop magnitude)
+      "0.0"
+      (multiple-value-bind (k digits) (portable-flonum-to-digits magnitude)
+        (format nil "0.~AE~:[~;~~~]~D" digits (minusp k) (abs k)))))
+
+(defun sml-real-fmt (kind digits x)
+  "Real.fmt: KIND is :sci, :fix or :gen (DIGITS digits after the point,
+resp. significant) or :exact."
   (cond
     ((sml-real-nan-p x) "nan")
     ((sml-real-infinite-p x) (if (plusp x) "inf" "~inf"))
     (t
-     (let ((negative (minusp (float-sign x)))
-           (magnitude (abs x)))
-       (flet ((finish (body) (if negative (concatenate 'string "~" body) body)))
-         (if (zerop magnitude)
-             (finish "0.0")
-             (multiple-value-bind (k digits) (portable-flonum-to-digits magnitude)
-               ;; magnitude = 0.DIGITS * 10^k
-               (let ((n (length digits)))
-                 (finish
-                  (cond
-                    ((and (<= 0 k) (<= k 7))
-                     (if (>= k n)
-                         (format nil "~A~A.0" digits
-                                 (make-string (- k n) :initial-element #\0))
-                         (format nil "~A.~A"
-                                 (if (zerop k) "0" (subseq digits 0 k))
-                                 (subseq digits k))))
-                    ((and (< k 0) (> k -3))
-                     (format nil "0.~A~A" (make-string (- k) :initial-element #\0)
-                             digits))
-                    (t
-                     (let ((exponent (1- k)))
-                       (format nil "~A.~AE~A" (subseq digits 0 1)
-                               (if (> n 1) (subseq digits 1) "0")
-                               (sml-int-to-string exponent))))))))))))))
+     (let* ((q (abs (rational x)))
+            (body (ecase kind
+                    (:sci (sml-real-scientific q digits))
+                    (:fix (sml-real-fixed q digits))
+                    (:gen (let ((general (sml-real-general q digits)))
+                            ;; SML/NJ and Poly/ML (unlike C) keep a
+                            ;; fractional part: 1.0, not 1.
+                            (if (find-if (lambda (c) (find c ".E")) general)
+                                general
+                                (concatenate 'string general ".0"))))
+                    (:exact (sml-real-exact (abs x))))))
+       (if (minusp (float-sign x))
+           (concatenate 'string "~" body)
+           body)))))
+
+(defun sml-real-to-man-exp (x)
+  "Real.toManExp: {man, exp} with X = man * 2^exp and 0.5 <= |man| < 1."
+  (if (or (zerop x) (not (sml-real-finite-p x)))
+      (make-sml-record (list (cons "exp" 0) (cons "man" x)))
+      (multiple-value-bind (significand exponent sign) (decode-float x)
+        (make-sml-record (list (cons "exp" exponent)
+                               (cons "man" (* sign significand)))))))
+
+(defun sml-real-from-man-exp (record)
+  "Real.fromManExp: man * 2^exp, rounded; an infinity or zero when it is
+beyond the doubles."
+  (let ((man (sml-record-select record "man"))
+        (exp (sml-record-select record "exp")))
+    (if (or (zerop man) (not (sml-real-finite-p man)))
+        man
+        ;; Beyond these exponents the result is an infinity or a zero.
+        (let ((q (* (rational man) (expt 2 (max -2200 (min 2200 exp))))))
+          (or (portable-rational-to-double q)
+              (sml-real-infinity (minusp q)))))))
+
+(defun sml-real-from-decimal-string (string)
+  "The double nearest to STRING, [-]W.FE[-]X (W or F may be empty), as
+Real.scan reads it."
+  (let* ((negative (and (plusp (length string)) (char= (char string 0) #\-)))
+         (start (if negative 1 0))
+         (point (position #\. string))
+         (e (position #\E string))
+         (whole (subseq string start point))
+         (fraction (subseq string (1+ point) e))
+         (digits (concatenate 'string whole fraction))
+         (mantissa (if (string= digits "") 0 (parse-integer digits)))
+         (exponent (- (parse-integer string :start (1+ e)) (length fraction)))
+         ;; The decimal exponent of the leading digit, roughly.
+         (magnitude (+ exponent (length (string-left-trim "0" digits))))
+         (value (cond ((zerop mantissa) 0d0)
+                      ((> magnitude 330) nil)
+                      ((< magnitude -360) 0d0)
+                      (t (portable-rational-to-double
+                          (* mantissa (expt 10 exponent)))))))
+    (cond ((null value) (sml-real-infinity negative))
+          (negative (- value))
+          (t value))))
+
+(defun sml-real-to-string (x)
+  "Real.toString, which is Real.fmt (StringCvt.GEN NONE)."
+  (sml-real-fmt :gen 12 x))
 
 (defun sml-real-next-after (tuple)
   (let ((x (sml-tuple-first tuple))
@@ -1393,8 +1819,147 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
   (finish-output)
   (uiop:quit (if (integerp status) status 0)))
 
+(defun sml-word-primitives (structure bits)
+  "The primitives of the word structure STRUCTURE, whose words have BITS
+bits.  Unchecked code may have computed their arguments with integer
+arithmetic (see SML-ARITHMETIC), so they reduce them modulo 2^BITS first."
+  (flet ((name (operation) (format nil "~A.~A" structure operation))
+         (w (x) (ldb (byte bits 0) x)))
+    (flet ((binary (function)
+             (lambda (tuple)
+               (w (funcall function (w (sml-tuple-first tuple))
+                           (w (sml-tuple-second tuple))))))
+           (shift (function)
+             (lambda (tuple)
+               (funcall function (w (sml-tuple-first tuple))
+                        (ldb (byte +sml-word-size+ 0) (sml-tuple-second tuple)))))
+           (division (function)
+             (lambda (tuple)
+               (let ((divisor (w (sml-tuple-second tuple))))
+                 (if (zerop divisor)
+                     (sml-raise-named-exception "Div")
+                     (values (funcall function (w (sml-tuple-first tuple)) divisor)))))))
+      `((,(name "wordSize") . ,(sml-constant-primitive bits))
+        (,(name "toInt") . ,(lambda (x) (sml-check-int (w x))))
+        (,(name "toIntX") . ,(lambda (x) (sml-check-int (sml-word-to-int-x bits (w x)))))
+        (,(name "fromInt") . ,(lambda (x) (w x)))
+        ;; LargeWord is Word.
+        (,(name "toLarge") . ,(lambda (x) (ldb (byte +sml-word-size+ 0) (w x))))
+        (,(name "toLargeX") . ,(lambda (x)
+                                 (sml-word-from-int +sml-word-size+
+                                                    (sml-word-to-int-x bits (w x)))))
+        (,(name "fromLarge") . ,(lambda (x) (w x)))
+        (,(name "notb") . ,(lambda (x) (w (lognot x))))
+        (,(name "orb") . ,(binary #'logior))
+        (,(name "xorb") . ,(binary #'logxor))
+        (,(name "andb") . ,(binary #'logand))
+        (,(name "<<") . ,(shift (lambda (word count) (sml-word-shift bits word count))))
+        (,(name ">>") . ,(shift (lambda (word count) (sml-word-shift bits word (- count)))))
+        (,(name "~>>") . ,(shift (lambda (word count)
+                                   (sml-word-arithmetic-shift-right bits word count))))
+        (,(name "+") . ,(binary #'+))
+        (,(name "-") . ,(binary #'-))
+        (,(name "*") . ,(binary #'*))
+        (,(name "div") . ,(division #'floor))
+        (,(name "mod") . ,(division #'mod))
+        (,(name "fromIntInf") . ,(lambda (x)
+                                   (if (<= 0 x (ldb (byte bits 0) -1))
+                                       x
+                                       (sml-int-overflow))))
+        (,(name "fmt") . ,(lambda (radix)
+                            (lambda (x) (sml-integer-fmt radix (w x)))))))))
+
+(defparameter *sml-word-structures*
+  `(("Word" . ,+sml-word-size+) ("Word8" . 8)
+    ("Word64" . 64) ("Word32" . 32) ("Word16" . 16))
+  "The word structures whose primitives SML-WORD-PRIMITIVES makes.")
+
+(defun sml-integer-fmt (radix value)
+  "VALUE written in RADIX, the StringCvt.radix constructor BIN, OCT, DEC or
+HEX, with upper-case digits and `~' for minus."
+  (let ((base (cdr (assoc (sml-unqualified-name radix)
+                          '(("BIN" . 2) ("OCT" . 8) ("DEC" . 10) ("HEX" . 16))
+                          :test #'string=))))
+    (format nil "~:[~;~~~]~:@(~vR~)" (minusp value) base (abs value))))
+
+(defun sml-integer-primitives (structure bits)
+  "The primitives of the integer structure STRUCTURE (IntInf, Int64, ...),
+whose values are BITS-bit two's complement integers, or unbounded when BITS
+is NIL; results beyond the range raise Overflow."
+  (let ((min (and bits (- (ash 1 (1- bits)))))
+        (max (and bits (1- (ash 1 (1- bits))))))
+    (flet ((name (operation) (format nil "~A.~A" structure operation))
+           (check (x) (if (or (null bits) (<= min x max)) x (sml-int-overflow))))
+      (flet ((binary (function)
+               (lambda (tuple)
+                 (check (funcall function (sml-tuple-first tuple)
+                                 (sml-tuple-second tuple)))))
+             (division (function)
+               (lambda (tuple)
+                 (let ((divisor (sml-tuple-second tuple)))
+                   (if (zerop divisor)
+                       (sml-raise-named-exception "Div")
+                       (check (values (funcall function (sml-tuple-first tuple)
+                                               divisor))))))))
+        `((,(name "precision") . ,(lambda (unit)
+                                    (declare (ignore unit))
+                                    (if bits (sml-some-value bits) (sml-none-value))))
+          (,(name "minInt") . ,(lambda (unit)
+                                 (declare (ignore unit))
+                                 (if bits (sml-some-value min) (sml-none-value))))
+          (,(name "maxInt") . ,(lambda (unit)
+                                 (declare (ignore unit))
+                                 (if bits (sml-some-value max) (sml-none-value))))
+          ;; LargeInt is Int.
+          (,(name "toLarge") . ,#'sml-check-int)
+          (,(name "toInt") . ,#'sml-check-int)
+          (,(name "fromLarge") . ,(lambda (x) (check x)))
+          (,(name "fromInt") . ,(lambda (x) (check x)))
+          (,(name "~") . ,(lambda (x) (check (- x))))
+          (,(name "abs") . ,(lambda (x) (check (abs x))))
+          (,(name "+") . ,(binary #'+))
+          (,(name "-") . ,(binary #'-))
+          (,(name "*") . ,(binary #'*))
+          (,(name "div") . ,(division #'floor))
+          (,(name "mod") . ,(division #'mod))
+          (,(name "quot") . ,(division #'truncate))
+          (,(name "rem") . ,(division #'rem))
+          (,(name "fmt") . ,(lambda (radix)
+                              (lambda (x) (sml-integer-fmt radix x))))
+          ;; IntInf's own.
+          (,(name "pow") . ,(lambda (tuple)
+                              (let ((x (sml-tuple-first tuple))
+                                    (n (sml-tuple-second tuple)))
+                                (cond ((>= n 0) (check (expt x n)))
+                                      ((zerop x) (sml-raise-named-exception "Div"))
+                                      ((= x 1) 1)
+                                      ((= x -1) (if (evenp n) 1 -1))
+                                      (t 0)))))
+          (,(name "log2") . ,(lambda (x)
+                               (if (plusp x)
+                                   (1- (integer-length x))
+                                   (sml-raise-named-exception "Domain"))))
+          (,(name "orb") . ,(binary #'logior))
+          (,(name "xorb") . ,(binary #'logxor))
+          (,(name "andb") . ,(binary #'logand))
+          (,(name "notb") . ,#'lognot)
+          (,(name "<<") . ,(binary #'ash))
+          (,(name "~>>") . ,(binary (lambda (x n) (ash x (- n))))))))))
+
+(defparameter *sml-integer-structures*
+  '(("IntInf") ("Int64" . 64) ("Int32" . 32) ("Int16" . 16) ("Int8" . 8))
+  "The integer structures whose primitives SML-INTEGER-PRIMITIVES makes.")
+
 (defun sml-basis-primitive (name)
-  (or (cdr (assoc name
+  (or (let* ((dot (position #\. name :from-end t))
+             (structure (and dot (subseq name 0 dot)))
+             (word (assoc structure *sml-word-structures* :test #'equal))
+             (integer (assoc structure *sml-integer-structures* :test #'equal)))
+        (cond (word (cdr (assoc name (sml-word-primitives structure (cdr word))
+                                :test #'string=)))
+              (integer (cdr (assoc name (sml-integer-primitives structure (cdr integer))
+                                   :test #'string=)))))
+      (cdr (assoc name
                   `(("General.exnName" . ,#'sml-exn-name-primitive)
                     ("String.maxSize" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("String.size" . ,#'sml-size)
@@ -1404,56 +1969,13 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
                     ("String.^" . ,#'sml-op-^)
                     ("Char.ord" . ,#'sml-ord)
                     ("Char.chr" . ,#'sml-chr)
-                    ("Int.precision" . ,(sml-constant-primitive (sml-none-value)))
+                    ("Int.precision" . ,(sml-constant-primitive (sml-some-value 63)))
                     ("Int.minInt" . ,(sml-constant-primitive (sml-some-value +sml-min-int+)))
                     ("Int.maxInt" . ,(sml-constant-primitive (sml-some-value +sml-max-int+)))
                     ("Int.quot" . ,(lambda (tuple)
-                                      (truncate (second tuple) (third tuple))))
+                                      (sml-int-quot (second tuple) (third tuple))))
                     ("Int.rem" . ,(lambda (tuple)
-                                     (rem (second tuple) (third tuple))))
-                    ("Word.wordSize" . ,(sml-constant-primitive +sml-word-size+))
-                    ("Word.toInt" . ,#'identity)
-                    ("Word.toIntX" . ,(lambda (word)
-                                        (sml-word-to-int-x +sml-word-size+ word)))
-                    ("Word.fromInt" . ,(lambda (value)
-                                         (sml-word-from-int +sml-word-size+ value)))
-                    ("Word.notb" . ,#'sml-word-not)
-                    ("Word.orb" . ,(lambda (tuple)
-                                     (logior (sml-tuple-first tuple) (sml-tuple-second tuple))))
-                    ("Word.xorb" . ,(lambda (tuple)
-                                      (logxor (sml-tuple-first tuple) (sml-tuple-second tuple))))
-                    ("Word.andb" . ,(lambda (tuple)
-                                      (logand (sml-tuple-first tuple) (sml-tuple-second tuple))))
-                    ("Word.<<" . ,#'sml-word-shift-left)
-                    ("Word.>>" . ,#'sml-word-shift-right)
-                    ("Word.~>>" . ,(lambda (tuple)
-                                     (sml-word-arithmetic-shift-right
-                                      +sml-word-size+
-                                      (sml-tuple-first tuple)
-                                      (sml-tuple-second tuple))))
-                    ("Word8.toLarge" . ,#'identity)
-                    ("Word8.toLargeX" . ,(lambda (word)
-                                           (sml-word-from-int +sml-word-size+
-                                                              (sml-word-to-int-x 8 word))))
-                    ("Word8.fromLarge" . ,(lambda (value) (logand value #xff)))
-                    ("Word8.toInt" . ,#'identity)
-                    ("Word8.toIntX" . ,(lambda (word) (sml-word-to-int-x 8 word)))
-                    ("Word8.fromInt" . ,(lambda (value) (logand value #xff)))
-                    ("Word8.notb" . ,(lambda (value) (logand #xff (lognot value))))
-                    ("Word8.orb" . ,(lambda (tuple)
-                                      (logand #xff (logior (sml-tuple-first tuple)
-                                                           (sml-tuple-second tuple)))))
-                    ("Word8.xorb" . ,(lambda (tuple)
-                                       (logand #xff (logxor (sml-tuple-first tuple)
-                                                            (sml-tuple-second tuple)))))
-                    ("Word8.andb" . ,(lambda (tuple)
-                                       (logand #xff (logand (sml-tuple-first tuple)
-                                                            (sml-tuple-second tuple)))))
-                    ("Word8.<<" . ,(lambda (tuple) (sml-word-shift-left tuple 8)))
-                    ("Word8.>>" . ,(lambda (tuple) (sml-word-shift-right tuple 8)))
-                    ("Word8.~>>" . ,(lambda (tuple)
-                                      (sml-word-arithmetic-shift-right
-                                       8 (sml-tuple-first tuple) (sml-tuple-second tuple))))
+                                     (sml-int-rem (second tuple) (third tuple))))
                     ("Vector.maxLen" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("Vector.length" . ,#'length)
                     ("Vector.sub" . ,(lambda (tuple)
@@ -1476,6 +1998,33 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
 	                    ("TextIO.inputN" . ,#'sml-text-io-input-n)
 	                    ("TextIO.inputAll" . ,#'sml-text-io-input-all)
 	                    ("TextIO.inputLine" . ,#'sml-text-io-input-line)
+                    ("TextIO.lookahead" . ,#'sml-text-io-lookahead)
+                    ("TextIO.openString" . ,#'make-string-input-stream)
+                    ("BinIO.openIn" . ,#'sml-bin-io-open-in)
+                    ("BinIO.openOut" . ,#'sml-bin-io-open-out)
+                    ("BinIO.openAppend" . ,#'sml-bin-io-open-append)
+                    ("BinIO.closeIn" . ,(lambda (in)
+                                          (close (sml-bin-instream-stream in))
+                                          (sml-unit)))
+                    ("BinIO.closeOut" . ,(lambda (out) (close out) (sml-unit)))
+                    ("BinIO.input" . ,(lambda (in) (sml-bin-io-read-n in 4096)))
+                    ("BinIO.input1" . ,(lambda (in)
+                                         (let ((byte (sml-bin-io-read-byte in)))
+                                           (if byte (sml-some-value byte) (sml-none-value)))))
+                    ("BinIO.inputN" . ,(lambda (tuple)
+                                         (sml-bin-io-read-n (sml-tuple-first tuple)
+                                                            (sml-tuple-second tuple))))
+                    ("BinIO.inputAll" . ,#'sml-bin-io-input-all)
+                    ("BinIO.lookahead" . ,(lambda (in)
+                                            (let ((byte (sml-bin-io-peek-byte in)))
+                                              (if byte (sml-some-value byte) (sml-none-value)))))
+                    ("BinIO.endOfStream" . ,(lambda (in) (null (sml-bin-io-peek-byte in))))
+                    ("BinIO.output" . ,#'sml-bin-io-output)
+                    ("BinIO.output1" . ,(lambda (tuple)
+                                          (write-byte (ldb (byte 8 0) (sml-tuple-second tuple))
+                                                      (sml-tuple-first tuple))
+                                          (sml-unit)))
+                    ("BinIO.flushOut" . ,(lambda (out) (finish-output out) (sml-unit)))
 	                    ("TextIO.endOfStream" . ,#'sml-text-io-end-of-stream)
 	                    ("TextIO.output" . ,#'sml-text-io-output)
                     ("TextIO.output1" . ,#'sml-text-io-output1)
@@ -1550,12 +2099,50 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
                     ("Real.precision" . ,(sml-constant-primitive 53))
                     ("Real.radix" . ,(sml-constant-primitive 2))
                     ("Real.toString" . ,#'sml-real-to-string)
+                    ("Real.fromDecimalString" . ,#'sml-real-from-decimal-string)
+                    ("Real.toManExp" . ,#'sml-real-to-man-exp)
+                    ("Real.fromManExp" . ,#'sml-real-from-man-exp)
+                    ("Real.fmt" . ,(lambda (tuple)
+                                     (let ((kind (ecase (sml-tuple-first tuple)
+                                                   (0 :sci) (1 :fix) (2 :gen) (3 :exact)))
+                                           (digits (sml-tuple-second tuple)))
+                                       (lambda (x) (sml-real-fmt kind digits x)))))
                     ("CommandLine.name" . ,#'sml-command-line-name)
                     ("CommandLine.arguments" . ,#'sml-command-line-arguments)
                     ("OS.FileSys.isDir" . ,#'sml-os-file-sys-is-dir)
                     ("OS.FileSys.mkDir" . ,#'sml-os-file-sys-mk-dir)
                     ("OS.FileSys.rmDir" . ,#'sml-os-file-sys-rm-dir)
-                    ("OS.Process.terminate" . ,#'sml-os-process-terminate))
+                    ("OS.Process.terminate" . ,#'sml-os-process-terminate)
+                    ("OS.FileSys.fullPath" . ,(lambda (path)
+                                                (with-sml-sys-err
+                                                  (namestring (truename path)))))
+                    ("OS.FileSys.modTime" . ,#'sml-os-file-sys-mod-time)
+                    ("OS.FileSys.fileSize" . ,#'sml-os-file-sys-file-size)
+                    ("OS.FileSys.remove" . ,(lambda (path)
+                                              (with-sml-sys-err
+                                                (or (probe-file path)
+                                                    (sml-raise-sys-err
+                                                     (format nil "~A: no such file" path)))
+                                                (delete-file path))
+                                              (sml-unit)))
+                    ("OS.FileSys.rename" . ,(lambda (record)
+                                              (with-sml-sys-err
+                                                (uiop:rename-file-overwriting-target
+                                                 (sml-record-select record "old")
+                                                 (sml-record-select record "new")))
+                                              (sml-unit)))
+                    ("OS.FileSys.exists" . ,(lambda (path)
+                                              (and (or (probe-file path)
+                                                       (uiop:directory-exists-p path))
+                                                   t)))
+                    ("OS.FileSys.tmpName" . ,#'sml-os-file-sys-tmp-name)
+                    ("Time.now" . ,#'sml-time-now)
+                    ("Timer.cpuTime" . ,(lambda (unit)
+                                          (declare (ignore unit))
+                                          (internal-time-nanoseconds (get-internal-run-time))))
+                    ("Timer.realTime" . ,(lambda (unit)
+                                           (declare (ignore unit))
+                                           (internal-time-nanoseconds (get-internal-real-time)))))
                   :test #'string=))
       (sml-primitive-stub name)))
 
@@ -1641,6 +2228,22 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
     ("nil" . nil)))
 
 (defun initialize-sml-package (package)
+  "Give the basis package, before the Basis Library is compiled into it, the
+bindings of the initial basis that the run time's primitives make: the
+datatypes option and order (src/basis/types.sml declares them again, with
+the same constructors), the built-in exceptions and IO.Io.  Other packages
+see the basis's."
+  (when (string= (package-name package) *sml-basis-package-name*)
+    (initialize-sml-basis-package package))
+  package)
+
+(defparameter *sml-basis-cl-names* '("EQUAL" "SOME")
+  "The basis's names that are also external symbols of COMMON-LISP.  The
+basis package shadows them before the basis's FASL is loaded: a FASL names
+symbols by package and name, so it would otherwise refer to COMMON-LISP's.")
+
+(defun initialize-sml-basis-package (package)
+  (shadow *sml-basis-cl-names* package)
   (let* ((none (sml-symbol-in-package-name "NONE" package))
          (some (sml-symbol-in-package-name "SOME" package)))
     (unless (boundp none)
@@ -1662,18 +2265,19 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
           (register-sml-constructor symbol)
           (register-sml-binding-type symbol "order"))
         (export symbol package)))
-    ;; The exceptions of the initial basis, raised by the run-time
+    ;; The exceptions of HaMLet's initial basis, raised by the run-time
     ;; primitives through SML-RAISE-NAMED-EXCEPTION.
-    (dolist (name '("Bind" "Chr" "Div" "Domain" "Empty" "Match" "Option"
-                    "Overflow" "Size" "Subscript" "Fail"))
-      (let ((symbol (sml-symbol-in-package-name name package)))
-        (unless (boundp symbol)
-          (setf (symbol-value symbol) (sml-initial-exception name))
-          (register-sml-binding-type symbol
-                                     (if (string= name "Fail")
-                                         '(:fn "string" "exn")
-                                         "exn"))
-          (export symbol package))))
+    (loop for (name . sml-name) in '(("Bind" . "Bind") ("Chr" . "Chr")
+                                     ("Div" . "Div") ("Domain" . "Domain")
+                                     ("Match" . "Match") ("Overflow" . "Overflow")
+                                     ("Size" . "Size") ("Subscript" . "Subscript")
+                                     ("Io" . "IO.Io"))
+          for symbol = (sml-symbol-in-package-name sml-name package)
+          unless (boundp symbol)
+            do (setf (symbol-value symbol) (sml-initial-exception name))
+               (register-sml-binding-type symbol "exn")
+               (export symbol package))
+    (register-sml-structure-members (package-name package) "IO" '("Io"))
     package))
 
-(initialize-sml-package *sml-package*)
+(initialize-sml-package (ensure-sml-package *sml-basis-package-name*))

@@ -5,9 +5,9 @@
 ;;; (generated from reference implementations by gen-expected.sh).
 ;;;
 ;;; Directives, anywhere in a test's source:
-;;;   (* @basis *)   load HaMLet's Basis Library (hamlet/basis/all.sml) into the
-;;;                  test's package first; without it only cl-sml's built-in
-;;;                  top-level environment exists.
+;;;   (* @basis *)   the test uses the Basis Library.  Every SML package sees
+;;;                  cl-sml's Basis, so the runner does nothing for it (it
+;;;                  used to load HaMLet's basis into the test's package).
 ;;;
 ;;; Environment variables (run.sh sets them from its flags):
 ;;;   CONF_CHECKER=1      enable the HaMLet static checker
@@ -68,15 +68,11 @@
                                            (write-char ch out))))))))
     (subseq collapsed 0 (min max (length collapsed)))))
 
-(defun basis-pathname ()
-  (asdf:system-relative-pathname "cl-sml" "hamlet/basis/all.sml"))
-
 (defun run-one (name)
   "Run test NAME.  Returns (values status detail actual-output error-text)."
   (let* ((source (merge-pathnames (format nil "tests/~A.sml" name) *here*))
          (expected (file-string (merge-pathnames (format nil "tests/~A.out" name)
                                                  *here*)))
-         (text (file-string source))
          (package (format nil "SML.CONF-~:@(~A~).~:@(~A~)" *mode* name))
          (out (make-string-output-stream))
          (err (make-string-output-stream))
@@ -89,10 +85,6 @@
               (*compile-verbose* nil)
               (*compile-print* nil)
               (*load-verbose* nil))
-          (when (search "@basis" text)
-            (let ((cl-sml::*sml-type-checker* nil)
-                  (*standard-output* (make-broadcast-stream)))
-              (cl-sml:load-sml-file (basis-pathname) :package package)))
           (let ((*standard-output* out))
             (handler-bind ((warning #'muffle-warning))
               (call-with-timeout
