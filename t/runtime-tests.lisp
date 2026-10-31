@@ -44,7 +44,7 @@
   ;; primitives also use.
   (let* ((package (cl-sml::ensure-sml-package "SML.OPTION-BASIS-TEST"))
          (basis cl-sml::*sml-basis-package-name*)
-         (none (sml-value "NONE" package))
+         (none (cl-sml:sml-value "NONE" package))
          (some (cl-sml:sml-function "SOME" package))
          (value (funcall some 42)))
     (is (eq none (cl-sml::sml-symbol "NONE" basis)))

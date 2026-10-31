@@ -81,10 +81,27 @@ signatures."
                             *sml-signature-expressions*)
                    sigexp))))
 
+(defun fresh-sml-basis-package ()
+  "The basis package, emptied if an earlier basis was loaded into it (when
+the basis is recompiled in a running image).  Code compiled against the
+earlier basis keeps the earlier package's symbols."
+  (let ((package (sml-basis-package))
+        (name *sml-basis-package-name*))
+    (when (and package (find-symbol "List.map" package))
+      (delete-package package)
+      (flet ((forget (table)
+               (loop for key being the hash-keys of table
+                     when (and (consp key) (equal (first key) name))
+                       do (remhash key table))))
+        (forget *sml-structure-members*)
+        (forget *sml-type-aliases*)
+        (forget *sml-signature-expressions*)))
+    (ensure-sml-package name)))
+
 (defun compile-sml-basis (&optional (directory (sml-basis-directory)))
   "Compile and run the Basis Library sources in DIRECTORY in the basis
 package.  Returns a form that recreates the basis in a fresh image."
-  (let* ((package (ensure-sml-package *sml-basis-package-name*))
+  (let* ((package (fresh-sml-basis-package))
          (*sml-type-checker* nil)
          (*record-sml-lisp-source* nil)
          (hoisted-forms nil)
