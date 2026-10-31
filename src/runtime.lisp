@@ -139,8 +139,6 @@ module registries below) sees the basis, else NIL."
 
 (defparameter *sml-functor-members* (make-hash-table :test #'equal))
 
-(defparameter *sml-functor-params* (make-hash-table :test #'equal))
-
 (defparameter *sml-functor-instantiators* (make-hash-table :test #'equal))
 
 (defparameter *sml-exception-function-tags* (make-hash-table :test #'eq))
@@ -182,20 +180,19 @@ module registries below) sees the basis, else NIL."
        (let ((basis (sml-basis-package-key package-name)))
          (and basis (lookup-sml-structure-members basis structure-name))))))
 
-(defun register-sml-functor-members (package-name functor-name member-names
-                                      &optional param-name)
-  (let ((key (sml-module-key package-name functor-name)))
-    (setf (gethash key *sml-functor-members*)
-          (normalize-sml-member-names member-names))
-    (if param-name
-        (setf (gethash key *sml-functor-params*) param-name)
-        (remhash key *sml-functor-params*))))
+(defun register-sml-functor-members (package-name functor-name member-specs)
+  "Record the members of the structures FUNCTOR-NAME builds, as far as they
+are known: MEMBER-SPECS are (name type constructorp) lists (see
+FUNCTOR-SCOPE-MEMBER-SPECS)."
+  (setf (gethash (sml-module-key package-name functor-name) *sml-functor-members*)
+        (remove-duplicates (remove nil member-specs) :key #'first :test #'string=
+                                                     :from-end t)))
 
-(defun lookup-sml-functor-members (package-name functor-name)
+(defun lookup-sml-functor-member-specs (package-name functor-name)
   (copy-list (gethash (sml-module-key package-name functor-name) *sml-functor-members*)))
 
-(defun lookup-sml-functor-param (package-name functor-name)
-  (gethash (sml-module-key package-name functor-name) *sml-functor-params*))
+(defun lookup-sml-functor-members (package-name functor-name)
+  (mapcar #'first (lookup-sml-functor-member-specs package-name functor-name)))
 
 (defun register-sml-functor-instantiator (package-name functor-name instantiator)
   (setf (gethash (sml-module-key package-name functor-name)
@@ -205,22 +202,6 @@ module registries below) sees the basis, else NIL."
 (defun lookup-sml-functor-instantiator (package-name functor-name)
   (gethash (sml-module-key package-name functor-name)
            *sml-functor-instantiators*))
-
-(defun sml-module-descendant-member-names (package-name module-name)
-  (let ((package (string-upcase (string package-name)))
-        (prefix (format nil "~A." module-name))
-        (members nil))
-    (maphash
-     (lambda (key child-members)
-       (let ((child-package (first key))
-             (child-name (second key)))
-         (when (and (string= package child-package)
-                    (string-prefix-p prefix child-name))
-           (let ((relative-name (subseq child-name (length prefix))))
-             (dolist (member child-members)
-               (push (format nil "~A.~A" relative-name member) members))))))
-     *sml-structure-members*)
-    (normalize-sml-member-names members)))
 
 (defvar *sml-constructor-function-tags*
   (make-portable-weak-eq-hash-table)
@@ -282,121 +263,19 @@ constructor names are unique within a datatype."
         (symbol symbol)
         (t (intern symbol-name pkg))))))
 
-(defun sml-symbol-value-or-unresolved (symbol)
-  (if (boundp symbol)
-      (symbol-value symbol)
-      (make-sml-unresolved-functor-member (symbol-name symbol))))
-
-(defun call-with-sml-functor-bindings (bindings thunk)
-  (if bindings
-      (progv (mapcar #'car bindings)
-          (mapcar (lambda (binding)
-                    (sml-symbol-value-or-unresolved (cdr binding)))
-                  bindings)
-        (funcall thunk))
-      (funcall thunk)))
-
-(defun wrap-sml-functor-application-value (value bindings)
-  ;; Constructors need no functor bindings, and patterns recognise them by
-  ;; their function identity (see SML-CONSTRUCTOR-TAG-P).
-  (if (and bindings (functionp value) (not (sml-constructor-function-p value)))
-      (lambda (&rest args)
-        (call-with-sml-functor-bindings
-         bindings
-         (lambda ()
-           (let ((result (apply value args)))
-             (if (functionp result)
-                 (wrap-sml-functor-application-value result bindings)
-                 result)))))
-      value))
-
-(defun sml-functor-binding-symbols (package-name param-name argument value-bindings)
-  (let ((pairs nil))
-    (labels ((add-binding (member target-name)
-               (let ((param-symbol
-                       (sml-symbol-in-package-name (if param-name
-                                                       (format nil "~A.~A"
-                                                               param-name member)
-                                                       member)
-                                                   package-name))
-                     (target-symbol
-                       (sml-visible-symbol target-name package-name)))
-                 (proclaim `(special ,param-symbol))
-                 (unless (assoc param-symbol pairs)
-                   (push (cons param-symbol target-symbol) pairs))))
-             (add-argument-member (member)
-               (let ((target-name (format nil "~A.~A" argument member)))
-                 (add-binding member target-name)
-                 (unless param-name
-                   (let ((separator (position #\. member :from-end t)))
-                     (when separator
-                       (add-binding (subseq member (1+ separator))
-                                    target-name)))))))
-      (dolist (binding value-bindings)
-        (add-binding (car binding) (cdr binding)))
-      (when argument
-        (let ((members (or (lookup-sml-structure-members package-name argument)
-                           (lookup-sml-functor-members package-name argument)
-                           '("compare"))))
-          (dolist (member members)
-            (add-argument-member member))))
-    (nreverse pairs))))
-
-(defun sml-functor-structure-bindings (package-name param-name argument)
-  (let ((bindings nil))
-    (when argument
-      (dolist (member (lookup-sml-structure-members package-name argument))
-        (loop for separator = (position #\. member)
-              then (position #\. member :start (1+ separator))
-              while separator
-              for prefix = (subseq member 0 separator)
-              for remainder = (subseq member (1+ separator))
-              for formal = (if param-name
-                               (format nil "~A.~A" param-name prefix)
-                               prefix)
-              for binding = (assoc formal bindings :test #'string=)
-              do (if binding
-                     (pushnew remainder (cdr binding) :test #'string=)
-                     (push (list formal remainder) bindings)))))
-    bindings))
-
-(defun call-with-sml-functor-structure-bindings (package-name bindings thunk)
-  (let ((saved nil))
-    (unwind-protect
-         (progn
-           (dolist (binding bindings)
-             (let ((key (sml-module-key package-name (first binding))))
-               (multiple-value-bind (members presentp)
-                   (gethash key *sml-structure-members*)
-                 (push (list key members presentp) saved))
-               (register-sml-structure-members package-name
-                                               (first binding)
-                                               (rest binding))))
-           (funcall thunk))
-      (dolist (entry saved)
-        (if (third entry)
-            (setf (gethash (first entry) *sml-structure-members*)
-                  (second entry))
-            (remhash (first entry) *sml-structure-members*))))))
-
-(defun alias-sml-module-member (package-name target-module source-module member-name
-                                &optional dynamic-bindings)
+(defun alias-sml-module-member (package-name target-module source-module member-name)
   (alias-sml-module-member-to-name package-name
                                    (format nil "~A.~A" target-module member-name)
                                    source-module
-                                   member-name
-                                   dynamic-bindings))
+                                   member-name))
 
-(defun alias-sml-module-member-to-name (package-name target-name source-module member-name
-                                        &optional dynamic-bindings)
+(defun alias-sml-module-member-to-name (package-name target-name source-module member-name)
   (let* ((source (sml-visible-symbol (format nil "~A.~A" source-module member-name)
                                      package-name))
          (target (sml-symbol-in-package-name target-name package-name)))
     (when (boundp source)
       (proclaim `(special ,target))
-      (setf (symbol-value target)
-            (wrap-sml-functor-application-value (symbol-value source)
-                                                dynamic-bindings))
+      (setf (symbol-value target) (symbol-value source))
       (let ((type (lookup-sml-binding-type source)))
         (when type
           (register-sml-binding-type target type)))
@@ -423,38 +302,195 @@ constructor names are unique within a datatype."
   (export (list target) (symbol-package target))
   target)
 
-(defun alias-sml-functor-application (package-name target-structure functor-name
-                                      &key argument value-bindings)
-  (let* ((members (lookup-sml-functor-members package-name functor-name))
-         (param-name (lookup-sml-functor-param package-name functor-name))
-         (instantiator (lookup-sml-functor-instantiator package-name functor-name))
-         (dynamic-bindings (and (or argument value-bindings)
-                                (sml-functor-binding-symbols package-name
-                                                             param-name
-                                                             argument
-                                                             value-bindings)))
-         (structure-bindings
-           (sml-functor-structure-bindings package-name param-name argument)))
-    (when instantiator
-      (call-with-sml-functor-bindings
-       dynamic-bindings
-       (lambda ()
-         (call-with-sml-functor-structure-bindings
-          package-name structure-bindings instantiator)))
-      (setf members
-            (normalize-sml-member-names
-             (append members
-                     (sml-module-descendant-member-names
-                      package-name functor-name))))
-      (register-sml-functor-members package-name functor-name members param-name))
-    (dolist (member members)
-      (alias-sml-module-member package-name
-                               target-structure
-                               functor-name
-                               member
-                               dynamic-bindings))
-    (register-sml-structure-members package-name target-structure members)
-    target-structure))
+;;; Structure values.  A functor is a function from the value of its
+;;; argument structure to the value of the structure it builds (see
+;;; COMPILE-FUNCTOR-DECLARATION): an SML-STRUCTURE, which maps member names
+;;; such as "x" or "Sub.y" to values.  A structure bound at top level is
+;;; passed by name; its members are looked up when the functor needs them.
+
+(defstruct (sml-structure (:constructor %make-sml-structure))
+  ;; EQUAL hash table: member name -> value.
+  (members (make-hash-table :test #'equal))
+  ;; (name . SML-STRUCTURE) for each substructure known by its value; the
+  ;; name "" stands for a structure whose members are all members of this
+  ;; one (`open' in the structure's body).
+  substructures
+  ;; For a structure bound at top level: (package-name . qualified-name).
+  source)
+
+(defun make-sml-structure (members &optional substructures)
+  "The structure value with MEMBERS, an alist from member names to values
+(the first binding of a name wins), and SUBSTRUCTURES (see SML-STRUCTURE)."
+  (let ((structure (%make-sml-structure :substructures substructures)))
+    (loop with table = (sml-structure-members structure)
+          for (name . value) in members
+          unless (nth-value 1 (gethash name table))
+            do (setf (gethash name table) value))
+    structure))
+
+(defun sml-global-structure (package-name structure-name)
+  "The value of the structure STRUCTURE-NAME bound at top level of PACKAGE-NAME."
+  (%make-sml-structure :source (cons package-name structure-name)))
+
+(defun sml-structure-member (structure name)
+  "The value of member NAME (e.g. \"x\" or \"Sub.y\") of STRUCTURE and
+whether it has one; for a member of a structure bound at top level, the
+package symbol holding it is the third value."
+  (multiple-value-bind (value presentp) (gethash name (sml-structure-members structure))
+    (when presentp
+      (return-from sml-structure-member (values value t))))
+  (loop for (prefix . substructure) in (sml-structure-substructures structure)
+        do (multiple-value-bind (value presentp symbol)
+               (cond ((string= prefix "")
+                      (sml-structure-member substructure name))
+                     ((and (> (length name) (length prefix))
+                           (string-prefix-p prefix name)
+                           (char= (char name (length prefix)) #\.))
+                      (sml-structure-member substructure
+                                            (subseq name (1+ (length prefix))))))
+             (when presentp
+               (return-from sml-structure-member (values value t symbol)))))
+  (let ((source (sml-structure-source structure)))
+    (when source
+      (let ((symbol (sml-visible-symbol (format nil "~A.~A" (cdr source) name)
+                                        (car source))))
+        (when (boundp symbol)
+          (return-from sml-structure-member
+            (values (symbol-value symbol) t symbol))))))
+  (values nil nil))
+
+(defun sml-structure-member-or-unresolved (structure name)
+  "The value of member NAME of STRUCTURE, or a function that reports it
+missing when called."
+  (multiple-value-bind (value presentp) (sml-structure-member structure name)
+    (if presentp
+        value
+        (make-sml-unresolved-functor-member name))))
+
+(defun sml-structure-member-names (structure)
+  (let ((names nil))
+    (maphash (lambda (name value)
+               (declare (ignore value))
+               (push name names))
+             (sml-structure-members structure))
+    (loop for (prefix . substructure) in (sml-structure-substructures structure)
+          do (dolist (name (sml-structure-member-names substructure))
+               (push (if (string= prefix "") name (format nil "~A.~A" prefix name))
+                     names)))
+    (let ((source (sml-structure-source structure)))
+      (when source
+        (setf names (append (reverse (lookup-sml-structure-members (car source)
+                                                                   (cdr source)))
+                            names))))
+    (normalize-sml-member-names (nreverse names))))
+
+(defun sml-substructure (structure name)
+  "The value of substructure NAME (e.g. \"Sub\" or \"Sub.Deep\") of STRUCTURE."
+  (let ((source (sml-structure-source structure)))
+    (if source
+        (sml-global-structure (car source) (format nil "~A.~A" (cdr source) name))
+        (let ((prefix (format nil "~A." name))
+              (members nil))
+          (maphash (lambda (member value)
+                     (when (string-prefix-p prefix member)
+                       (push (cons (subseq member (length prefix)) value) members)))
+                   (sml-structure-members structure))
+          (make-sml-structure
+           members
+           (loop for (sub-prefix . substructure) in (sml-structure-substructures structure)
+                 if (string= sub-prefix name)
+                   collect (cons "" substructure)
+                 else if (string-prefix-p prefix sub-prefix)
+                        collect (cons (subseq sub-prefix (length prefix)) substructure)
+                 else if (string= sub-prefix "")
+                        collect (cons "" (sml-substructure substructure name))))))))
+
+(defun apply-sml-functor (package-name functor-name argument instance-name)
+  "The structure that functor FUNCTOR-NAME builds from the structure value
+ARGUMENT.  INSTANCE-NAME, the qualified name of the structure being bound,
+names the instance's datatype constructors."
+  (let ((instantiator (lookup-sml-functor-instantiator package-name functor-name)))
+    (unless instantiator
+      (error "Unbound SML functor ~A" functor-name))
+    (funcall instantiator argument instance-name)))
+
+(defun sml-instance-constructor-tag (package-name instance-name name)
+  "The tag of the values of datatype constructor NAME (qualified by the
+structures it is declared in, relative to the functor body) of the functor
+instance INSTANCE-NAME: each instance has constructors of its own."
+  (sml-symbol-in-package-name (format nil "~A.~A" instance-name name) package-name))
+
+(defun make-sml-instance-constructor (tag)
+  "The function that builds the values of a functor instance's datatype
+constructor whose values TAG tags."
+  (let ((constructor (lambda (payload) (cons tag payload))))
+    (setf (gethash constructor *sml-constructor-function-tags*) tag)
+    constructor))
+
+(defun sml-constructor-value-tag (value)
+  "The tag of the values of the constructor whose value is VALUE (a
+nullary constructor's value is its tag)."
+  (if (functionp value)
+      (gethash value *sml-constructor-function-tags*)
+      value))
+
+(defun bind-sml-structure-member (package-name name value &optional source)
+  "Bind qualified NAME, a member of a functor instance bound at top level,
+to VALUE (the value of SOURCE, a package symbol, when there is one)."
+  (let ((target (sml-symbol-in-package-name name package-name)))
+    (proclaim `(special ,target))
+    (setf (symbol-value target) value)
+    (forget-sml-binding-cell target)
+    (let ((type (and source (lookup-sml-binding-type source))))
+      (cond
+        (type (register-sml-binding-type target type))
+        ((sml-exception-tag-p value) (register-sml-binding-type target "exn"))
+        ((and (functionp value) (gethash value *sml-exception-function-tags*))
+         (register-sml-binding-type target '(:fn :unknown "exn")))))
+    (cond
+      ((and source (sml-constructor-symbol-p source))
+       (register-sml-constructor target (sml-constructor-canonical-symbol source)))
+      ((sml-constructor-function-p value)
+       (register-sml-constructor target (gethash value *sml-constructor-function-tags*)))
+      ((and value (eq value target))
+       ;; A nullary constructor of the instance (SML-INSTANCE-CONSTRUCTOR-TAG).
+       (register-sml-constructor target))
+      ((and value (symbolp value) (sml-constructor-symbol-p value))
+       (register-sml-constructor target (sml-constructor-canonical-symbol value))))
+    (export (list target) (ensure-sml-package package-name))
+    target))
+
+(defun bind-sml-functor-instance (package-name structure-name functor-name
+                                  instance &optional bound-names)
+  "Bind the members of INSTANCE, the value of structure STRUCTURE-NAME built
+by functor FUNCTOR-NAME, that the compiled code did not bind itself
+(BOUND-NAMES), and record the structure's members."
+  (let ((names (sml-structure-member-names instance)))
+    (dolist (name names)
+      (multiple-value-bind (value presentp source) (sml-structure-member instance name)
+        (when presentp
+          (if (member name bound-names :test #'string=)
+              ;; Bound in a cell; a constructor is bound to the package's
+              ;; symbol as well (see REGISTER-SML-CONSTRUCTOR).
+              (when (or (sml-constructor-function-p value)
+                        (and value (symbolp value) (sml-constructor-symbol-p value))
+                        (and source (sml-constructor-symbol-p source)))
+                (bind-sml-structure-member package-name
+                                           (format nil "~A.~A" structure-name name)
+                                           value source))
+              (bind-sml-structure-member package-name
+                                         (format nil "~A.~A" structure-name name)
+                                         value source)))))
+    (register-sml-structure-members package-name structure-name names)
+    ;; Later compilation units know the members of the functor's results.
+    (let ((specs (lookup-sml-functor-member-specs package-name functor-name)))
+      (register-sml-functor-members
+       package-name functor-name
+       (append specs
+               (loop for name in names
+                     unless (assoc name specs :test #'string=)
+                       collect (list name :unknown nil)))))
+    structure-name))
 
 (defun alias-sml-structure-alias (package-name target-structure source-structure)
   (let ((members (lookup-sml-structure-members package-name source-structure)))
