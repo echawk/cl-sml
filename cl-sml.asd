@@ -33,6 +33,19 @@
                (:file "inspect")
                (:file "reader")
                (:file "type-checker")
+               ;; The native checker (DESIGN-TYPECHECKER.md), opt-in.
+               (:module "types"
+                :serial t
+                :components ((:file "objects")
+                             (:file "unify")
+                             (:file "env")
+                             (:file "print")
+                             (:file "initial")
+                             (:file "scope-tyvars")
+                             (:file "check-pattern")
+                             (:file "elab-core")
+                             (:file "annotations")
+                             (:file "typecheck")))
                (:file "repl")
                (:cl-sml-basis-file "basis")
                ;; SML source cl-sml loads into HaMLet at run time.
@@ -54,6 +67,7 @@
                (:file "hamlet-tests")
                (:file "semantics-tests")
                (:file "reader-tests")
+               (:file "typecheck-tests")
                (:file "run"))
   :perform (test-op (operation component)
              (declare (ignore operation component))

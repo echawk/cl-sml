@@ -37,4 +37,44 @@
            #:sml->lisp
            #:with-sml-phase-timings
            #:repl
-           #:main))
+           #:main
+           ;; The native type checker (src/types/)
+           #:typecheck-sml-string
+           #:typecheck-sml-file
+           #:sml-native-type-error
+           #:sml-native-type-error-message
+           #:sml-native-type-error-line
+           #:sml-native-type-error-column
+           #:sml-native-type-error-types
+           #:sml-match-warning
+           #:*native-unchecked-long-ids*
+           #:*native-relaxed-value-restriction*
+           #:*native-match-warnings*))
+
+;;; The native SML '97 static semantics (DESIGN-TYPECHECKER.md), milestone
+;;; M1: the Core language against a hand-written initial environment.
+(defpackage #:cl-sml.types
+  (:use #:cl)
+  (:import-from #:cl-sml
+                #:parse-sml-program
+                #:sml-static-type-error
+                #:typecheck-sml-string
+                #:typecheck-sml-file
+                #:sml-native-type-error
+                #:sml-native-type-error-message
+                #:sml-native-type-error-line
+                #:sml-native-type-error-column
+                #:sml-native-type-error-types
+                #:sml-match-warning
+                #:*native-unchecked-long-ids*
+                #:*native-relaxed-value-restriction*
+                #:*native-match-warnings*)
+  (:export #:*native-annotations*
+           #:native-annotation
+           #:native-node-fact-info
+           #:native-overloaded-instance
+           #:native-node-type
+           #:native-equality-type
+           #:native-record-row
+           #:native-match-info
+           #:type->string))
