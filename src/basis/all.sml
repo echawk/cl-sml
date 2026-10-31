@@ -54,6 +54,10 @@ use "WORD-sig.sml";
 use "Word.sml";
 use "Word8.sml";
 use "LargeWord.sml";
+use "INT_INF-sig.sml";      (* cl-sml *)
+use "IntInf.sml";           (* cl-sml *)
+use "IntN.sml";             (* cl-sml: Int64, Int32, Int16, Int8 *)
+use "WordN.sml";            (* cl-sml: Word64, Word32, Word16 *)
 
 use "IEEE_REAL-sig.sml";
 use "IEEEReal.sml";
