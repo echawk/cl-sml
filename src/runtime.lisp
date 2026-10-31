@@ -1747,6 +1747,29 @@ beyond the doubles."
           (or (portable-rational-to-double q)
               (sml-real-infinity (minusp q)))))))
 
+(defun sml-real-from-decimal-string (string)
+  "The double nearest to STRING, [-]W.FE[-]X (W or F may be empty), as
+Real.scan reads it."
+  (let* ((negative (and (plusp (length string)) (char= (char string 0) #\-)))
+         (start (if negative 1 0))
+         (point (position #\. string))
+         (e (position #\E string))
+         (whole (subseq string start point))
+         (fraction (subseq string (1+ point) e))
+         (digits (concatenate 'string whole fraction))
+         (mantissa (if (string= digits "") 0 (parse-integer digits)))
+         (exponent (- (parse-integer string :start (1+ e)) (length fraction)))
+         ;; The decimal exponent of the leading digit, roughly.
+         (magnitude (+ exponent (length (string-left-trim "0" digits))))
+         (value (cond ((zerop mantissa) 0d0)
+                      ((> magnitude 330) nil)
+                      ((< magnitude -360) 0d0)
+                      (t (portable-rational-to-double
+                          (* mantissa (expt 10 exponent)))))))
+    (cond ((null value) (sml-real-infinity negative))
+          (negative (- value))
+          (t value))))
+
 (defun sml-real-to-string (x)
   "Real.toString, which is Real.fmt (StringCvt.GEN NONE)."
   (sml-real-fmt :gen 12 x))
@@ -2076,6 +2099,7 @@ is NIL; results beyond the range raise Overflow."
                     ("Real.precision" . ,(sml-constant-primitive 53))
                     ("Real.radix" . ,(sml-constant-primitive 2))
                     ("Real.toString" . ,#'sml-real-to-string)
+                    ("Real.fromDecimalString" . ,#'sml-real-from-decimal-string)
                     ("Real.toManExp" . ,#'sml-real-to-man-exp)
                     ("Real.fromManExp" . ,#'sml-real-from-man-exp)
                     ("Real.fmt" . ,(lambda (tuple)

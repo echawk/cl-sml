@@ -140,57 +140,57 @@ struct
         else NONE
       )
 
-  fun scanFractional getc src =
-      getc src >>= (fn(c, src') =>
-        if Char.isDigit c
-        then SOME(scanFractional' 0.0 0.1 getc src)
-        else NONE
-      )
-  and scanFractional' r d getc src =
-      case getc src of
-        SOME(c, src') =>
-          if Char.isDigit c
-          then scanFractional' (r + d * value c) (d/10.0) getc src'
-          else (r, src)
-      | NONE => (r, src)
+  (* cl-sml: the mantissa and exponent are collected as digits and
+   * converted exactly, rather than accumulated in reals (which rounds at
+   * each step, so that "0.3" did not read as 0.3). *)
+  val fromDecimal' = use{b = "Real.fromDecimalString"} : string -> real
 
+  fun scanDigits getc src =
+      let
+        fun loop(cs, src) =
+            case getc src of
+              SOME(c, src') =>
+                if Char.isDigit c then loop(c::cs, src') else (cs, src)
+            | NONE => (cs, src)
+        val (cs, src') = loop(nil, src)
+      in
+        (String.implode(List.rev cs), src')
+      end
+
+  (* "W.F" for at least one digit in W or F *)
   fun scanMantissa getc src =
-      getc src >>= (fn(c, src') =>
-        if c = #"." then scanFractional getc src' else
-        if Char.isDigit c then SOME(scanMantissa' 0.0 getc src) else
-        NONE
-      )
-  and scanMantissa' r getc src =
-      case getc src of
-        SOME(#".", src') =>
-          (case scanFractional getc src' of
-            SOME(r', src'') => (r + r', src'')
-          | NONE => (r, src)
-          )
-      | SOME(c, src') =>
-          if Char.isDigit c
-          then scanMantissa' (10.0*r + value c) getc src'
-          else (r, src)
-      | NONE => (r, src)
+      let
+        val (whole, src1) = scanDigits getc src
+        val (frac, src2) =
+            case getc src1 of
+              SOME(#".", src') =>
+                (case scanDigits getc src' of
+                   ("", _) => ("", src1)
+                 | result => result)
+            | _ => ("", src1)
+      in
+        if whole = "" andalso frac = "" then NONE
+        else SOME(String.concat[whole, ".", frac], src2)
+      end
 
+  (* the exponent's digits, with "-" when negative *)
   fun scanExp getc src =
-      getc src >>= (fn(c, src') =>
-        if c = #"e" orelse c = #"E" then scanExp' getc src' else NONE
-      )
-  and scanExp' getc src =
-      scanSign getc src >>= (fn(sign, src1) =>
-      getc src1 >>= (fn(c, _) =>
-        if Char.isDigit c
-        then scanExp'' 0.0 getc src1 >>= (fn(r, src2) => SOME(sign*r, src2))
+      getc src >>= (fn(c, src1) =>
+        if c = #"e" orelse c = #"E" then
+          let
+            val (sign, src2) =
+                case getc src1 of
+                  SOME(#"-", src') => ("-", src')
+                | SOME(#"~", src') => ("-", src')
+                | SOME(#"+", src') => ("", src')
+                | _ => ("", src1)
+          in
+            case scanDigits getc src2 of
+              ("", _) => NONE
+            | (digits, src3) => SOME(String.concat[sign, digits], src3)
+          end
         else NONE
-      ))
-  and scanExp'' exp getc src =
-      case getc src of
-        SOME(c, src') =>
-          if Char.isDigit c
-          then scanExp'' (10.0*exp + value c) getc src'
-          else SOME(exp, src)
-      | NONE => SOME(exp, src)
+      )
 
   fun scan getc src =
       scanSign getc (StringCvt.skipWS getc src) >>= (fn(sign, src1) =>
@@ -204,13 +204,14 @@ struct
           SOME src2 => SOME(0.0*posInf, src2)
         | NONE =>
         scanMantissa getc src1 >>= (fn(man, src2) =>
-          case scanExp getc src2 of
-            NONE => SOME(sign*man, src2)
-          | SOME(exp, src3) =>
-              SOME(
-                if ==(man, 0.0) then 0.0 else sign*man*Math.pow(10.0, exp),
-                src3
-              )
+          let
+            val signText = if sign < 0.0 then "-" else ""
+            val (exp, src3) = case scanExp getc src2 of
+                                NONE => ("0", src2)
+                              | SOME result => result
+          in
+            SOME(fromDecimal'(String.concat[signText, man, "E", exp]), src3)
+          end
         )
       )
 
