@@ -682,7 +682,7 @@
          (sml-package-name "SML.CL-SML-READER-TEMP"))
     (let ((*package* host-package)
           (*readtable* (named-readtables:find-readtable 'cl-sml:sml-readtable)))
-      (eval (read-from-string "#{
+      (eval (read-from-string "#@sml{
         val reader_value = 77;
       }#")))
     (is (= 77 (sml-value "reader_value" sml-package-name)))

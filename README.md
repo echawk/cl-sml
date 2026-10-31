@@ -53,7 +53,7 @@ programs it checks.
 
 ## SML in Lisp files
 
-SML can be written inside Lisp code in `#{ ... }#` (or `#@sml{ ... }#`)
+SML can be written inside Lisp code in `#@sml{ ... }#`
 blocks.  Turn the syntax on for the rest of a file with
 
 ```lisp
@@ -63,12 +63,12 @@ blocks.  Turn the syntax on for the rest of a file with
 ```
 
 ```lisp
-#{ fun fib n = if n < 2 then n else fib (n - 1) + fib (n - 2) }#
+#@sml{ fun fib n = if n < 2 then n else fib (n - 1) + fib (n - 2) }#
 
-(+ 1 #{ 2 * 3 }#)                          ; => 7
-(defun fib-of (n) #{ fib ($n : int) }#)    ; $n is the Lisp variable N
-(defun adder (k) #{ fn x => x + $k }#)     ; (funcall (adder 10) 32) => 42
-#{ List.map (fn x => x * x) $(list 1 2 3) }#  ; => (1 4 9)
+(+ 1 #@sml{ 2 * 3 }#)                          ; => 7
+(defun fib-of (n) #@sml{ fib ($n : int) }#)    ; $n is the Lisp variable N
+(defun adder (k) #@sml{ fn x => x + $k }#)     ; (funcall (adder 10) 32) => 42
+#@sml{ List.map (fn x => x * x) $(list 1 2 3) }#  ; => (1 4 9)
 ```
 
 - An expression block is a Lisp expression with the SML value.  A block of

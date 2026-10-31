@@ -10,7 +10,7 @@
 
 ;; 1. Embed SML code directly in your Lisp file!
 (progn
-#{
+#@sml{
   val x = 10;
 
   fun add a b = a + b;
@@ -25,7 +25,7 @@
 )
 
 (progn
-#{
+#@sml{
   fun isSafe x =
     if x > 0 andalso x < 10 then
         true
@@ -58,7 +58,7 @@
            (funcall (sml-user-value "isSafe") 5))
 
 (progn
-#{
+#@sml{
   val letResult =
     let
       val a = 10;
@@ -78,7 +78,7 @@
 ;; Trying to access them here would result in an UNBOUND-VARIABLE error!
 
 (progn
-#{
+#@sml{
   fun sumList lst =
     case lst of
         [] => 0
@@ -97,7 +97,7 @@
         (funcall (sml-user-value "sumList") '(1 2 3 4 5))) ;; Should print 15
 
 (progn
-#{
+#@sml{
   datatype sml_option = SML_NONE | SML_SOME of int;
 
   fun maybeAdd opt =
@@ -116,7 +116,7 @@
 
 
 (progn
-#{
+#@sml{
   fun smlMap f lst =
     case lst of
         [] => []
@@ -133,7 +133,7 @@
 (format t "Squared:  ~A~%" (sml-user-value "squaredNums")) ;; Should print (1 4 9 16 25)
 
 (progn
-#{
+#@sml{
   val pair = (10, 20);
   val unitValue = ();
   val swapped = (fn (x, y) => (y, x)) pair;
@@ -151,7 +151,7 @@
 
 ;; FIXME: below test does not work.
 ;; (progn
-;; #{
+;; #@sml{
 
 ;;   fun fastfib 0 = (0, 1)
 ;;     | fastfib n =

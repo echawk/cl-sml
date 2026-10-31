@@ -16,7 +16,7 @@
 
 ;;; Declarations define bindings in this package's SML package,
 ;;; SML.SML-SHOWCASE; in Lisp, a value `name' is the variable |name| there.
-#{
+#@sml{
   datatype shape = Circle of real | Rect of real * real
 
   fun area (Circle r) = Math.pi * r * r
@@ -30,19 +30,19 @@
 
 ;;; An expression block is a Lisp expression.
 (defun sum-of-fibs (n)
-  (loop for i below n sum #{ fib 10 }# ))
+  (loop for i below n sum #@sml{ fib 10 }# ))
 
 ;;; Lisp values are spliced in with $name or $(form), lexical variables
 ;;; included.  An annotation such as ($n : int) documents the type.
 (defun fib-of (n)
-  #{ fib ($n : int) }#)
+  #@sml{ fib ($n : int) }#)
 
 (defun scaled-area (k)
   #@sml{ area (Rect ($(* k 2.0d0), 3.0)) }#)
 
 ;;; SML functions are Lisp functions: curried, one argument each.
 (defun make-adder (k)
-  #{ fn x => x + $k }#)
+  #@sml{ fn x => x + $k }#)
 
 (defun demo ()
   (format t "~&fib 20          = ~A~%" (fib-of 20))
@@ -53,4 +53,4 @@
           (symbol-value (find-symbol "banner" "SML.SML-SHOWCASE")))
   ;; Lists are Lisp lists; tuples are (:tuple ...).
   (format t "map             = ~A~%"
-          #{ List.map (fn x => (x, x * x)) $(list 1 2 3) }#))
+          #@sml{ List.map (fn x => (x, x * x)) $(list 1 2 3) }#))

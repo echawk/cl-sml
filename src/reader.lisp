@@ -336,7 +336,7 @@ is discarded otherwise.")
                     (eval form)))))))
 
 
-;;; Embedded SML: `#{ ... }#' and `#@sml{ ... }#'.
+;;; Embedded SML: `#@sml{ ... }#'.
 ;;;
 ;;; The reader collects the SML text of a block, replacing each Lisp splice
 ;;; (`$name' or `$(form)') by a placeholder identifier, and returns a
@@ -438,16 +438,16 @@ file."
                              count (eql (read-byte in nil 0) 10))))))
         (values nil nil))))
 
-(defun read-sml-block (stream char arg)
-  "Reader for `#{ SML }#'."
-  (declare (ignore char arg))
+(defun read-sml-block (stream)
+  "Read the SML text of a block up to `}#' and return its %SML-BLOCK form."
   (multiple-value-bind (source line) (sml-block-source-location stream)
     (multiple-value-bind (text splices) (read-sml-block-text stream)
       `(%sml-block ,text ,(package-name (current-sml-package))
                    ,source ,line ,splices))))
 
 (defun read-sml-at-block (stream char arg)
-  "Reader for `#@sml{ SML }#', the same as `#{ SML }#'."
+  "Reader for `#@sml{ SML }#'.  The language name leaves room for others."
+  (declare (ignore char arg))
   (let ((language (with-output-to-string (out)
                     (loop for c = (read-char stream t nil t)
                           until (char= c #\{)
@@ -457,7 +457,7 @@ file."
              :stream stream
              :format-control "Unknown embedded language #@~A{"
              :format-arguments (list language)))
-    (read-sml-block stream char arg)))
+    (read-sml-block stream)))
 
 (defun substitute-sml-splices (form substitutions)
   "FORM with the symbols named by the CARs of SUBSTITUTIONS replaced by
@@ -514,16 +514,14 @@ the block's (PLACEHOLDER FORM)s."
           (t form))))))
 
 (defun enable-sml-syntax (&optional (readtable *readtable*))
-  "Make READTABLE read embedded SML blocks, `#{ ... }#' and
-`#@sml{ ... }#', and return it.  To use them for the rest of a file:
+  "Make READTABLE read embedded SML blocks, `#@sml{ ... }#', and return
+it.  To use them for the rest of a file:
   (eval-when (:compile-toplevel :load-toplevel :execute)
     (setf *readtable* (cl-sml:enable-sml-syntax (copy-readtable))))"
-  (set-dispatch-macro-character #\# #\{ #'read-sml-block readtable)
   (set-dispatch-macro-character #\# #\@ #'read-sml-at-block readtable)
   readtable)
 
 (defreadtable sml-readtable
   (:merge :standard)
   (:macro-char #\# :dispatch)
-  (:dispatch-macro-char #\# #\{ #'read-sml-block)
   (:dispatch-macro-char #\# #\@ #'read-sml-at-block))
