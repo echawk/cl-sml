@@ -51,6 +51,51 @@ basis's bindings, and its own bindings shadow them without changing them.
 HaMLet's checker elaborates the same sources as the initial basis of the
 programs it checks.
 
+## SML in Lisp files
+
+SML can be written inside Lisp code in `#{ ... }#` (or `#@sml{ ... }#`)
+blocks.  Turn the syntax on for the rest of a file with
+
+```lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf *readtable* (cl-sml:enable-sml-syntax (copy-readtable))))
+;; or: (named-readtables:in-readtable cl-sml:sml-readtable)
+```
+
+```lisp
+#{ fun fib n = if n < 2 then n else fib (n - 1) + fib (n - 2) }#
+
+(+ 1 #{ 2 * 3 }#)                          ; => 7
+(defun fib-of (n) #{ fib ($n : int) }#)    ; $n is the Lisp variable N
+(defun adder (k) #{ fn x => x + $k }#)     ; (funcall (adder 10) 32) => 42
+#{ List.map (fn x => x * x) $(list 1 2 3) }#  ; => (1 4 9)
+```
+
+- An expression block is a Lisp expression with the SML value.  A block of
+  declarations defines them in the SML package of the current Lisp package
+  (`SML-USER` for `CL-USER`, `SML.FOO` for `FOO`); a block of declarations
+  followed by an expression returns the expression's value.  From Lisp, the
+  SML value `name` is the special variable `|name|` of that package, e.g.
+  `(symbol-value (find-symbol "fib" "SML.FOO"))`.
+- `$name` and `$(form)` splice Lisp values into the SML.  They are
+  evaluated where the block is, in its lexical environment, every time it
+  runs.  `$name` takes letters, digits and `-_*%!?`; write `$(x)` before
+  other characters.  A `$` after a symbolic character (`<$>`) is SML.
+  Blocks with splices are not checked by `*sml-type-checker*`; annotate a
+  splice, `($x : int)`, to say what its type is meant to be.
+- `}#` and `$` in SML strings, characters and comments are SML.
+- The SML is compiled when the block is macroexpanded, so `compile-file`
+  puts compiled code in the FASL and loading it does not compile SML.
+  Declarations without splices are also evaluated at compile time, so that
+  later blocks know their constructors, structures and fixity.  SML errors
+  are reported with the Lisp file's name and line.
+- Values are cl-sml's runtime values: integers, reals (double floats),
+  strings, chars, `t`/`nil` for booleans, Lisp lists for lists, `(:tuple
+  a b)` for tuples, `(:record ("a" . 1) ...)` for records.  SML functions
+  are Lisp functions of one argument (curried functions return functions).
+
+`examples/embedded-sml.lisp` shows it all.
+
 ## Tests
 
 `./test.sh` runs the fiveam suites in `t/` (set `LISP=ecl` or `LISP=abcl`

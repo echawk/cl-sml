@@ -1,6 +1,7 @@
 (defpackage #:cl-sml
   (:use #:cl #:named-readtables #:trivia)
   (:export #:sml-readtable
+           #:enable-sml-syntax
            #:sml-adt
            #:make-sml-adt
            #:compile-sml-expression-string
