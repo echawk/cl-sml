@@ -335,21 +335,195 @@ is discarded otherwise.")
                   (with-sml-phase (:eval)
                     (eval form)))))))
 
+
+;;; Embedded SML: `#{ ... }#' and `#@sml{ ... }#'.
+;;;
+;;; The reader collects the SML text of a block, replacing each Lisp splice
+;;; (`$name' or `$(form)') by a placeholder identifier, and returns a
+;;; %SML-BLOCK form.  That macro compiles the SML when it is expanded (so
+;;; COMPILE-FILE puts the compiled code in the FASL) and binds the splices'
+;;; values lexically around it, so that they are evaluated where the block
+;;; is, in its lexical environment.
+
+(defparameter *sml-splice-placeholder-prefix* "cl_sml_splice_"
+  "Splices are replaced in the SML text by identifiers with this prefix.")
+
+(defun sml-splice-token-char-p (char)
+  "Characters of the Lisp symbol named by a `$name' splice."
+  (or (alphanumericp char) (find char "-_*%!?")))
+
+(defun read-sml-splice (stream)
+  "Read the Lisp form of a splice whose `$' has been read, as a list of the
+form, or return NIL when the `$' does not start one (it is then part of an
+SML identifier)."
+  (let ((next (peek-char nil stream nil :eof)))
+    (cond
+      ((eql next #\() (list (read stream t nil t)))
+      ((and (characterp next) (alpha-char-p next))
+       (let ((token (with-output-to-string (out)
+                      (loop for c = (peek-char nil stream nil :eof)
+                            while (and (characterp c) (sml-splice-token-char-p c))
+                            do (write-char (read-char stream) out)))))
+         (list (let ((*read-eval* nil)) (read-from-string token)))))
+      (t nil))))
+
+(defun read-sml-block-text (stream)
+  "Read the SML text of a block up to its closing `}#'.  Strings, character
+literals and (nested) comments are copied as they are, so that `}#' or `$'
+in them neither ends the block nor starts a splice.  Returns the text, with
+splices replaced by placeholders, and the list of (PLACEHOLDER FORM)."
+  (let ((splices nil)
+        (previous nil))
+    (flet ((next-char ()
+             (let ((c (read-char stream nil :eof)))
+               (when (eql c :eof)
+                 (error 'simple-reader-error
+                        :stream stream
+                        :format-control "Unterminated SML block: no closing }#"
+                        :format-arguments nil))
+               c))
+           (peek () (peek-char nil stream nil :eof)))
+      (values
+       (with-output-to-string (out)
+         (loop
+           (let ((c (next-char)))
+             (cond
+               ((and (char= c #\}) (eql (peek) #\#))
+                (read-char stream)
+                (return))
+               ((char= c #\")
+                (write-char c out)
+                (loop for d = (next-char)
+                      do (write-char d out)
+                         (cond ((char= d #\\) (write-char (next-char) out))
+                               ((char= d #\") (return)))))
+               ((and (char= c #\() (eql (peek) #\*))
+                (write-char c out)
+                (write-char (read-char stream) out)
+                (let ((depth 1))
+                  (loop while (plusp depth)
+                        do (let ((d (next-char)))
+                             (write-char d out)
+                             (cond ((and (char= d #\() (eql (peek) #\*))
+                                    (write-char (read-char stream) out)
+                                    (incf depth))
+                                   ((and (char= d #\*) (eql (peek) #\)))
+                                    (write-char (read-char stream) out)
+                                    (decf depth)))))))
+               ((and (char= c #\$)
+                     (not (and previous (sml-symbolic-char-p previous))))
+                (let ((form (read-sml-splice stream)))
+                  (if form
+                      (let ((placeholder
+                              (format nil "~A~D" *sml-splice-placeholder-prefix*
+                                      (length splices))))
+                        (push (list placeholder (first form)) splices)
+                        (write-string placeholder out)
+                        (setf c #\Space))
+                      (write-char c out))))
+               (t (write-char c out)))
+             (setf previous c))))
+       (reverse splices)))))
+
+(defun sml-block-source-location (stream)
+  "The file name and line of the current position of STREAM, if it reads a
+file."
+  (let ((pathname (ignore-errors (and (typep stream 'file-stream) (pathname stream))))
+        (position (ignore-errors (file-position stream))))
+    (if (and pathname position)
+        (values (namestring pathname)
+                (ignore-errors
+                 (with-open-file (in pathname :element-type '(unsigned-byte 8))
+                   (1+ (loop repeat position
+                             count (eql (read-byte in nil 0) 10))))))
+        (values nil nil))))
+
 (defun read-sml-block (stream char arg)
+  "Reader for `#{ SML }#'."
   (declare (ignore char arg))
-  (let ((sml-text
-          (with-output-to-string (out)
-            (loop for c = (read-char stream nil :eof)
-                  when (eql c :eof) do (error "Unterminated SML block")
-                  when (char= c #\})
-                    do (let ((next (read-char stream nil :eof)))
-                         (if (char= next #\#)
-                             (return)
-                             (progn (write-char c out) (write-char next out))))
-                  else do (write-char c out)))))
-    (values (compile-sml-program-string sml-text :package (current-sml-package)))))
+  (multiple-value-bind (source line) (sml-block-source-location stream)
+    (multiple-value-bind (text splices) (read-sml-block-text stream)
+      `(%sml-block ,text ,(package-name (current-sml-package))
+                   ,source ,line ,splices))))
+
+(defun read-sml-at-block (stream char arg)
+  "Reader for `#@sml{ SML }#', the same as `#{ SML }#'."
+  (let ((language (with-output-to-string (out)
+                    (loop for c = (read-char stream t nil t)
+                          until (char= c #\{)
+                          do (write-char c out)))))
+    (unless (string-equal language "sml")
+      (error 'simple-reader-error
+             :stream stream
+             :format-control "Unknown embedded language #@~A{"
+             :format-arguments (list language)))
+    (read-sml-block stream char arg)))
+
+(defun substitute-sml-splices (form substitutions)
+  "FORM with the symbols named by the CARs of SUBSTITUTIONS replaced by
+their CDRs."
+  (labels ((walk (x)
+             (cond ((symbolp x)
+                    (let ((entry (assoc (symbol-name x) substitutions
+                                        :test #'string=)))
+                      (if entry (cdr entry) x)))
+                   ((consp x) (cons (walk (car x)) (walk (cdr x))))
+                   (t x))))
+    (walk form)))
+
+(defmacro %sml-block (text package source line splices)
+  "Expansion of an embedded SML block; see READ-SML-BLOCK.  SPLICES are
+the block's (PLACEHOLDER FORM)s."
+  ;; The checker cannot type a Lisp value: blocks with splices are not
+  ;; checked.
+  (let ((*sml-type-checker* (if splices nil *sml-type-checker*)))
+    (multiple-value-bind (form notes)
+        (compile-sml-program-string
+         ;; Leading newlines make the SML's line numbers the file's.
+         (if line
+             (concatenate 'string
+                          (make-string (1- line) :initial-element #\Newline)
+                          text)
+             text)
+         :package package
+         :source-name source)
+      (let ((declarations-p
+              (some (lambda (note)
+                      (not (uiop:string-prefix-p "expression" (cdr note))))
+                    notes)))
+        (cond
+          (splices
+           (let ((variables (loop for (placeholder) in splices
+                                  collect (gensym (string-upcase placeholder)))))
+             `(let ,(loop for variable in variables
+                          for (nil value) in splices
+                          collect `(,variable ,value))
+                ,(substitute-sml-splices
+                  form (loop for variable in variables
+                             for (placeholder) in splices
+                             collect (cons placeholder variable))))))
+          ;; Declarations are also made at compile time, so that the blocks
+          ;; after them in a file are compiled knowing their constructors,
+          ;; structures and fixity, as when the file is loaded as source.
+          (declarations-p
+           `(progn
+              (eval-when (:compile-toplevel :load-toplevel :execute)
+                (ensure-sml-package ,package))
+              (eval-when (:compile-toplevel :load-toplevel :execute)
+                ,form)))
+          (t form))))))
+
+(defun enable-sml-syntax (&optional (readtable *readtable*))
+  "Make READTABLE read embedded SML blocks, `#{ ... }#' and
+`#@sml{ ... }#', and return it.  To use them for the rest of a file:
+  (eval-when (:compile-toplevel :load-toplevel :execute)
+    (setf *readtable* (cl-sml:enable-sml-syntax (copy-readtable))))"
+  (set-dispatch-macro-character #\# #\{ #'read-sml-block readtable)
+  (set-dispatch-macro-character #\# #\@ #'read-sml-at-block readtable)
+  readtable)
 
 (defreadtable sml-readtable
   (:merge :standard)
   (:macro-char #\# :dispatch)
-  (:dispatch-macro-char #\# #\{ #'read-sml-block))
+  (:dispatch-macro-char #\# #\{ #'read-sml-block)
+  (:dispatch-macro-char #\# #\@ #'read-sml-at-block))
