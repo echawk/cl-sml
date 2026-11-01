@@ -268,7 +268,7 @@
     val reversed = rev [1, 2, 3];
     val mapped = map (fn x => x + 1) [1, 2, 3];
     val composed = (op o (fn x => x + 1, fn x => x * 2)) 10;
-    val before_value = op before (7, 99);
+    val before_value = op before (7, ());
     val joined = concat [\"ab\", \"cd\", str #\"e\"];
     val chars = explode \"hi\";
     val rebuilt = implode [#\"h\", #\"i\"];
@@ -276,7 +276,7 @@
     val ord_value = ord #\"A\";
     val chr_value = chr 66;
     val magnitude = abs ~12;
-    val root = sqrt 9;
+    val root = Math.sqrt 9.0;
     val truncated = trunc 3.8;
     val floored = floor 3.8;
     val ceiled = ceil 3.2;
@@ -620,7 +620,10 @@
            (sml-value "deep_functor_result" *test-sml-package*)))))
 
 (test integration-functor-local-infix-shadows-opened-constructor
-  (let ((*test-sml-package* "SML.FUNCTOR-INFIX-SHADOW-TEST"))
+  ;; `fun left@@right' rebinds the constructor @@ in a `val rec', which the
+  ;; Definition forbids (section 2.9); plain mode compiles it as SML/NJ does.
+  (let ((*test-sml-package* "SML.FUNCTOR-INFIX-SHADOW-TEST")
+        (cl-sml:*sml-type-checker* nil))
     (eval-sml-program
      "structure Annotation =
       struct

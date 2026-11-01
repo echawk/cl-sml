@@ -86,7 +86,9 @@ restriction, match checks and annotations")
   (let ((a (types::fresh-tvar :overload types::*class-num*))
         (b (types::fresh-tvar :overload types::*class-realint*)))
     (types::unify a b)
-    (is (= 2 (length (types::oclass-tynames (types::tvar-overload (types::repr a))))))
+    ;; Num and RealInt meet in RealInt (which the Basis's types extend).
+    (is (= (length (types::oclass-tynames types::*class-realint*))
+           (length (types::oclass-tynames (types::tvar-overload (types::repr a))))))
     (signals types::unify-failure (types::unify a (types::con-type types::*t-word*)))
     (finishes (types::unify a (types::con-type types::*t-real*))))
   (let ((a (types::fresh-tvar :overload types::*class-num* :equality t)))
@@ -455,3 +457,102 @@ restriction, match checks and annotations")
   ;; Defaults stay int, word and real.
   (is (binds "val n = 1 + 2 val w = 0w1 val r = 1.5" "val n : int" "val w : word" "val r : real"))
   (is (rejects "val x : IntInf.int = 1 val y : int = x")))
+
+;;;; M3: the native checker as the compiler's static front end
+
+(defun run-checked (source package)
+  "Compile SOURCE in PACKAGE with the default checker and run it."
+  (eval (cl-sml:compile-sml-program-string source :package package)))
+
+(defun checked-value (name package)
+  (cl-sml:with-sml-package (package) (cl-sml:sml-value name)))
+
+(test checking-is-on-by-default
+  (is (eq :native cl-sml:*sml-type-checker*)))
+
+(test compiler-rejects-ill-typed-programs
+  (let ((condition (handler-case (progn (run-checked "val n = 1 + 2
+                                                      val bad : string = n"
+                                                     "SML.M3-REJECT-TEST")
+                                        nil)
+                     (cl-sml:sml-static-type-error (e) e))))
+    (is (typep condition 'cl-sml:sml-native-type-error))
+    (is (equal '(2 59) (list (cl-sml:sml-native-type-error-line condition)
+                            (cl-sml:sml-native-type-error-column condition))))
+    (is (equal '("string" "int") (cl-sml:sml-native-type-error-types condition))))
+  ;; Plain mode still compiles it.
+  (let ((cl-sml:*sml-type-checker* nil))
+    (finishes (cl-sml:compile-sml-program-string "val bad : string = 1 + 2"
+                                                 :package "SML.M3-REJECT-TEST"))))
+
+(test load-sml-file-rejects-ill-typed-file
+  (let ((file (asdf:system-relative-pathname "cl-sml" "t/testdata/ill-typed.sml")))
+    (let ((condition (handler-case (progn (cl-sml:load-sml-file file :package "SML.M3-FILE-TEST")
+                                          nil)
+                       (cl-sml:sml-static-type-error (e) e))))
+      (is (not (null condition)))
+      (is (search "ill-typed.sml:3:" (princ-to-string condition))))))
+
+(test repl-rejects-ill-typed-input-and-goes-on
+  (let ((output (make-string-output-stream))
+        (error-output (make-string-output-stream)))
+    (cl-sml:repl :input (make-string-input-stream
+                         (format nil "val r : string = 3;~%val ok = 1;~%:quit~%"))
+                 :output output :error-output error-output :prompt nil
+                 :package "SML.M3-REPL-REJECT-TEST")
+    (is (search "type error" (get-output-stream-string error-output)))
+    (is (search "val ok = 1 : int" (get-output-stream-string output)))))
+
+(test repl-shadowing-keeps-earlier-code
+  (let ((output (make-string-output-stream))
+        (error-output (make-string-output-stream)))
+    (cl-sml:repl :input (make-string-input-stream
+                         (format nil "val x = 1;~%fun getx () = x;~%val x = \"s\";~%getx () + 1;~%x ^ \"t\";~%:quit~%"))
+                 :output output :error-output error-output :prompt nil
+                 :package "SML.M3-REPL-SHADOW-TEST")
+    (let ((text (get-output-stream-string output)))
+      (is (search "val x = \"s\" : string" text))
+      (is (search "val it = 2 : int" text))
+      (is (search "val it = \"st\" : string" text)))
+    (is (string= "" (get-output-stream-string error-output)))))
+
+(defun eval-sml-block (string)
+  (let ((*readtable* (cl-sml:enable-sml-syntax (copy-readtable nil)))
+        (*package* (find-package '#:cl-sml-typecheck-tests)))
+    (eval (read-from-string string))))
+
+(test sml-blocks-are-checked
+  (signals cl-sml:sml-static-type-error (eval-sml-block "#@sml{ 1 + \"a\" }#"))
+  ;; Splices have a type of their own, which the SML determines.
+  (is (= 12 (eval-sml-block "(let ((x 3)) #@sml{ ($x : int) * 4 }#)")))
+  ;; (SBCL reports an error of the macroexpansion inside LET as its own.)
+  (signals error
+    (eval-sml-block "(let ((x 3)) #@sml{ ($x : int) ^ \"a\" }#)")))
+
+(test intinf-and-word8-literals-run
+  (let ((package "SML.M3-LITERAL-TEST"))
+    (run-checked "val big : IntInf.int = 100000000000000000000 * 100000000000000000000
+                  val q = big div 3
+                  val neg = ~ big
+                  val w : Word8.word = 0w250 + 0w10
+                  val w2 = Word8.toInt (0wxff * 0w2 : Word8.word)
+                  val n = IntInf.toString (IntInf.pow (2, 100))"
+                 package)
+    (is (= (expt 10 40) (checked-value "big" package)))
+    (is (= (floor (expt 10 40) 3) (checked-value "q" package)))
+    (is (= (- (expt 10 40)) (checked-value "neg" package)))
+    (is (= 4 (checked-value "w" package)))
+    (is (= 254 (checked-value "w2" package)))
+    (is (string= (princ-to-string (expt 2 100)) (checked-value "n" package))))
+  (signals cl-sml:sml-static-type-error
+    (run-checked "val w : Word8.word = 0w256" "SML.M3-LITERAL-TEST"))
+  (signals cl-sml:sml-static-type-error
+    (run-checked "val i = 100000000000000000000" "SML.M3-LITERAL-TEST")))
+
+(test use-sees-what-the-used-file-bound
+  ;; Each `;'-terminated program of a file is checked after the one before
+  ;; it ran (t/testdata/use-main.sml uses use-child.sml).
+  (multiple-value-bind (package)
+      (cl-sml:load-sml-file (asdf:system-relative-pathname "cl-sml" "t/testdata/use-main.sml")
+                            :package "SML.M3-USE-TEST")
+    (is (= 42 (checked-value "used_main" (package-name package))))))

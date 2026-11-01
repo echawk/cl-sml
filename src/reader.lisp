@@ -403,16 +403,72 @@ is discarded otherwise.")
     (load-sml-file-1 pathname package compile)))
 
 (defun load-sml-file-1 (pathname package compile)
-  (multiple-value-bind (form target-package declarations)
-      (compile-sml-file pathname :package package)
-    (values target-package
-            (if compile
-                (execute-compiled-sml-file form target-package pathname
-                                           declarations)
-                (let ((*sml-package* target-package)
-                      (*sml-current-directory* (sml-file-directory pathname)))
-                  (with-sml-phase (:eval)
-                    (eval form)))))))
+  (let ((segments (and *sml-type-checker*
+                       (native-sml-checker-p *sml-type-checker*)
+                       (sml-use-program-segments pathname package))))
+    (if segments
+        (load-sml-file-programs pathname package compile segments)
+        (multiple-value-bind (form target-package declarations)
+            (compile-sml-file pathname :package package)
+          (values target-package
+                  (run-compiled-sml-file form target-package pathname
+                                         declarations compile))))))
+
+(defun run-compiled-sml-file (form target-package pathname declarations compile)
+  (if compile
+      (execute-compiled-sml-file form target-package pathname declarations)
+      (let ((*sml-package* target-package)
+            (*sml-current-directory* (sml-file-directory pathname)))
+        (with-sml-phase (:eval)
+          (eval form)))))
+
+;;; A file that `use's others is loaded one program (top-level
+;;; declarations ended by `;', Definition section 8) at a time, each
+;;; checked after the one before has run, so that it sees what the files
+;;; it used bound, as in HaMLet and SML/NJ.
+
+(defun sml-ast-uses-files-p (tree)
+  (and (consp tree)
+       (or (and (eq (car tree) :var) (equal (second tree) "use"))
+           (some #'sml-ast-uses-files-p tree))))
+
+(defun sml-use-program-segments (pathname package)
+  "When the file PATHNAME has several programs and calls `use', the
+(START . END) offsets of its programs, else NIL."
+  (let* ((text (uiop:read-file-string pathname :external-format *sml-external-format*))
+         (*sml-package* (ensure-sml-package (or package (pathname->sml-package-name pathname))))
+         (*sml-declaration-positions* (make-sml-declaration-position-table))
+         (*sml-ast-positions* (make-sml-ast-position-table))
+         (*sml-static-facts* nil)
+         (program (and (search "use" text)
+                       (handler-case (parse-sml-program text)
+                         (sml-syntax-error () nil)))))
+    (when (and program (sml-ast-uses-files-p program))
+      (let ((starts (progv '(cl-sml.types::*source*) (list text) ; special later
+                      (loop for dec in (cddr program)
+                            when (cl-sml.types::program-boundary-p dec)
+                              collect (gethash dec *sml-declaration-positions*)))))
+        (when starts
+          (loop for (start end) on (cons 0 starts)
+                collect (cons start (or end (length text)))))))))
+
+(defun load-sml-file-programs (pathname package compile segments)
+  (let* ((text (uiop:read-file-string pathname :external-format *sml-external-format*))
+         (target-package (ensure-sml-package (or package (pathname->sml-package-name pathname))))
+         (result nil))
+    (loop for (start . end) in segments
+          do (let ((segment (copy-seq text)))
+               ;; Blank the other programs, keeping lines and offsets.
+               (loop for i from 0 below (length segment)
+                     unless (or (<= start i (1- end))
+                                (char= (char segment i) #\Newline))
+                       do (setf (char segment i) #\Space))
+               (multiple-value-bind (form declarations)
+                   (compile-sml-program-string segment :package target-package
+                                                       :source-name (namestring pathname))
+                 (setf result (run-compiled-sml-file form target-package pathname
+                                                     declarations compile)))))
+    (values target-package result)))
 
 
 ;;; Embedded SML: `#@sml{ ... }#'.

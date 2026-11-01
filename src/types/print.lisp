@@ -25,7 +25,8 @@
 
 (defun oclass-string (class)
   (format nil "[~{~A~^, ~}]"
-          (mapcar #'tyname-name
+          ;; The Basis's types are told apart by their structures' names.
+          (mapcar #'tyname-instance-name
                   (cons (oclass-default class)
                         (sort (remove (oclass-default class) (copy-list (oclass-tynames class)))
                               #'< :key #'tyname-stamp)))))
