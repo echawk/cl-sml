@@ -2,7 +2,7 @@
 
 cl-sml compiles Standard ML (SML97) to Common Lisp.  An SML program is read,
 parsed, statically checked by cl-sml's own SML97 type checker (`src/types/`,
-see DESIGN-TYPECHECKER.md), translated to ordinary Common Lisp forms, and
+see docs/DESIGN-TYPECHECKER.md), translated to ordinary Common Lisp forms, and
 then compiled and run by the host Lisp:
 
 ```
@@ -55,7 +55,7 @@ Requirements: SBCL (ECL and ABCL are also supported) and Quicklisp; the
 (cl-sml:load-sml-file #p"program.sml")
 ```
 
-`./build-repl.sh` builds `./cl-sml`, an executable with the checker's
+`scripts/build-repl.sh` builds `./cl-sml`, an executable with the checker's
 Basis preloaded (`CL_SML_NO_TYPE_CHECKER=1` builds one that does not
 check, `CL_SML_HAMLET=1` one that checks with the HaMLet oracle):
 
@@ -131,7 +131,7 @@ blocks.  Turn the syntax on for the rest of a file with
 ## Tests
 
 `./test.sh` runs the fiveam suites in `t/` (set `LISP=ecl` or `LISP=abcl`
-to use another implementation).  `./test-hol` checks a HOL corpus.
+to use another implementation).  `scripts/test-hol` checks a HOL corpus.
 
 ## Seeing the generated Lisp
 

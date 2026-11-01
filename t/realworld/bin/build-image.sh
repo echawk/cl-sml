@@ -2,7 +2,7 @@
 # build-image.sh: SBCL core with cl-sml and its native checker loaded.  Every SML
 # package sees cl-sml's Basis (src/basis/), so nothing is preloaded into
 # package SML.RW (it used to get HaMLet's basis sources).  Rebuilt by run.sh
-# when anything under src/ or hamlet/basis/ is newer than the core.
+# when anything under src/ is newer than the core.
 set -eu
 R=$(cd "$(dirname "$0")/.." && pwd)
 # State (work/, image, caches, results) lives in $RW_STATE (default: the harness dir).

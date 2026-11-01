@@ -40,7 +40,7 @@ constructor test is `(and (boundp 'Leaf) (eql x (symbol-value 'Leaf)))`.
 Baseline, measured 2026-10-29 on SBCL: `fib 30` takes 6.0 s and conses
 217 MB in cl-sml, including compile time. Poly/ML takes 0.18 s.
 
-Use `bench/run` and the SML/NJ suite in `benchmarks/programs` to measure
+Use `external/bench/run` and the SML/NJ suite in `external/benchmarks/programs` to measure
 every change below. Keep the result checks stable.
 
 ## Easy: local rewrites in the compiler, no types needed

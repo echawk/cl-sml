@@ -76,7 +76,7 @@ structure's name in lower case, e.g. \"intinf\" or \"word32\".")
   "Elaborate the Basis Library sources FILES; set *BASIS-ENV* and
 *BASIS-SCOPES*.  Then the integer, word and real types of the Basis's
 structures (IntInf.int, Int32.int, Word8.word, ...) join the overloading
-classes Int, Word and Real: DESIGN-TYPECHECKER.md, section 4, item 3."
+classes Int, Word and Real: docs/DESIGN-TYPECHECKER.md, section 4, item 3."
   (let ((start (get-internal-real-time))
         (env (starting-env))
         (scopes (list cl-sml::*sml-builtin-scope*))

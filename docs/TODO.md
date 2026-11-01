@@ -8,7 +8,7 @@
     and evaluates programs, e.g. `./cl-hamlet file.sml` and the `cl-hamlet`
     REPL.  Known gaps: basis library is re-elaborated on every start (~6s),
     and `sml-primitive-stub`s remain for rarely used primitives.
-  - [ ] Load and run representative programs from `HOL/`.  `./test-hol`
+  - [ ] Load and run representative programs from `HOL/`.  `scripts/test-hol`
     loads 56 portableML/prekernel/0 sources checked by HaMLet
     (`t/hol-checked.lisp`).  Next blockers: Portable.sml (IntInf,
     OS.FileSys, Timer missing from HaMLet's basis), and HaMLet under cl-sml
@@ -31,7 +31,7 @@
 - [x] SML97 static semantics via HaMLet (git submodule `hamlet/`, unmodified)
   through `t/hamlet-oracle/hamlet-check.sml` and `src/type-checker.lisp`.  The checker runs before
   our parser in `compile-sml-program-string`, file loading and the REPL;
-  `(enable-hamlet-type-checker)` turns it on, and `build-repl.sh` preloads it
+  `(enable-hamlet-type-checker)` turns it on, and `scripts/build-repl.sh` preloads it
   into the `cl-sml` image.  The REPL prints HaMLet's inferred types.
 - [x] Use HaMLet's elaboration in code generation.  `t/hamlet-oracle/hamlet-check.sml`
   reports facts keyed by source position (`src/static-facts.lisp`), which the

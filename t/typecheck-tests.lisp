@@ -6,7 +6,7 @@
 
 (def-suite cl-sml-typecheck-suite
   :description "The native type checker (src/types/, milestones M1 and M2
-of DESIGN-TYPECHECKER.md): unifier, Core and Modules elaboration rules,
+of docs/DESIGN-TYPECHECKER.md): unifier, Core and Modules elaboration rules,
 signature matching, the elaborated Basis, errors, overloading, value
 restriction, match checks and annotations")
 

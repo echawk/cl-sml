@@ -7,3 +7,6 @@
 /t/conformance/modules/tmp/
 # The real-world harness lists $R/work (a link to $RW_STATE/work when set)
 /t/realworld/work
+# Untracked third-party corpora (benchmarks, LunarML, cakeml, ...) and specs
+/external/
+/docs/spec/

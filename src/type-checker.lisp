@@ -3,7 +3,7 @@
 ;;; The static checkers of compilation (*SML-TYPE-CHECKER*):
 ;;;
 ;;; :NATIVE (the default)  the native checker of src/types/ (package
-;;;                        cl-sml.types, DESIGN-TYPECHECKER.md), which
+;;;                        cl-sml.types, docs/DESIGN-TYPECHECKER.md), which
 ;;;                        elaborates the AST the compiler then compiles,
 ;;;                        and gives it an annotation table keyed by node;
 ;;; :HAMLET                HaMLet, the differential oracle of the native

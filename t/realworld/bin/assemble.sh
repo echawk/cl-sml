@@ -10,7 +10,9 @@ R=$(cd "$(dirname "$0")/.." && pwd)
 # State (work/, image, caches, results) lives in $RW_STATE (default: the harness dir).
 S=${RW_STATE:-$R}
 P=${CLSML_ROOT:-$(cd "$R/../.." && pwd)}
-B=$P/benchmarks
+# Corpora (untracked, under external/); RW_BENCHMARKS and RW_LUNARML override.
+B=${RW_BENCHMARKS:-$P/external/benchmarks}
+L=${RW_LUNARML:-$P/external/LunarML}
 W=$S/work
 mkdir -p "$W"
 
@@ -68,7 +70,7 @@ done
 
 for sub in should_run mlbasis/should_run; do
   tag=$(echo "$sub" | sed 's|/should_run||; s|should_run|core|')
-  for f in "$P"/LunarML/test/$sub/*.sml; do
+  for f in "$L"/test/$sub/*.sml; do
     base=$(basename "$f" .sml)
     [ -f "${f%.sml}.mlb" ] && continue
     [ -f "${f%.sml}.stdout" ] || continue

@@ -32,7 +32,7 @@
                (:file "compiler")
                (:file "inspect")
                (:file "reader")
-               ;; The native checker (DESIGN-TYPECHECKER.md).
+               ;; The native checker (docs/DESIGN-TYPECHECKER.md).
                (:module "types"
                 :serial t
                 :components ((:file "objects")

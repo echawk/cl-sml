@@ -1,6 +1,6 @@
 ;;; Load a corpus of HOL4 sources with HaMLet as the static checker, so that
 ;;; HaMLet's elaboration drives code generation, then run some of the code.
-;;; Run through ./test-hol.
+;;; Run through scripts/test-hol.
 
 (ql:quickload :cl-sml)
 
