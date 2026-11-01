@@ -118,33 +118,76 @@ TypeScheme.normalise)."
   (let ((type (repr (scheme-type (valstr-scheme valstr)))))
     (and (consp type) (eq (car type) :arrow) (second type))))
 
-(defun describe-env (env)
-  "ENV's bindings, as HaMLet prints a basis: abstract types, type
-abbreviations, datatypes, exceptions, values, each group sorted by name.
-HaMLet prints an abstype's type as an abbreviation of itself."
-  (let ((te (sort (env-latest (env-te env)) #'string< :key #'car))
+(defun abstract-tystr-p (tycon tystr tynames)
+  "Is TYSTR, bound to TYCON, a type of the signature whose flexible type
+names are TYNAMES, printed `type t' (HaMLet PPStaticEnv.absTy)?"
+  (let ((tyname (tyfcn-tyname (tystr-tyfcn tystr))))
+    (and tyname
+         (null (tystr-ve tystr))
+         (string= (tyname-name tyname) tycon)
+         (member tyname tynames))))
+
+(defun spaces (n)
+  (make-string n :initial-element #\Space))
+
+(defun write-env (env stream indent tynames)
+  "ENV's bindings, as HaMLet prints them (PPStaticEnv.ppEnv'): structures,
+abstract types, type abbreviations, datatypes, exceptions, values, each
+group sorted by name, one per line indented by INDENT.  TYNAMES are the
+flexible type names of the signature ENV belongs to."
+  (let ((se (sort (env-latest (env-se env)) #'string< :key #'car))
+        (te (sort (env-latest (env-te env)) #'string< :key #'car))
         (ve (sort (env-latest (env-ve env)) #'string< :key #'car)))
-    (with-output-to-string (out)
-      (loop for (name . tystr) in te
-            when (member (tystr-kind tystr) '(:type :abstype))
-              do (format out "type ~A~A = ~A~%"
-                         (tyvarseq-string (tyfcn-params (tystr-tyfcn tystr))) name
-                         (type->string (tyfcn-body (tystr-tyfcn tystr)))))
-      (loop for (name . tystr) in te
-            when (eq (tystr-kind tystr) :datatype)
-              do (format out "datatype ~A~A = ~{~A~^ | ~}~%"
-                         (tyvarseq-string (tyfcn-params (tystr-tyfcn tystr))) name
-                         (loop for (con . valstr) in (sort (copy-list (tystr-ve tystr))
-                                                           #'string< :key #'car)
-                               for arg = (constructor-argument valstr)
-                               collect (if arg
-                                           (format nil "~A of ~A" con (type->string arg))
-                                           con))))
-      (loop for (name . valstr) in ve
-            when (eq (valstr-status valstr) :e)
-              do (let ((arg (constructor-argument valstr)))
-                   (format out "exception ~A~@[ of ~A~]~%" name
-                           (and arg (type->string arg)))))
-      (loop for (name . valstr) in ve
-            when (eq (valstr-status valstr) :v)
-              do (format out "val ~A : ~A~%" name (scheme->string (valstr-scheme valstr)))))))
+    (loop for (name . sub) in se
+          do (format stream "~Astructure ~A :~%" (spaces indent) name)
+             (write-sig sub stream (+ indent 2) tynames))
+    (loop for (name . tystr) in te
+          when (abstract-tystr-p name tystr tynames)
+            do (format stream "~A~:[type~;eqtype~] ~A~A~%" (spaces indent)
+                       (tyname-equality (tyfcn-tyname (tystr-tyfcn tystr)))
+                       (tyvarseq-string (tyfcn-params (tystr-tyfcn tystr))) name))
+    (loop for (name . tystr) in te
+          when (and (null (tystr-ve tystr)) (not (abstract-tystr-p name tystr tynames)))
+            do (format stream "~Atype ~A~A = ~A~%" (spaces indent)
+                       (tyvarseq-string (tyfcn-params (tystr-tyfcn tystr))) name
+                       (type->string (tyfcn-body (tystr-tyfcn tystr)))))
+    (loop for (name . tystr) in te
+          when (tystr-ve tystr)
+            do (format stream "~Adatatype ~A~A = ~{~A~^ | ~}~%" (spaces indent)
+                       (tyvarseq-string (tyfcn-params (tystr-tyfcn tystr))) name
+                       (loop for (con . valstr) in (sort (copy-list (tystr-ve tystr))
+                                                         #'string< :key #'car)
+                             for arg = (constructor-argument valstr)
+                             collect (if arg
+                                         (format nil "~A of ~A" con (type->string arg))
+                                         con))))
+    (loop for (name . valstr) in ve
+          when (eq (valstr-status valstr) :e)
+            do (let ((arg (constructor-argument valstr)))
+                 (format stream "~Aexception ~A~@[ of ~A~]~%" (spaces indent) name
+                         (and arg (type->string arg)))))
+    (loop for (name . valstr) in ve
+          when (eq (valstr-status valstr) :v)
+            do (format stream "~Aval ~A : ~A~%" (spaces indent) name
+                       (scheme->string (valstr-scheme valstr))))))
+
+(defun write-sig (env stream indent tynames)
+  (format stream "~Asig~%" (spaces indent))
+  (write-env env stream (+ indent 2) tynames)
+  (format stream "~Aend~%" (spaces indent)))
+
+(defun describe-env (env)
+  "ENV's bindings, as HaMLet prints a basis (PPStaticBasis.ppBasis):
+signatures, functors, then the environment.  HaMLet starts with a comment
+listing the basis's type names, and puts one in each signature, which we
+leave out."
+  (with-output-to-string (out)
+    (loop for (name . sig) in (sort (env-latest (env-g env)) #'string< :key #'car)
+          do (format out "signature ~A =~%" name)
+             (write-sig (sig-env sig) out 2 (sig-tynames sig)))
+    (loop for (name . funsig) in (sort (env-latest (env-f env)) #'string< :key #'car)
+          do (format out "functor ~A(Arg :~%" name)
+             (write-sig (funsig-env funsig) out 4 (funsig-tynames funsig))
+             (format out "  ) :~%")
+             (write-sig (funsig-result-env funsig) out 4 (funsig-result-tynames funsig)))
+    (write-env env out 0 nil)))
