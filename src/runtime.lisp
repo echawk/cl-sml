@@ -1847,6 +1847,33 @@ Real.scan reads it."
 (defun sml-os-file-sys-is-dir (path)
   (and (uiop:directory-exists-p path) t))
 
+(defun sml-os-file-sys-is-link (path)
+  "Is PATH a symbolic link?  Its truename then differs from that of its
+directory joined with its name."
+  (with-sml-sys-err
+    (let* ((file (uiop:parse-native-namestring path))
+           (dir (truename (uiop:pathname-directory-pathname
+                           (merge-pathnames file (uiop:getcwd))))))
+      (if (uiop:directory-exists-p file)
+          (not (equal (truename (uiop:ensure-directory-pathname file))
+                      (merge-pathnames
+                       (make-pathname :directory
+                                      (list :relative (file-namestring file)))
+                       dir)))
+          (not (equal (truename file)
+                      (merge-pathnames (file-namestring file) dir)))))))
+
+(defun sml-os-file-sys-list-dir (path)
+  "The names of the entries of directory PATH (OS.FileSys.openDir)."
+  (with-sml-sys-err
+    (let ((dir (uiop:ensure-directory-pathname path)))
+      (unless (uiop:directory-exists-p dir)
+        (error "No such directory: ~A" path))
+      (append (mapcar (lambda (p) (car (last (pathname-directory p))))
+                      (uiop:subdirectories dir))
+              (mapcar (lambda (p) (file-namestring p))
+                      (uiop:directory-files dir))))))
+
 (defun sml-os-file-sys-mk-dir (path)
   (ensure-directories-exist (uiop:ensure-directory-pathname path))
   (sml-unit))
@@ -1858,6 +1885,17 @@ Real.scan reads it."
 (defun sml-os-process-terminate (status)
   (finish-output)
   (uiop:quit (if (integerp status) status 0)))
+
+(defun sml-os-process-get-env (name)
+  (let ((value (uiop:getenv name)))
+    (if value (sml-some-value value) (sml-none-value))))
+
+(defun sml-os-process-system (command)
+  "Run COMMAND with the shell; its exit status (0 is success)."
+  (finish-output)
+  (nth-value 2 (uiop:run-program command :force-shell t :ignore-error-status t
+                                         :output :interactive
+                                         :error-output :interactive)))
 
 (defun sml-word-primitives (structure bits)
   "The primitives of the word structure STRUCTURE, whose words have BITS
@@ -2150,9 +2188,17 @@ is NIL; results beyond the range raise Overflow."
                     ("CommandLine.name" . ,#'sml-command-line-name)
                     ("CommandLine.arguments" . ,#'sml-command-line-arguments)
                     ("OS.FileSys.isDir" . ,#'sml-os-file-sys-is-dir)
+                    ("OS.FileSys.listDir" . ,#'sml-os-file-sys-list-dir)
+                    ("OS.FileSys.isLink" . ,#'sml-os-file-sys-is-link)
+                    ("OS.FileSys.setTime" . ,(lambda (arguments)
+                                              (with-sml-sys-err
+                                                (error "setTime is not supported: ~A"
+                                                       (sml-tuple-first arguments)))))
                     ("OS.FileSys.mkDir" . ,#'sml-os-file-sys-mk-dir)
                     ("OS.FileSys.rmDir" . ,#'sml-os-file-sys-rm-dir)
                     ("OS.Process.terminate" . ,#'sml-os-process-terminate)
+                    ("OS.Process.getEnv" . ,#'sml-os-process-get-env)
+                    ("OS.Process.system" . ,#'sml-os-process-system)
                     ("OS.FileSys.fullPath" . ,(lambda (path)
                                                 (with-sml-sys-err
                                                   (namestring (truename path)))))

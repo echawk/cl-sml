@@ -9,11 +9,19 @@
     REPL.  Known gaps: basis library is re-elaborated on every start (~6s),
     and `sml-primitive-stub`s remain for rarely used primitives.
   - [ ] Load and run representative programs from `HOL/`.  `scripts/test-hol`
-    loads 56 portableML/prekernel/0 sources checked by HaMLet
-    (`t/hol-checked.lisp`).  Next blockers: Portable.sml (IntInf,
-    OS.FileSys, Timer missing from HaMLet's basis), and HaMLet under cl-sml
-    failing on non-ASCII source (Subscript: source is read as UTF-8, so
-    characters above 255 reach HaMLet's 8-bit lexer tables).
+    loads 148 portableML, Holmake hfs, prekernel and src/0 sources (with
+    shims in `t/testdata/hol-shims/`), checked by the native checker
+    (`t/hol-corpus.lisp`), including Portable, Globals, Feedback, KernelSig
+    and Type_dtype.  Next blockers:
+    - `Lib.sml` needs the Basis's `Date` structure (missing); Lib blocks
+      Dep, Tag, Lexis, Context, the Final*-sig files and all of src/0
+      (Type, Term, Net, KernelTypes).
+    - `Count.sml`: `val l = [#ABS, ...]` is a flexible record resolved
+      only by later declarations; the native checker (like HaMLet) wants
+      it resolved by the end of the value declaration, Poly/ML and MLton
+      by the end of the top-level declaration.
+    - Not attempted: HOLsexp_parser (ML-Yacc output), SHA1 (SHA1_ML),
+      holpathdb (TOML), tools-poly Help/Mosml/quse (Poly/ML specific).
 - [ ] Replace shallow module handling with explicit module/signature
   elaboration; retain CL packages as the external namespace substrate.
   With the HaMLet checker, structure members and constructor/variable

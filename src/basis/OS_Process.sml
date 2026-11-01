@@ -18,5 +18,7 @@ struct
     fun isSuccess st = st = 0
     fun terminate st = (use{b = "OS.Process.terminate"} : status -> 'a) st
     val exit = terminate
+    fun getEnv name = (use{b = "OS.Process.getEnv"} : string -> string option) name
+    fun system command = (use{b = "OS.Process.system"} : string -> status) command
   end
 end;

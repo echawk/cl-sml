@@ -8,20 +8,18 @@
 
 signature OS_FILE_SYS =
 sig
-(*
   type dirstream
   val openDir : string -> dirstream
   val readDir : dirstream -> string option
   val rewindDir : dirstream -> unit
   val closeDir : dirstream -> unit
-*)
   val chDir : string -> unit
   val getDir : unit -> string
   val mkDir : string -> unit
   val rmDir : string -> unit
   val isDir : string -> bool
-(*
   val isLink : string -> bool
+(*
   val readLink : string -> string
 *)
   (* cl-sml *)
@@ -29,9 +27,7 @@ sig
   val realPath : string -> string
   val modTime : string -> Time.time
   val fileSize : string -> Position.int
-(*
   val setTime : string * Time.time option -> unit
-*)
   (* cl-sml *)
   val remove : string -> unit
   val rename : {old : string, new : string} -> unit
