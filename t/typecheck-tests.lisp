@@ -5,9 +5,10 @@
 (in-package #:cl-sml-typecheck-tests)
 
 (def-suite cl-sml-typecheck-suite
-  :description "The native type checker (src/types/, milestone M1 of
-DESIGN-TYPECHECKER.md): unifier, Core elaboration rules, errors,
-overloading, value restriction, match checks and annotations")
+  :description "The native type checker (src/types/, milestones M1 and M2
+of DESIGN-TYPECHECKER.md): unifier, Core and Modules elaboration rules,
+signature matching, the elaborated Basis, errors, overloading, value
+restriction, match checks and annotations")
 
 (in-suite cl-sml-typecheck-suite)
 
@@ -241,11 +242,13 @@ overloading, value restriction, match checks and annotations")
   (is (rejects "type t = 'a list" "unbound type variable"))
   (is (rejects "val 'a x = let val 'a y = () in () end" "shadows")))
 
-(test error-modules-not-supported
-  (is (rejects "structure S = struct end" "modules are not supported"))
-  (is (rejects "val x = Int.toString 1" "modules are not supported"))
+(test error-unknown-structures
+  (is (rejects "val x = Nope.toString 1" "unknown structure Nope"))
+  (is (rejects "val x = Int.nope" "unknown identifier Int.nope"))
+  (is (rejects "open Nope" "unknown structure"))
   (let ((cl-sml:*native-unchecked-long-ids* t))
-    (is (binds "val s = Int.toString 1 val n = size \"ab\"" "val s : ?" "val n : int"))))
+    (is (binds "val s = Nope.toString 1 val n = size \"ab\"" "val s : ?" "val n : int"))
+    (is (binds "val s = Int.toString 1" "val s : string"))))
 
 ;;;; Overloading [Appendix E]
 
@@ -295,3 +298,160 @@ overloading, value restriction, match checks and annotations")
       (is (equal "v" (types:native-node-fact-info (node-named "<") "id" table)))
       (let ((selector (car (find-if (lambda (entry) (eq (car (car entry)) :selector)) nodes))))
         (is (equal '("x" "y") (mapcar #'car (types:native-record-row selector table))))))))
+
+;;;; Modules [rules 50-89]
+
+(test basis-elaborates
+  (let ((env (types::initial-env)))
+    (dolist (name '("General" "List" "Option" "String" "Int" "IntInf" "Word8" "Real"
+                    "Vector" "Array" "TextIO" "OS" "CommandLine" "Time"))
+      (is (types::env-lookup-strid env name) "structure ~A is missing" name))
+    (is (binds "val x = List.map (fn x => x + 1) [1, 2] val s = String.concat [\"a\"]
+                val p = TextIO.print val m = Option.map"
+               "val x : int list" "val s : string" "val p : string -> unit"
+               "val m : ('a -> 'b) -> 'a option -> 'b option"))
+    ;; The Basis's top-level values (values.sml).
+    (is (binds "val a = valOf (SOME 1) val b = rev [true] val c = 3 <> 4"
+               "val a : int" "val b : bool list" "val c : bool"))
+    (is (< types::*basis-elaboration-seconds* 10))))
+
+(test module-structures-and-long-identifiers
+  (is (binds "structure S = struct val x = 1 type t = int datatype d = A | B of t end
+              val y = S.x + 1 val z : S.t = 2 val d = S.B 3
+              val n = case d of S.A => 0 | S.B k => k"
+             "val y : int" "val z : int" "val d : d" "val n : int"))
+  (is (binds "structure S = struct structure T = struct val x = \"a\" end end val y = S.T.x"
+             "val y : string"))
+  (is (binds "structure S = struct local val x = 3 in val y = x end end open S val z = y"
+             "val z : int"))
+  (is (binds "structure A = List structure B = A val l = B.length [1]" "val l : int"))
+  (is (binds "structure S = let val x = 1 in struct val y = x end end val z = S.y"
+             "val z : int"))
+  (is (rejects "structure S = struct val x = 1 end val y = S.z" "unknown identifier S.z"))
+  (is (rejects "val x = S.A" "unknown structure S")))
+
+(test module-signature-matching
+  (is (binds "signature S = sig type t val x : t end
+              structure X : S = struct type t = int val x = 1 val hidden = 2 end
+              val y = X.x + 1"
+             "val y : int"))
+  ;; Transparent ascription keeps the representation but hides other names.
+  (is (rejects "structure X : sig val x : int end = struct val x = 1 val y = 2 end
+                val z = X.y" "unknown identifier X.y"))
+  (is (rejects "structure S = struct val x = 1 end : sig val y : int end"
+               "value y is specified but not declared"))
+  (is (rejects "structure S : sig type t end = struct end" "type t is specified but not declared"))
+  (is (rejects "structure S : sig structure A : sig end end = struct end"
+               "structure A is specified but not declared"))
+  (is (rejects "structure S : sig val f : 'a -> 'a end = struct fun f x = x + 1 end"
+               "the signature says 'a -> 'a"))
+  (is (binds "structure S : sig val f : int -> int end = struct fun f x = x end
+              val y = S.f 1"
+             "val y : int"))
+  (is (rejects "structure S : sig exception E end = struct val E = 1 end" "is a value"))
+  (is (rejects "structure S : sig datatype t = A | B end = struct datatype t = A | B | C end"
+               "constructors"))
+  (is (rejects "structure S : sig type 'a t end = struct type t = int end" "argument"))
+  ;; An undetermined type may not become polymorphic (HaMLet undetermined3).
+  (is (rejects "structure X : sig val f : 'a -> 'a option end =
+                struct fun g () = let val r = ref NONE in fn x => !r before r := SOME x end
+                       val f = g () end")))
+
+(test module-opaque-ascription
+  ;; Opaque ascription hides the representation ...
+  (is (rejects "structure X :> sig type t val x : t end = struct type t = int val x = 1 end
+                val y = X.x + 1"))
+  (is (binds "structure X :> sig type t val x : t val f : t -> int end =
+                struct type t = int val x = 1 fun f x = x end
+              val y = X.f X.x"
+             "val y : int"))
+  ;; ... and equality, unless the signature says eqtype.
+  (is (rejects "structure X :> sig type t val x : t end = struct type t = int val x = 1 end
+                val b = X.x = X.x" "equality"))
+  (is (binds "structure X :> sig eqtype t val x : t end = struct type t = int val x = 1 end
+              val b = X.x = X.x"
+             "val b : bool"))
+  (is (rejects "structure X : sig eqtype t end = struct type t = int -> int end"
+               "does not admit equality"))
+  ;; Datatypes in an opaque signature are new types with their constructors.
+  (is (binds "structure X :> sig datatype t = A | B end = struct datatype t = A | B end
+              val y = case X.A of X.A => 1 | X.B => 2"
+             "val y : int")))
+
+(test module-where-type-and-sharing
+  (is (binds "signature S = sig type t val x : t end
+              structure X :> S where type t = int = struct type t = int val x = 1 end
+              val y = X.x + 1"
+             "val y : int"))
+  (is (rejects "signature S = sig type t end where type u = int" "unknown type"))
+  (is (rejects "signature S = sig type t = int end where type t = bool" "rigid"))
+  (is (rejects "signature S = sig eqtype t end where type t = real" "equality"))
+  (is (binds "signature S = sig type t type u sharing type t = u end
+              structure X : S = struct type t = int type u = int end"
+             "structure X :"))
+  (is (rejects "signature S = sig type t type u sharing type t = u end
+                structure X : S = struct type t = int type u = bool end"
+               "the signature says"))
+  (is (rejects "signature S = sig type t = int type u sharing type t = u end" "rigid"))
+  ;; Structure sharing (Appendix A) shares the types in common.
+  (is (binds "signature S = sig structure A : sig type t val x : t end
+                                structure B : sig type t val f : t -> int end
+                                sharing A = B end
+              functor F (X : S) = struct val y = X.B.f X.A.x end"
+             "functor F(Arg :"))
+  (is (rejects "functor F (X : sig structure A : sig type t val x : t end
+                                   structure B : sig type t val f : t -> int end end) =
+                struct val y = X.B.f X.A.x end"))
+  (is (rejects "signature S = sig val x : int val x : bool end" "duplicate specification"))
+  (is (binds "signature A = sig type t val x : t end
+              signature B = sig include A val f : t -> int end
+              structure S : B = struct type t = bool val x = true fun f b = if b then 1 else 0 end
+              val n = S.f S.x"
+             "val n : int")))
+
+(test module-functors
+  (is (binds "functor F (X : sig type t val x : t end) = struct val l = [X.x, X.x] end
+              structure A = F (struct type t = string val x = \"a\" end)
+              val l = A.l"
+             "val l : string list"))
+  ;; The derived form with a specification as parameter.
+  (is (binds "functor F (type t val x : t) = struct val l = [x] end
+              structure A = F (type t = int val x = 3) val l = A.l"
+             "val l : int list"))
+  (is (rejects "functor F (X : sig val x : int end) = struct end structure A = F (struct end)"
+               "value x is specified but not declared"))
+  (is (rejects "structure A = Nope (struct end)" "unknown functor"))
+  ;; Each application generates new types.
+  (is (rejects "functor F (X : sig end) = struct datatype t = T val x = T end
+                structure A = F (struct end) structure B = F (struct end)
+                val l = [A.x, B.x]"))
+  (is (binds "functor F (X : sig end) = struct datatype t = T val x = T end
+              structure A = F (struct end) val l = [A.x, A.x]"
+             "val l : t list"))
+  ;; An opaque result signature hides the representation.
+  (is (rejects "functor F (X : sig end) :> sig type t val x : t end =
+                  struct type t = int val x = 1 end
+                structure A = F (struct end) val y = A.x + 1"))
+  (is (binds "functor F (X : sig type t end) : sig type u val mk : X.t -> u end =
+                struct type u = X.t fun mk x = x end
+              structure A = F (struct type t = int end) val y = A.mk 3 + 1"
+             "val y : int")))
+
+(test module-escape-and-top-level
+  (is (rejects "structure S = struct val x = let datatype t = A in A end end" "escapes"))
+  (is (rejects "structure S = struct val r = ref nil end" "not determined"))
+  ;; Each `;'-terminated program must determine its types (HaMLet
+  ;; undetermined2).
+  (is (rejects "val a = ref nil; val _ = a := [1];" "not determined"))
+  (is (binds "val a = ref nil val _ = a := [1];" "val a : int list ref")))
+
+(test overloading-basis-types
+  (is (binds "val x : IntInf.int = 12345678901234567890 * 2 + 1" "val x : int"))
+  (is (binds "val w : Word8.word = 0w255 + 0w1 val m = Word8.andb (w, 0wx0f)"
+             "val w : word8" "val m : word8"))
+  (is (binds "val y = Int64.+ (1, 2) val z : Word32.word = 0w3 * 0w4"
+             "val y : int" "val z : word"))
+  (is (binds "val l = IntInf.< (1, 2)" "val l : bool"))
+  ;; Defaults stay int, word and real.
+  (is (binds "val n = 1 + 2 val w = 0w1 val r = 1.5" "val n : int" "val w : word" "val r : real"))
+  (is (rejects "val x : IntInf.int = 1 val y : int = x")))

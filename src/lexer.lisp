@@ -313,9 +313,9 @@ with an :EOF token.  Signals SML-SYNTAX-ERROR on a lexical error."
                (emit :char (char value 0) token-start)))
             ((char= ch #\')
              (incf i)
+             ;; A lone ' (or '') is a type variable too (Definition section
+             ;; 2.4: tyvar ::= 'alnum, where alnum may be empty).
              (digits #'sml-alnum-char-p)
-             (when (= i (1+ token-start))
-               (fail token-start "a type variable needs a name after '"))
              (emit :tyvar (subseq text token-start i) token-start))
             ((or (digit-char-p ch)
                  (and (char= ch #\~) (peek 1) (digit-char-p (peek 1))))

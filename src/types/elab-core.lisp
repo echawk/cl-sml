@@ -19,9 +19,10 @@
 ;;;   bound to a type containing it (side condition of rule 4).
 
 (defvar *native-unchecked-long-ids* nil
-  "When true, a long identifier (a structure member) elaborates to a fresh
-type instead of being an error: the native checker cannot elaborate
-modules yet, and this lets it check the rest of such programs.")
+  "When true, a long identifier into an unknown structure elaborates to a
+fresh type printed `?' instead of being an error, and opening an unknown
+structure binds nothing.  This lets the checker look at the rest of a
+program that uses structures it does not know.")
 
 (defvar *native-relaxed-value-restriction* nil
   "When true, an expansive value binding still generalises the type
@@ -164,18 +165,54 @@ shows the types EXPECTED and FOUND."
        ;; `...' and symbolic identifiers made of dots are not long.
        (alpha-char-p (char name 0))))
 
-(defun unchecked-long-id (node name what)
-  (if *native-unchecked-long-ids*
-      (progn (setf *saw-unknown* t) nil)
-      (elab-error node "modules are not supported by the native checker yet: ~A ~A"
-                  what name)))
+(defun long-strid-env (c name node)
+  "The environment of the structure that long identifier NAME is in, and
+NAME's last part.  An unknown structure is an error, or, when
+*NATIVE-UNCHECKED-LONG-IDS* is true, gives NIL: the identifier is then
+unchecked."
+  (multiple-value-bind (strids last) (split-long-name name)
+    (multiple-value-bind (env missing) (env-lookup-strids (context-env c) strids)
+      (cond (env (values env last))
+            (*native-unchecked-long-ids* (setf *saw-unknown* t) (values nil last))
+            (t (elab-error node "unknown structure ~A in ~A" missing name))))))
 
 (defun lookup-long-vid (c name node)
   "The VALSTR of identifier NAME, or NIL for an unchecked long identifier."
   (if (long-name-p name)
-      (unchecked-long-id node name "long identifier")
+      (multiple-value-bind (env last) (long-strid-env c name node)
+        (and env
+             (or (cdr (assoc last (env-ve env) :test #'string=))
+                 (elab-error node "unknown identifier ~A" name))))
       (or (lookup-vid c name)
           (elab-error node "unknown identifier ~A" name))))
+
+(defun find-long-vid (c name)
+  "The VALSTR of identifier NAME, or NIL; never an error."
+  (if (long-name-p name)
+      (multiple-value-bind (strids last) (split-long-name name)
+        (let ((env (env-lookup-strids (context-env c) strids)))
+          (and env (cdr (assoc last (env-ve env) :test #'string=)))))
+      (lookup-vid c name)))
+
+(defun lookup-long-tycon (c name node)
+  "The TYSTR of type constructor NAME, or NIL when unchecked."
+  (if (long-name-p name)
+      (multiple-value-bind (env last) (long-strid-env c name node)
+        (and env
+             (or (cdr (assoc last (env-te env) :test #'string=))
+                 (elab-error node "unknown type constructor ~A" name))))
+      (or (lookup-tycon c name)
+          (elab-error node "unknown type constructor ~A" name))))
+
+(defun lookup-long-strid (c name node)
+  "The environment of structure NAME, or NIL when unchecked."
+  (multiple-value-bind (strids last) (split-long-name name)
+    (multiple-value-bind (env missing)
+        (env-lookup-strids (context-env c) (append strids (list last)))
+      (cond (env env)
+            (*native-unchecked-long-ids* (setf *saw-unknown* t) nil)
+            (t (elab-error node "unknown structure ~A~@[ in ~A~]" missing
+                           (and (string/= missing name) name)))))))
 
 (defun unknown-type ()
   (fresh-tvar :unknown t))
@@ -206,13 +243,12 @@ shows the types EXPECTED and FOUND."
        (record-type fields)))
     (:ty-tuple (tuple-type (mapcar (lambda (item) (elab-ty c item)) (rest ty))))
     (:ty-con                            ; [Rule 46]
-     (let ((args (mapcar (lambda (arg) (elab-ty c arg)) (third ty)))
-           (name (second ty)))
-       (if (long-name-p name)
-           (progn (unchecked-long-id ty name "type constructor")
-                  (unknown-type))
-           (let ((tystr (or (lookup-tycon c name)
-                            (elab-error ty "unknown type constructor ~A" name))))
+     (let* ((args (mapcar (lambda (arg) (elab-ty c arg)) (third ty)))
+            (name (second ty))
+            (tystr (lookup-long-tycon c name ty)))
+       (if (null tystr)
+           (unknown-type)
+           (progn
              (unless (= (length args) (tyfcn-arity (tystr-tyfcn tystr)))
                (elab-error ty "type constructor ~A takes ~D argument~:P, not ~D"
                            name (tyfcn-arity (tystr-tyfcn tystr)) (length args)))
@@ -422,12 +458,14 @@ pattern for match checking."
   "[Rules 34, 35] An identifier: a variable unless it is bound as a
 constructor or exception constructor."
   (let* ((name (second pat))
-         (valstr (and (not (long-name-p name)) (lookup-vid c name))))
+         (long (long-name-p name))
+         (valstr (if long (lookup-long-vid c name pat) (lookup-vid c name))))
     (cond
-      ((long-name-p name)               ; [Rule 35]
-       (unchecked-long-id pat name "long constructor")
+      ((and long (null valstr))         ; unchecked
        (let ((type (unknown-type)))
          (values nil type (list :con name *t-exn* nil))))
+      ((and long (eq (valstr-status valstr) :v))
+       (elab-error pat "~A is not a constructor" name))
       ((and valstr (not (eq (valstr-status valstr) :v))) ; [Rule 35]
        (multiple-value-bind (type fresh) (instantiate (valstr-scheme valstr))
          (note-overloaded pat fresh)
@@ -445,7 +483,7 @@ constructor or exception constructor."
 (defun elab-pat-constructor (c pat name ctor-node arg-pat)
   "[Rule 41] longvid atpat."
   (let ((valstr (if (string= name "::")
-                    (lookup-vid (make-context (initial-env)) "::")
+                    (lookup-vid (make-context (starting-env)) "::")
                     (lookup-long-vid c name ctor-node))))
     (multiple-value-bind (arg-ve arg-type arg-spat) (elab-pat c arg-pat)
       (cond
@@ -510,8 +548,7 @@ constructor or exception constructor."
     (and (consp exp)
          (member (car exp) '(:var :ctor))
          (not (string= (second exp) "ref"))
-         (not (long-name-p (second exp)))
-         (let ((valstr (lookup-vid c (second exp))))
+         (let ((valstr (find-long-vid c (second exp))))
            (and valstr (member (valstr-status valstr) '(:c :e)))))))
 
 (defun nonexpansive-p (c exp)
@@ -866,12 +903,8 @@ HaMLet); they must not reach the top level (rule 87)."
              (:datatype (values (elab-datatype c node)))
              (:datatype-replication     ; [Rule 18]
               (let ((name (third node)))
-                (when (long-name-p name)
-                  (unchecked-long-id node name "type constructor")
-                  (elab-error node "modules are not supported by the native checker yet: ~
-                                    datatype replication of ~A" name))
-                (let ((tystr (or (lookup-tycon c name)
-                                 (elab-error node "unknown type constructor ~A" name))))
+                (let ((tystr (or (lookup-long-tycon c name node)
+                                 (elab-error node "cannot replicate unchecked type ~A" name))))
                   (make-env (tystr-ve tystr)
                             (list (cons (second node)
                                         (make-tystr (tystr-tyfcn tystr) (tystr-ve tystr)
@@ -887,11 +920,16 @@ HaMLet); they must not reach the top level (rule 87)."
                   (let ((e1 (elab-decs c (second node))))
                     (elab-decs (context-plus-env c e1) (third node)))))
              (:open                     ; [Rule 22]
-              (elab-error node "modules are not supported by the native checker yet: open"))
+              (let ((env (make-env)))
+                (dolist (name (second node) env)
+                  (let ((opened (lookup-long-strid c name node)))
+                    (when opened
+                      (setf env (env-plus env (make-env (env-ve opened) (env-te opened)
+                                                        (env-se opened)))))))))
              (:infix (make-env))        ; fixity is the parser's business
-             ((:structure :structure-alias :structure-app :signature :functor)
-              (elab-error node "modules are not supported by the native checker yet: ~(~A~) ~A"
-                          (car node) (second node))))))
+             ((:structure :structure-alias :structure-app) (elab-strbinds c group))
+             (:signature (elab-sigbinds c group))
+             (:functor (elab-funbinds c group)))))
     (annotate node :env env)
     env))
 
@@ -919,9 +957,9 @@ HaMLet); they must not reach the top level (rule 87)."
                (setf (tvar-link var) (con-type (oclass-default (tvar-overload var))))))))
 
 (defun check-top-level-env (node env)
-  "No undetermined or explicit type variable may remain free on top level
-(HaMLet: rule 87 and the remark after it)."
-  (loop for (name . valstr) in (env-ve env)
+  "No undetermined or explicit type variable may remain free on top level,
+in ENV or its structures (HaMLet: rule 87 and the remark after it)."
+  (loop for (name . valstr) in (env-latest (env-ve env))
         do (dolist (var (scheme-free-tvars (valstr-scheme valstr)))
              (cond ((tvar-unknown var))
                    (*saw-unknown* (setf (tvar-unknown var) t))
@@ -930,23 +968,58 @@ HaMLet); they must not reach the top level (rule 87)."
                                 (tvar-name var) name))
                    (t (elab-error node "the type of ~A, ~A, is not determined on top level ~
                                         (value restriction)"
-                                  name (scheme->string (valstr-scheme valstr))))))))
+                                  name (scheme->string (valstr-scheme valstr)))))))
+  (loop for (nil . sub) in (env-latest (env-se env))
+        do (check-top-level-env node sub)))
+
+(defun program-boundary-p (node)
+  "Does a `;' end the program before declaration NODE (Section 8: a
+program is a sequence of top-level declarations, each ended by `;')?"
+  (let ((offset (and cl-sml::*sml-declaration-positions*
+                     (gethash node cl-sml::*sml-declaration-positions*))))
+    (when (and offset *source*)
+      (let ((i (1- offset)))
+        (loop
+          (loop while (and (>= i 0) (member (char *source* i) '(#\Space #\Tab #\Newline #\Return #\Page)))
+                do (decf i))
+          (if (and (>= i 1) (char= (char *source* i) #\)) (char= (char *source* (1- i)) #\*))
+              ;; Skip a (nested) comment backwards.
+              (let ((depth 1))
+                (decf i 2)
+                (loop while (and (>= i 1) (plusp depth))
+                      do (cond ((and (char= (char *source* i) #\)) (char= (char *source* (1- i)) #\*))
+                                (incf depth) (decf i 2))
+                               ((and (char= (char *source* i) #\*) (char= (char *source* (1- i)) #\())
+                                (decf depth) (decf i 2))
+                               (t (decf i)))))
+              (return)))
+        (and (>= i 0) (char= (char *source* i) #\;))))))
 
 (defun elab-top-level-decs (c decs)
   "Elaborate the top-level declarations DECS in context C, resolving
 overloading at the end of each.  Returns the environment they bind.  As in
-HaMLet, the types of the bindings must be determined by the end of the
-program (a `;'-terminated top-level declaration), not of each declaration."
+HaMLet, the types of the bindings must be determined by the end of each
+program (top-level declarations ended by `;', or the end of the text)."
   (let ((env (make-env))
+        (program (make-env))
+        (last-node nil)
         (saw-unknown nil))
-    (dolist (group (dec-groups decs))
-      (let* ((*overloaded* nil)
-             (*saw-unknown* nil)
-             (*level* 0)
-             (increment (elab-dec (context-plus-env c env) group)))
-        (resolve-overloading)
-        (when *saw-unknown* (setf saw-unknown t))
-        (setf env (env-plus env increment))))
-    (let ((*saw-unknown* saw-unknown))
-      (check-top-level-env (first (last decs)) (make-env (env-latest (env-ve env)))))
+    (flet ((end-program ()
+             (let ((*saw-unknown* saw-unknown))
+               (check-top-level-env last-node program))
+             (setf program (make-env)
+                   saw-unknown nil)))
+      (dolist (group (dec-groups decs))
+        (when (and last-node (program-boundary-p (first group)))
+          (end-program))
+        (let* ((*overloaded* nil)
+               (*saw-unknown* nil)
+               (*level* 0)
+               (increment (elab-dec (context-plus-env c env) group)))
+          (resolve-overloading)
+          (when *saw-unknown* (setf saw-unknown t))
+          (setf env (env-plus env increment)
+                program (env-plus program increment)
+                last-node (first group))))
+      (end-program))
     env))

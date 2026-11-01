@@ -1,7 +1,8 @@
 # Design: a native type checker, and a Coalton backend
 
-Status: milestone M1 implemented in `src/types/` (2026-10-31), opt-in through
-`cl-sml:typecheck-sml-string`; M2-M4 are still design. This expands
+Status: milestones M1 (2026-10-31) and M2 (2026-11-01) implemented in
+`src/types/`, opt-in through `cl-sml:typecheck-sml-string`; M3 and M4 are
+still design. This expands
 ROADMAP.md items 18-20 (core elaboration, typed IR, modules elaboration) and
 item 22 (Coalton backend).
 
@@ -21,12 +22,59 @@ M1 as built, where it settles what this document left open:
   expansive binding that occur only covariantly (list, option, vector and
   records are covariant; every other type constructor counts as invariant).
 - `*native-unchecked-long-ids*` gives each long identifier a fresh type
-  printed as `?`; without it a long identifier is an error, like structure,
-  signature, functor and `open` declarations.
+  printed as `?`. Since M2 it applies only to identifiers in unknown
+  structures; long identifiers resolve through the structure environment.
 - Match warnings (`*native-match-warnings*`, default on) use Maranget's
   usefulness algorithm rather than a port of HaMLet's CheckPattern.
 - Printing follows HaMLet's text but puts each binding on one line and
   omits the leading comment listing type names.
+
+M2 as built:
+
+- Files: `sig` (realisation, renaming, matching, enrichment: HaMLet `Sig`,
+  `StaticEnv.realise`/`enriches`), `elab-module` (rules 50-89 and the
+  module derived forms of Appendix A), `initial-basis` (the Basis as the
+  initial basis). An environment carries SE, and at top level also G and
+  F, so one structure serves as environment and basis.
+- The set T of a basis is not kept. Type names have stamps, and the names
+  a signature binds are those created while elaborating it (larger stamp
+  than any name in the context). `where type`, `sharing` and functor
+  bodies (T' of rule 86) test flexibility this way.
+- `initial.lisp` now holds only what the Definition fixes (Appendix C, the
+  overloaded identifiers of Appendix E) plus HaMLet's `StaticLibrary`
+  primitives the Basis sources build on (`vector`, `Word8.word`, `IO.Io`,
+  `use`). Everything else comes from elaborating `src/basis` in all.sml's
+  order, once, on first use (about 0.03 s on SBCL); the result and the
+  parser's scopes after it are kept in `*basis-env*` and `*basis-scopes*`.
+  The whole Basis elaborates; nothing is skipped.
+- Overloading classes (decided with the user, and deliberately unlike
+  HaMLet): after the Basis is elaborated, the `int` of every top-level
+  structure with `toInt` and `fromInt` joins class Int (IntInf, Int32,
+  Int64, ...), likewise `word` joins Word (Word8, Word16-64) and `real`
+  joins Real. Literals and the overloaded operators then work at these
+  types. Defaults stay `int`, `word`, `real`. HaMLet rejects
+  `val x : IntInf.int = 1`; we accept it.
+- Overloading is also resolved at the end of each structure-level
+  declaration, so a structure is complete before it is matched.
+- The top-level check for undetermined types runs at the end of each
+  `;`-terminated program, as in HaMLet, and covers structures.
+- Matching may determine an undetermined (non-generalised) type variable,
+  but not to a type variable of the specification (HaMLet test
+  undetermined3).
+- Opaque ascription and functor application rename with fresh type names;
+  datatypes under `:>` become new types with their constructors, as in the
+  Definition.
+- Differential against HaMLet (2026-11-01; `native-diff.lisp` now compares
+  structures, signatures and functors too, ignoring white space and
+  HaMLet's type-name comments): Core corpus 63/63 accept-agree, 371
+  bindings, none differ; modules corpus 55 both accept, 1 both reject, 1
+  only we accept (`b06_intinf`, IntInf literals by design), 277 bindings,
+  none differ; `hamlet/test` 20 both accept, 12 both reject, 74 bindings,
+  none differ, and 2 we reject in the parser: `id.sml` (symbolic type
+  constructors such as `&`, a parser gap left open) and `valrec.sml`
+  (layered patterns in `val rec`, which the AST's `:val-rec` node cannot
+  express). The parser now accepts a lone `'` as a type variable and
+  repeated `rec`.
 
 ## 1. Goals
 

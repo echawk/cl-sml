@@ -1143,8 +1143,9 @@ the Common Lisp generated for a binding came from.")
         (bindings nil)
         (recursive nil))
     (loop
-      (when (accept-sml-reserved :rec)
-        (setf recursive t))
+      ;; `rec' may be repeated (Definition section 2.9: valbind ::= rec valbind).
+      (loop while (accept-sml-reserved :rec)
+            do (setf recursive t))
       (let ((pat (parse-sml-pat)))
         (expect-sml-reserved :equals)
         (push (list recursive pat (parse-sml-exp)) bindings))

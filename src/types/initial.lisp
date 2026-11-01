@@ -1,10 +1,12 @@
 (in-package #:cl-sml.types)
 
-;;; The initial static environment (HaMLet elab/InitialStaticEnv and
-;;; lib/StaticLibrary): Appendix C of the Definition, the overloaded
-;;; identifiers of Appendix E, and the values the Basis Library binds at
-;;; top level (option, order, General, List, String, ...), written by hand.
-;;; Milestone M2 replaces this with the elaborated Basis (src/basis).
+;;; The starting static basis: what the Definition fixes (Appendix C, the
+;;; initial basis, and the overloaded identifiers of Appendix E) plus the
+;;; few primitives HaMLet's lib/StaticLibrary adds and our Basis sources
+;;; build on (the type vector, the structures Word8 and IO with their type
+;;; word and exception Io, and `use').  The Basis Library proper is
+;;; elaborated from its sources (src/basis) on top of this, in basis.lisp
+;;; of this directory.
 
 (defvar *t-bool* (make-tyname "bool" 0 :constructors '(("false") ("true"))))
 (defvar *t-int* (make-tyname "int" 0))
@@ -15,14 +17,20 @@
 (defvar *t-list* (make-tyname "list" 1 :constructors '(("::" . t) ("nil"))))
 (defvar *t-ref* (make-tyname "ref" 1 :equality :ref :constructors '(("ref" . t))))
 (defvar *t-exn* (make-tyname "exn" 0 :equality nil))
-(defvar *t-option* (make-tyname "option" 1 :constructors '(("NONE") ("SOME" . t))))
-(defvar *t-order* (make-tyname "order" 0 :constructors '(("EQUAL") ("GREATER") ("LESS"))))
 (defvar *t-vector* (make-tyname "vector" 1))
+(defvar *t-word8* (make-tyname "word8" 0))  ; as HaMLet names it
+;; Set to the Basis's option once it is elaborated (for the relaxed value
+;; restriction, which counts option as covariant).
+(defvar *t-option* nil)
 
-;;; Overloading classes [Appendix E.1; HaMLet StaticLibrary].
+;;; Overloading classes [Appendix E.1; HaMLet StaticLibrary].  The basic
+;;; classes start as HaMLet's; once the Basis is elaborated, the integer,
+;;; word and real types of its structures join them (EXTEND-OVERLOADING-
+;;; CLASSES), and the unions are recomputed in place, because the schemes
+;;; of the overloaded identifiers refer to these objects.
 (defvar *class-int* (make-oclass (list *t-int*) *t-int*))
 (defvar *class-real* (make-oclass (list *t-real*) *t-real*))
-(defvar *class-word* (make-oclass (list *t-word*) *t-word*))
+(defvar *class-word* (make-oclass (list *t-word* *t-word8*) *t-word*))
 (defvar *class-string* (make-oclass (list *t-string*) *t-string*))
 (defvar *class-char* (make-oclass (list *t-char*) *t-char*))
 (defvar *class-wordint* (oclass-union *class-word* *class-int*))
@@ -30,6 +38,26 @@
 (defvar *class-num* (oclass-union *class-word* *class-realint*))
 (defvar *class-txt* (oclass-union *class-string* *class-char*))
 (defvar *class-numtxt* (oclass-union *class-txt* *class-num*))
+
+(defun recompute-overloading-unions ()
+  (flet ((set-union (class class1 class2)
+           (setf (oclass-tynames class)
+                 (union (oclass-tynames class1) (oclass-tynames class2)))))
+    (set-union *class-wordint* *class-word* *class-int*)
+    (set-union *class-realint* *class-real* *class-int*)
+    (set-union *class-num* *class-word* *class-realint*)
+    (set-union *class-txt* *class-string* *class-char*)
+    (set-union *class-numtxt* *class-txt* *class-num*)))
+
+(defun extend-overloading-classes (&key ints words reals)
+  "Add the type names INTS, WORDS and REALS to the classes Int, Word and
+Real (and so to their unions).  The defaults stay int, word and real."
+  (flet ((extend (class tynames)
+           (setf (oclass-tynames class) (union (oclass-tynames class) tynames))))
+    (extend *class-int* ints)
+    (extend *class-word* words)
+    (extend *class-real* reals))
+  (recompute-overloading-unions))
 
 (defun bool-type () (con-type *t-bool*))
 (defun int-type () (con-type *t-int*))
@@ -44,7 +72,7 @@
   (ecase symbol
     (bool *t-bool*) (int *t-int*) (word *t-word*) (real *t-real*)
     (string *t-string*) (char *t-char*) (list *t-list*) (ref *t-ref*)
-    (exn *t-exn*) (option *t-option*) (order *t-order*) (vector *t-vector*)))
+    (exn *t-exn*) (vector *t-vector*)))
 
 (defun spec-type (spec vars)
   "The type SPEC denotes; VARS is an alist keyword -> TVAR, extended."
@@ -78,49 +106,15 @@
   '(;; Appendix C
     ("=" (-> (* :eqa :eqa) bool))
     (":=" (-> (* (ref :a) :a) unit))
-    ;; The Basis Library's top-level values
-    ("<>" (-> (* :eqa :eqa) bool))
-    ("!" (-> (ref :a) :a))
-    ("o" (-> (* (-> :b :c) (-> :a :b)) (-> :a :c)))
-    ("before" (-> (* :a unit) :a))
-    ("ignore" (-> :a unit))
-    ("exnName" (-> exn string))
-    ("exnMessage" (-> exn string))
-    ("getOpt" (-> (* (option :a) :a) :a))
-    ("isSome" (-> (option :a) bool))
-    ("valOf" (-> (option :a) :a))
-    ("not" (-> bool bool))
-    ("real" (-> int real))
-    ("trunc" (-> real int))
-    ("floor" (-> real int))
-    ("ceil" (-> real int))
-    ("round" (-> real int))
-    ("ord" (-> char int))
-    ("chr" (-> int char))
-    ("size" (-> string int))
-    ("str" (-> char string))
-    ("concat" (-> (list string) string))
-    ("implode" (-> (list char) string))
-    ("explode" (-> string (list char)))
-    ("substring" (-> (* string int int) string))
-    ("^" (-> (* string string) string))
-    ("null" (-> (list :a) bool))
-    ("hd" (-> (list :a) :a))
-    ("tl" (-> (list :a) (list :a)))
-    ("length" (-> (list :a) int))
-    ("rev" (-> (list :a) (list :a)))
-    ("@" (-> (* (list :a) (list :a)) (list :a)))
-    ("app" (-> (-> :a unit) (-> (list :a) unit)))
-    ("map" (-> (-> :a :b) (-> (list :a) (list :b))))
-    ("foldr" (-> (-> (* :a :b) :b) (-> :b (-> (list :a) :b))))
-    ("foldl" (-> (-> (* :a :b) :b) (-> :b (-> (list :a) :b))))
-    ("print" (-> string unit))
-    ("vector" (-> (list :a) (vector :a)))
-    ("use" (-> string unit))))
+    ;; HaMLet's StaticLibrary: use{b = "name"} is a primitive of the run
+    ;; time (src/runtime.lisp), whose type the Basis states.
+    ("use" (-> :a :b))))
 
 (defparameter *initial-exceptions*
-  '(("Bind") ("Match") ("Chr") ("Div") ("Domain") ("Overflow") ("Size")
-    ("Subscript") ("Empty") ("Option") ("Span") ("Fail" . string)))
+  '(;; Appendix C
+    ("Bind") ("Match")
+    ;; HaMLet's StaticLibrary
+    ("Chr") ("Div") ("Domain") ("Overflow") ("Size") ("Subscript")))
 
 (defun datatype-tystr (tyname constructors)
   "The TYSTR of initial datatype TYNAME; CONSTRUCTORS are (name spec)."
@@ -138,13 +132,11 @@
                                   :c)))))
     (make-tystr (make-tyfcn params result) ve :datatype)))
 
-(defun make-initial-env ()
+(defun make-starting-env ()
   (let* ((datatypes
            (list (cons "bool" (datatype-tystr *t-bool* '(("true") ("false"))))
                  (cons "list" (datatype-tystr *t-list* '(("nil") ("::" (* :a (list :a))))))
-                 (cons "ref" (datatype-tystr *t-ref* '(("ref" :a))))
-                 (cons "option" (datatype-tystr *t-option* '(("NONE") ("SOME" :a))))
-                 (cons "order" (datatype-tystr *t-order* '(("LESS") ("EQUAL") ("GREATER"))))))
+                 (cons "ref" (datatype-tystr *t-ref* '(("ref" :a))))))
          (te (append
               datatypes
               (list (cons "unit" (make-tystr (make-tyfcn nil (unit-type)) nil))
@@ -188,10 +180,24 @@
                            (list "<=" (relation *class-numtxt*))
                            (list ">=" (relation *class-numtxt*))))))
          (values (loop for (name spec) in *initial-values*
-                       collect (cons name (make-valstr (spec-scheme spec) :v)))))
-    (make-env (append constructors exceptions overloaded values) te)))
+                       collect (cons name (make-valstr (spec-scheme spec) :v))))
+         (se (list (cons "Word8"
+                         (make-env nil (list (cons "word" (make-tystr (make-tyfcn nil (con-type *t-word8*))
+                                                                      nil :abstype)))))
+                   (cons "IO"
+                         (make-env (list (cons "Io"
+                                               (make-valstr
+                                                (mono-scheme
+                                                 (arrow-type (record-type
+                                                              (list (cons "name" (con-type *t-string*))
+                                                                    (cons "function" (con-type *t-string*))
+                                                                    (cons "cause" (exn-type))))
+                                                             (exn-type)))
+                                                :e))))))))
+    (make-env (append constructors exceptions overloaded values) te se)))
 
-(defvar *initial-env* nil)
+(defvar *starting-env* nil)
 
-(defun initial-env ()
-  (or *initial-env* (setf *initial-env* (make-initial-env))))
+(defun starting-env ()
+  "The static basis the Basis Library is elaborated in."
+  (or *starting-env* (setf *starting-env* (make-starting-env))))
