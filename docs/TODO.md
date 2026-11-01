@@ -8,12 +8,20 @@
     and evaluates programs, e.g. `./cl-hamlet file.sml` and the `cl-hamlet`
     REPL.  Known gaps: basis library is re-elaborated on every start (~6s),
     and `sml-primitive-stub`s remain for rarely used primitives.
-  - [ ] Load and run representative programs from `HOL/`.  `./test-hol`
-    loads 56 portableML/prekernel/0 sources checked by HaMLet
-    (`t/hol-checked.lisp`).  Next blockers: Portable.sml (IntInf,
-    OS.FileSys, Timer missing from HaMLet's basis), and HaMLet under cl-sml
-    failing on non-ASCII source (Subscript: source is read as UTF-8, so
-    characters above 255 reach HaMLet's 8-bit lexer tables).
+  - [ ] Load and run representative programs from `HOL/`.  `scripts/test-hol`
+    loads 148 portableML, Holmake hfs, prekernel and src/0 sources (with
+    shims in `t/testdata/hol-shims/`), checked by the native checker
+    (`t/hol-corpus.lisp`), including Portable, Globals, Feedback, KernelSig
+    and Type_dtype.  Next blockers:
+    - `Lib.sml` needs the Basis's `Date` structure (missing); Lib blocks
+      Dep, Tag, Lexis, Context, the Final*-sig files and all of src/0
+      (Type, Term, Net, KernelTypes).
+    - `Count.sml`: `val l = [#ABS, ...]` is a flexible record resolved
+      only by later declarations; the native checker (like HaMLet) wants
+      it resolved by the end of the value declaration, Poly/ML and MLton
+      by the end of the top-level declaration.
+    - Not attempted: HOLsexp_parser (ML-Yacc output), SHA1 (SHA1_ML),
+      holpathdb (TOML), tools-poly Help/Mosml/quse (Poly/ML specific).
 - [ ] Replace shallow module handling with explicit module/signature
   elaboration; retain CL packages as the external namespace substrate.
   With the HaMLet checker, structure members and constructor/variable
@@ -29,11 +37,11 @@
   operators are specialized and word arithmetic is modular; without it `~`
   on words is special-cased only for literals).
 - [x] SML97 static semantics via HaMLet (git submodule `hamlet/`, unmodified)
-  through `src/hamlet-check.sml` and `src/type-checker.lisp`.  The checker runs before
+  through `t/hamlet-oracle/hamlet-check.sml` and `src/type-checker.lisp`.  The checker runs before
   our parser in `compile-sml-program-string`, file loading and the REPL;
-  `(enable-hamlet-type-checker)` turns it on, and `build-repl.sh` preloads it
+  `(enable-hamlet-type-checker)` turns it on, and `scripts/build-repl.sh` preloads it
   into the `cl-sml` image.  The REPL prints HaMLet's inferred types.
-- [x] Use HaMLet's elaboration in code generation.  `src/hamlet-check.sml`
+- [x] Use HaMLet's elaboration in code generation.  `t/hamlet-oracle/hamlet-check.sml`
   reports facts keyed by source position (`src/static-facts.lisp`), which the
   parser and compiler consult, for files and REPL phrases alike:
   - identifier status decides constructor vs variable patterns
@@ -75,7 +83,7 @@
   executable smoke test.
 - [x] Produce `cl-hamlet` on SBCL (`./build-hamlet`; needs the 1GB control
   stack that `build-hamlet` bakes in via `:save-runtime-options`).
-- [ ] Preload/cache the elaborated basis in the `cl-hamlet` image so startup
+- [-] (Dropped: `build-hamlet`/`cl-hamlet` were removed; HaMLet is test-only.) Preload/cache the elaborated basis in the `cl-hamlet` image so startup
   does not re-elaborate `hamlet/basis` each time.
 - [ ] Portability (ECL, ABCL): self tail calls are compiled as jumps, but
   other tail calls (`fun even ... and odd ...`, CPS) still take a stack

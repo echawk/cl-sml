@@ -4,7 +4,7 @@
 ;;; cl-sml's Basis Library (src/basis), elaborated from its sources in the
 ;;; order all.sml uses them, on top of the starting basis of initial.lisp,
 ;;; just as HaMLet's checker builds it (ClSmlHamlet.initialFrom in
-;;; src/hamlet-check.sml).  It is elaborated once, on first use, and kept.
+;;; t/hamlet-oracle/hamlet-check.sml).  It is elaborated once, on first use, and kept.
 
 (defvar *basis-env* nil
   "The elaborated Basis Library, an ENV, once INITIAL-ENV has built it.")
@@ -76,7 +76,7 @@ structure's name in lower case, e.g. \"intinf\" or \"word32\".")
   "Elaborate the Basis Library sources FILES; set *BASIS-ENV* and
 *BASIS-SCOPES*.  Then the integer, word and real types of the Basis's
 structures (IntInf.int, Int32.int, Word8.word, ...) join the overloading
-classes Int, Word and Real: DESIGN-TYPECHECKER.md, section 4, item 3."
+classes Int, Word and Real: docs/DESIGN-TYPECHECKER.md, section 4, item 3."
   (let ((start (get-internal-real-time))
         (env (starting-env))
         (scopes (list cl-sml::*sml-builtin-scope*))

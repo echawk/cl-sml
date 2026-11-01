@@ -5,10 +5,10 @@
 #   --native    use the native static checker (cl-sml's default)
 #   (neither: plain mode, no checker)
 #   NAME...     run only these tests (default: every tests/*.sml)
-# Environment: CLSML (cl-sml checkout, default /Users/ethan/sml/cl-sml), LISP (sbcl).
+# Environment: CLSML (cl-sml checkout, default: this checkout), LISP (sbcl).
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-CLSML=${CLSML:-/Users/ethan/sml/cl-sml}
+CLSML=${CLSML:-$(cd "$(dirname "$0")/../../.." && pwd)}
 LISP=${LISP:-sbcl}
 CONF_CHECKER=0
 CONF_TIMEOUT=60

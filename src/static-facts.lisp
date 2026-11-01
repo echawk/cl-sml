@@ -1,6 +1,6 @@
 (in-package #:cl-sml)
 
-;;; Static facts: what the static checker (HaMLet, see hamlet-check.sml)
+;;; Static facts: what the static checker (HaMLet, see t/hamlet-oracle/)
 ;;; learned about a program, made available to the parser and code generator.
 ;;;
 ;;; The checker reports each fact at the (line, column) where the phrase it

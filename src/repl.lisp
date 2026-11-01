@@ -436,7 +436,7 @@ accepts SOURCE (which then points at a gap in our parser)."
                                  (or (static-checker-diagnostic buffer) error)))
                        (reset-buffer))))))))))))
 
-;;; The cl-sml executable (see build-repl.sh).
+;;; The cl-sml executable (see scripts/build-repl.sh).
 
 (defparameter *main-usage*
   "Usage: cl-sml [--time] [--unchecked] [--run FILE.sml | --emit-lisp FILE.sml | --help]

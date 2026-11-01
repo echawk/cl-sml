@@ -128,7 +128,7 @@ M3 as built:
 - Match warnings are reported on `*error-output*` as `FILE:LINE:COL:
   warning: ...` and muffled.
 - Performance: the Basis is elaborated once per image on first use (about
-  0.05 s on SBCL; `build-repl.sh` and the real-world image do it at build
+  0.05 s on SBCL; `scripts/build-repl.sh` and the real-world image do it at build
   time). The SBCL suite runs no slower than in plain mode (see the M3
   numbers below).
 - Tests that assumed unchecked behaviour and were wrong per the Definition

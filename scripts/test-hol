@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
 export XDG_CACHE_HOME="${CL_SML_CACHE_HOME:-$ROOT/.cache}"
@@ -33,7 +33,4 @@ run () {
     esac
 }
 
-run t/hol-smoke.lisp "HOL smoke"
-
-# The same and more HOL sources, checked by HaMLet (needs a deep stack).
-run t/hol-checked.lisp "HOL checked"
+run t/hol-corpus.lisp "HOL corpus"

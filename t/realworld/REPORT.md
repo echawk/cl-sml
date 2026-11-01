@@ -277,7 +277,7 @@ Causes: every binary operator allocates a closure in plain mode
 variables called through `funcall`; there are no type declarations, and
 equality is generic `equal`; the PEG parser backtracks heavily; and
 HaMLet compiled by cl-sml is 30–100× slower than HaMLet built with
-MLton. See `ROADMAP.md`.
+MLton. See `docs/ROADMAP.md`.
 
 ## Harness
 

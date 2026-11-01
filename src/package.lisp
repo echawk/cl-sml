@@ -52,7 +52,7 @@
            #:*native-relaxed-value-restriction*
            #:*native-match-warnings*))
 
-;;; The native SML '97 static semantics (DESIGN-TYPECHECKER.md), milestone
+;;; The native SML '97 static semantics (docs/DESIGN-TYPECHECKER.md), milestone
 ;;; M1: the Core language against a hand-written initial environment.
 (defpackage #:cl-sml.types
   (:use #:cl)
