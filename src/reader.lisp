@@ -10,7 +10,8 @@
   (make-pathname :directory (pathname-directory (truename pathname))))
 
 (defun compile-sml-program-string (sml-text &key package source-name
-                                                    (type-checker *sml-type-checker*))
+                                                    (type-checker *sml-type-checker*)
+                                                    splices)
   "Compile the SML program SML-TEXT to a Common Lisp form, without evaluating
 it.  The second value has an entry (LINE . DESCRIPTION) for each top-level
 declaration, in the order of the declarations' forms in the program, where
@@ -22,7 +23,8 @@ SML-LISP-SOURCE when *RECORD-SML-LISP-SOURCE* is true."
     (multiple-value-bind (form ast recording positions)
         (check-and-compile-sml-program sml-text lines
                                        :type-checker type-checker
-                                       :filename source-name)
+                                       :filename source-name
+                                       :splices splices)
       (commit-sml-lisp-recording recording)
       (values form
               (let ((*sml-declaration-positions* positions))
@@ -32,12 +34,65 @@ SML-LISP-SOURCE when *RECORD-SML-LISP-SOURCE* is true."
                         (cdr ast)))))))
 
 (defun check-and-compile-sml-program (text lines &key (type-checker *sml-type-checker*)
-                                                      filename)
+                                                      filename splices)
   "Statically check the SML program TEXT, then parse it and compile it to a
 Common Lisp form with what the checker learned, recording the Lisp of its
-bindings.  LINES are TEXT's SML-SOURCE-LINES.  Returns the form, the
+bindings.  LINES are TEXT's SML-SOURCE-LINES.  SPLICES are the identifiers
+that stand for the splices of an #@sml block.  Returns the form, the
 program's AST, the recording to commit (or NIL), and the table of
 declaration positions."
+  (if (and type-checker (native-sml-checker-p type-checker))
+      (native-check-and-compile-sml-program text lines (resolve-sml-type-checker type-checker)
+                                            :filename filename :splices splices)
+      (check-and-compile-sml-program-with-facts text lines :type-checker type-checker
+                                                           :filename filename)))
+
+(defun adjust-sml-identifier-nodes (annotations)
+  "Make the identifier nodes of the parser's AST agree with the identifier
+status the native checker found (ANNOTATIONS): the parser can only guess
+it for names from structures it does not know, e.g. a functor's result."
+  (maphash (lambda (node plist)
+             (let ((status (getf plist :status)))
+               (when (and status (consp node) (stringp (second node))
+                          (string/= (second node) "ref"))
+                 (let ((ctor-p (sml-status-constructor-p status)))
+                   (case (car node)
+                     (:var (when ctor-p (setf (car node) :ctor)))
+                     (:ctor (unless ctor-p (setf (car node) :var)))
+                     (:pat-var (when ctor-p (setf (car node) :pat-ctor))))))))
+           annotations))
+
+(defun native-check-and-compile-sml-program (text lines checker &key filename splices)
+  "CHECK-AND-COMPILE-SML-PROGRAM with the native checker: TEXT is parsed
+once, and the checker elaborates the AST that is then compiled, with the
+annotation table as its static facts."
+  (let* ((recording (make-sml-lisp-recording lines))
+         (*gensym-counter* 0)
+         (*sml-declaration-positions* (make-sml-declaration-position-table))
+         (*sml-ast-positions* (make-sml-ast-position-table))
+         (*sml-static-facts* nil))
+    (multiple-value-bind (ast scopes)
+        (with-sml-phase (:parse)
+          (parse-sml-program text :source-name filename))
+      (let ((annotations
+              (nth-value 1 (with-sml-phase (:check)
+                             (native-check-sml-ast checker ast text
+                                                   :filename filename
+                                                   :splices splices)))))
+        (adjust-sml-identifier-nodes annotations)
+        (let* ((*sml-static-facts* annotations)
+               (form (with-sml-phase (:compile)
+                       (with-sml-lisp-recording (recording)
+                         (compile-with-hoisted-sml-forms
+                          (lambda () (compile-program ast))
+                          :identity text)))))
+          (setf (sml-package-parse-scopes *sml-package*) scopes)
+          (values form ast recording *sml-declaration-positions*))))))
+
+(defun check-and-compile-sml-program-with-facts (text lines &key type-checker filename)
+  "CHECK-AND-COMPILE-SML-PROGRAM with HaMLet (or another checker that sees
+the text, or none): the checker runs first, then the parser and the code
+generator use the facts it returns, keyed by source position."
   (let* ((recording (make-sml-lisp-recording lines))
          ;; The static checker runs first: it is the authority on what is a
          ;; valid SML program and gives better diagnostics than our parser.
@@ -89,6 +144,10 @@ declaration positions."
   "Compile the SML expression SML-TEXT like COMPILE-SML-EXPRESSION-STRING,
 but check it first, as the REPL does, and use what the checker learned.
 Returns the form and the expression's AST."
+  (when (and type-checker (native-sml-checker-p type-checker))
+    (return-from compile-checked-sml-expression-string
+      (native-compile-checked-sml-expression-string
+       sml-text (resolve-sml-type-checker type-checker) :package package)))
   (let* ((*sml-package* (ensure-sml-package (or package (current-sml-package))))
          (facts (with-sml-phase (:check)
                   (static-facts-from-check
@@ -104,6 +163,26 @@ Returns the form and the expression's AST."
                    (lambda () (compile-expr ast))
                    :identity sml-text))
                 ast)))))
+
+(defun native-compile-checked-sml-expression-string (sml-text checker &key package)
+  "COMPILE-CHECKED-SML-EXPRESSION-STRING with the native checker, which
+checks `val it = (SML-TEXT);' and whose expression is then compiled."
+  (let* ((*sml-package* (ensure-sml-package (or package (current-sml-package))))
+         (text (concatenate 'string *sml-checked-expression-prefix* sml-text ");"))
+         (*sml-declaration-positions* (make-sml-declaration-position-table))
+         (*sml-ast-positions* (make-sml-ast-position-table))
+         (*sml-static-facts* nil)
+         (program (with-sml-phase (:parse) (parse-sml-program text)))
+         (ast (third (second program)))
+         (annotations (nth-value 1 (with-sml-phase (:check)
+                                     (native-check-sml-ast checker program text)))))
+    (adjust-sml-identifier-nodes annotations)
+    (let ((*sml-static-facts* annotations))
+      (values (with-sml-phase (:compile)
+                (compile-with-hoisted-sml-forms
+                 (lambda () (compile-expr ast))
+                 :identity sml-text))
+              ast))))
 
 (defun compile-sml-file (pathname &key package)
   "Compile the SML file PATHNAME to a Common Lisp form, without evaluating
@@ -474,9 +553,13 @@ their CDRs."
 (defmacro %sml-block (text package source line splices)
   "Expansion of an embedded SML block; see READ-SML-BLOCK.  SPLICES are
 the block's (PLACEHOLDER FORM)s."
-  ;; The checker cannot type a Lisp value: blocks with splices are not
-  ;; checked.
-  (let ((*sml-type-checker* (if splices nil *sml-type-checker*)))
+  ;; The native checker gives each splice a type of its own, which the
+  ;; SML around it determines (e.g. `($x : int)'); HaMLet cannot, and does
+  ;; not check blocks with splices.
+  (let ((*sml-type-checker* (if (and splices
+                                     (not (native-sml-checker-p *sml-type-checker*)))
+                                nil
+                                *sml-type-checker*)))
     (multiple-value-bind (form notes)
         (compile-sml-program-string
          ;; Leading newlines make the SML's line numbers the file's.
@@ -486,7 +569,8 @@ the block's (PLACEHOLDER FORM)s."
                           text)
              text)
          :package package
-         :source-name source)
+         :source-name source
+         :splices (mapcar #'first splices))
       (let ((declarations-p
               (some (lambda (note)
                       (not (uiop:string-prefix-p "expression" (cdr note))))

@@ -27,6 +27,7 @@
            #:hamlet-type-check-string
            #:hamlet-type-checker-last-description
            #:enable-hamlet-type-checker
+           #:enable-native-type-checker
            #:disable-type-checker
            #:*record-sml-lisp-source*
            #:*show-lisp-compiler-output*

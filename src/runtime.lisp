@@ -100,7 +100,12 @@ module registries below) sees the basis, else NIL."
 
 (defparameter *hamlet-image-package* "SML.HAMLET-IMAGE")
 
-(defvar *sml-type-checker* nil)
+(defvar *sml-type-checker* :native
+  "The static checker that compilation, file loading, the REPL and #@sml
+blocks run before generating code: :NATIVE (the native checker,
+src/types/), :HAMLET (HaMLet, loaded on first use), NIL (none: plain mode),
+a checker object, or a function of the source text and file name.  See
+src/type-checker.lisp.")
 
 (define-condition sml-static-type-error (error)
   ((source :initarg :source :reader sml-static-type-error-source)
@@ -123,7 +128,8 @@ module registries below) sees the basis, else NIL."
   (when checker
     (if (functionp checker)
         (funcall checker source filename)
-        (type-check-sml-string-using checker source :filename filename))))
+        (type-check-sml-string-using (resolve-sml-type-checker checker) source
+                                     :filename filename))))
 
 (defmacro with-sml-type-checker ((checker) &body body)
   `(let ((*sml-type-checker* ,checker))
@@ -1012,6 +1018,12 @@ LAMBDA-LIST, inline, with the result checked against Int's range."
   (if (zerop b)
       (sml-raise-named-exception "Div")
       (sml-check-int (values (floor a b)))))
+(defun sml-integer-div (a b)
+  "`div' on IntInf.int and the word types: SML-INT-DIV without the range
+check."
+  (if (zerop b)
+      (sml-raise-named-exception "Div")
+      (values (floor a b))))
 (defun sml-int-mod (a b)
   "SML `mod`: remainder with the sign of the divisor."
   (if (zerop b)
@@ -1080,7 +1092,10 @@ are all in Int's range and it is not."
   "The size in bits of word type TYNAME (as named by the static checker), or
 NIL if TYNAME is not a word type."
   (cond ((string= tyname "word") +sml-word-size+)
-        ((string= tyname "word8") 8)))
+        ((string= tyname "word8") 8)
+        ((string= tyname "word16") 16)
+        ((string= tyname "word32") 32)
+        ((string= tyname "word64") 64)))
 
 (defun sml-word-from-int (bits value)
   (ldb (byte bits 0) value))

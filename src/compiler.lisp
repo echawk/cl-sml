@@ -128,20 +128,26 @@ signature is unknown), and whether the list is complete."
 (defun static-structure-members (dec)
   "The value members of structure declaration DEC according to the static
 checker (signature matching included), or :UNKNOWN."
-  (let ((fact (first (sml-static-facts-at (sml-ast-position dec) "str"
-                                          (second dec)))))
-    (if fact
-        (mapcar #'cdr (parse-sml-structure-members (third fact)))
-        :unknown)))
+  (if (native-sml-static-facts-p)
+      (let ((members (funcall 'cl-sml.types::native-structure-members
+                              dec *sml-static-facts*)))
+        (if (eq members :unknown) :unknown (mapcar #'cdr members)))
+      (let ((fact (first (sml-static-facts-at (sml-ast-position dec) "str"
+                                              (second dec)))))
+        (if fact
+            (mapcar #'cdr (parse-sml-structure-members (third fact)))
+            :unknown))))
 
 (defun replicated-constructors (dec)
   "The (status . name) constructors that datatype replication DEC binds,
 according to the static checker, or else the parser, or NIL when unknown."
   (let ((fact (first (sml-static-facts-at (sml-ast-position dec) "dtrep"
                                           (second dec)))))
-    (if fact
-        (parse-sml-structure-members (third fact))
-        (getf (cdddr dec) :constructors))))
+    (cond (fact (parse-sml-structure-members (third fact)))
+          ((and (native-sml-static-facts-p)
+                (funcall 'cl-sml.types::native-replicated-constructors
+                         dec *sml-static-facts*)))
+          (t (getf (cdddr dec) :constructors)))))
 
 (defun compile-datatype-replication-constructors (dec)
   "Bind the constructors DEC = (:datatype-replication name source) brings
@@ -1721,10 +1727,19 @@ name it is used at (\"int\", \"word\", \"word8\", \"real\", \"char\" or
       (when tyname
         (values (second node) tyname)))))
 
+(defparameter *specialized-overloading-instances*
+  '("int" "intinf" "word" "word8" "word16" "word32" "word64" "real" "char" "string")
+  "The instances COMPILE-OVERLOADED-OPERATION specializes.  The other
+integer types (Int32.int, ...) take the generic operations, which check
+Int's range.")
+
 (defun compile-overloaded-operation (name tyname args)
   "Specialized CL for overloaded identifier NAME used at type TYNAME and
 applied to the compiled ARGS (one for unary, two for binary operators).
-Returns NIL for combinations without a specialization."
+Returns NIL for combinations without a specialization.  At \"intinf\"
+(IntInf.int) the operations are CL's, which never overflow."
+  (unless (member tyname *specialized-overloading-instances* :test #'string=)
+    (return-from compile-overloaded-operation nil))
   (let ((bits (sml-word-type-bits tyname))
         (int-p (string= tyname "int"))
         (comparison (cdr (assoc name '(("<" . <) (">" . >)
@@ -1770,7 +1785,7 @@ Returns NIL for combinations without a specialization."
         ((member name '("+" "-" "*") :test #'string=)
          (destructuring-bind (x y) args
            (wrap `(,(intern name :cl) ,x ,y))))
-        ((string= name "div") `(sml-int-div ,@args))
+        ((string= name "div") `(,(if int-p 'sml-int-div 'sml-integer-div) ,@args))
         ((string= name "mod") `(sml-int-mod ,@args))))))
 
 (defun compile-overloaded-identifier-value (name tyname)

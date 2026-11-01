@@ -32,8 +32,7 @@
                (:file "compiler")
                (:file "inspect")
                (:file "reader")
-               (:file "type-checker")
-               ;; The native checker (DESIGN-TYPECHECKER.md), opt-in.
+               ;; The native checker (DESIGN-TYPECHECKER.md).
                (:module "types"
                 :serial t
                 :components ((:file "objects")
@@ -49,6 +48,7 @@
                              (:file "initial-basis")
                              (:file "annotations")
                              (:file "typecheck")))
+               (:file "type-checker")
                (:file "repl")
                (:cl-sml-basis-file "basis")
                ;; SML source cl-sml loads into HaMLet at run time.
