@@ -139,6 +139,19 @@ M3 as built:
   test now runs in plain mode). Tests expecting the generic `sml-+` now
   expect `sml-int-+`, and the REPL prints record types as the checker
   does (`{x : int, y : int}`).
+- Also fixed on the way: match checking took long constructors (`S.C`)
+  in patterns for unknown constructors, so `fun f (S.A) = .. | f S.B = ..`
+  was reported non-exhaustive.
+- Numbers (2026-11-01, SBCL): Core corpus native 63/63 (plain 62/63:
+  `dyn_word_arith` overflows without types); modules corpus native 56/57
+  (plain 57/57; `b18_time_timer` passes `Time.toMilliseconds`, a
+  `LargeInt.int`, to `IntInf.toString`, and our Basis has LargeInt = Int);
+  real world native 90/119, plain 86/119 (previously plain 81, HaMLet 62;
+  details in t/realworld/REPORT.md).
+- Left open: flexible records are still resolved at the innermost value
+  declaration (HaMLet), which rejects two real-world programs Poly
+  accepts; type errors between two type names printed alike (`int` and
+  `IntInf.int`) show the same name twice.
 
 ## 1. Goals
 

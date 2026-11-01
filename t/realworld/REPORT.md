@@ -1,5 +1,42 @@
 # cl-sml real-world corpus assessment
 
+## Latest numbers (2026-11-01, native checker M3)
+
+`MODES="plain native"`, SBCL, 6 jobs, 120 s timeout; `native` is the
+native checker (src/types/), now cl-sml's default; `checked` (HaMLet) was
+not rerun.
+
+| mode | PASS | CHECKER | PARSE | RUNTIME | TIMEOUT |
+|---|---|---|---|---|---|
+| plain (119) | 86 | – | 4 | 21 | 8 |
+| native (119) | 90 | 13 | 4 | 3 | 9 |
+| previous: plain / HaMLet-checked | 81 / 62 | | | | |
+
+Native passes 9 programs plain mode fails, all of them overloading at
+IntInf (`+` etc. raised Overflow in plain mode: iter-pidigits, pidigits,
+seki-bernoulli, the int-inf-* tests); plain passes 5 that native rejects.
+The 13 CHECKER results:
+
+- Not SML97, or not our Basis (rejected correctly, or blocked on Basis
+  work): `SMLofNJ.Cont` (cml-sieve, pingpong), `Posix` (plclub-ray),
+  `Int54`, `WideString`/`WideChar` (2), `''a`/`'a` in a local datatype or
+  without a binding `val` (ln equality, local_datatype; Poly rejects both
+  too), barnes-hut (`testit : outstream -> unit`, upstream BROKEN).
+- Flexible records resolved only at the innermost value declaration, as
+  HaMLet does, while Poly and SML/NJ look at the whole top-level
+  declaration: nbody, ln parser_combinator.
+- `LargeInt` is `Int` (62 bits) in our Basis, so `LargeInt` constants
+  beyond that are out of range (ln int-inf-rand, int64). With LargeInt =
+  IntInf, as in most implementations, both would check.
+
+bm-aobench now runs (plain raised Overflow) but times out; ratio-regions
+takes about 42 s in both modes alone and timed out once under load.
+Compile times are mostly within noise of plain mode (black-scholes 28 s
+both); the largest increases are kcfa 2.2 to 5.3 s and mlyacc 5.3 to
+7.9 s, under a loaded machine.
+
+## Original assessment (2026-10-29)
+
 Baseline: master 53fdd69, SBCL. Assessed 2026-10-29.
 
 ## Setup

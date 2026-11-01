@@ -94,7 +94,7 @@
          (let ((cause (princ-to-string (cl-sml::sml-static-type-error-cause c))))
            ;; drop the "/path/prog.sml:" prefix HaMLet puts on positions
            (let ((p (search "prog.sml:" cause)))
-             (format nil "HaMLet: ~A" (if p (subseq cause (+ p 9)) cause)))))
+             (format nil "checker: ~A" (if p (subseq cause (+ p 9)) cause)))))
         ((typep c 'cl-sml::sml-raised-exception)
           (let ((v (cl-sml::sml-exception-value c)))
             (format nil "uncaught SML exception ~A~@[ ~S~]"
