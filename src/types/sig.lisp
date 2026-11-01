@@ -164,11 +164,17 @@ ENV has at the same places (HaMLet Sig.matchE)."
   phi)
 
 (defun scheme-generalises-p (scheme spec-scheme)
-  "Is SPEC-SCHEME (whose bound variables are rigid) an instance of
-SCHEME?"
-  (handler-case
-      (progn (unify (instantiate scheme) (scheme-type spec-scheme)) t)
-    (unify-failure () nil)))
+  "Is SPEC-SCHEME (whose bound variables are rigid) an instance of SCHEME?
+A free (undetermined) type variable of SCHEME may be determined by the
+match, but not to a type variable of SPEC-SCHEME: that would make a
+monomorphic value polymorphic (HaMLet test undetermined3)."
+  (let ((free (scheme-free-tvars scheme)))
+    (handler-case
+        (progn (unify (instantiate scheme) (scheme-type spec-scheme))
+               (notany (lambda (var)
+                         (intersection (free-tvars var) (scheme-vars spec-scheme)))
+                       free))
+      (unify-failure () nil))))
 
 (defun status-name (status)
   (ecase status (:v "value") (:c "constructor") (:e "exception")))

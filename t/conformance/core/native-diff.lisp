@@ -1,12 +1,15 @@
 ;;; Differential check of the native type checker (src/types/) against
-;;; HaMLet on the Core conformance corpus: accept/reject, and for programs
-;;; both accept, the printed type of each top-level binding.
+;;; HaMLet on a corpus of programs (by default the Core conformance corpus;
+;;; t/conformance/modules/tests and hamlet/test are others): accept/reject,
+;;; and for programs both accept, the printed form of each top-level
+;;; binding (values, types, structures, signatures, functors).
 ;;;
 ;;; Load cl-sml first, then this file, then call (native-diff:main).  HaMLet
-;;; needs a deep control stack (sbcl --control-stack-size 1GB).  Long
-;;; identifiers (Basis structures) are elaborated as unchecked, so bindings
-;;; whose type depends on one print with `?' and are not compared.  Types
-;;; that differ only in the names of their type variables count as renamed.
+;;; needs a deep control stack (sbcl --control-stack-size 1GB).  Both
+;;; checkers start from the Basis in src/basis.  Printed bindings are
+;;; compared without white space and without HaMLet's `(* ... *)' comments,
+;;; which list type names; bindings that differ only in the names of their
+;;; type variables count as renamed.
 
 (defpackage #:native-diff
   (:use #:cl)
@@ -43,10 +46,29 @@ white space collapsed and `(* ... *)' comment lines dropped."
                               (loop while (and rest (or (char= (char (first rest) 0) #\')
                                                         (char= (char (first rest) 0) #\()))
                                     do (pop rest)
-                                    finally (return (string-right-trim ":" (or (first rest) ""))))))))
+                                    finally (return
+                                              (let ((name (or (first rest) "")))
+                                                ;; `functor F(Arg : ...', `structure S :'
+                                                (string-right-trim
+                                                 ":" (subseq name 0 (or (position #\( name)
+                                                                        (length name)))))))))))
           (setf result (remove key result :key #'car :test #'string=))
-          (push (cons key text) result)))
+          (push (cons key (normalise text)) result)))
       (nreverse result))))
+
+(defun normalise (text)
+  "TEXT without `(* ... *)' comments and white space."
+  (with-output-to-string (out)
+    (loop with depth = 0
+          for i from 0 below (length text)
+          for ch = (char text i)
+          do (cond ((and (char= ch #\() (< (1+ i) (length text)) (char= (char text (1+ i)) #\*))
+                    (incf depth))
+                   ((and (plusp depth) (char= ch #\)) (> i 0) (char= (char text (1- i)) #\*))
+                    (decf depth))
+                   ((plusp depth))
+                   ((member ch '(#\Space #\Tab #\Newline)))
+                   (t (write-char ch out))))))
 
 (defun canonical-tyvars (text)
   "TEXT with its type variables renamed 'a, 'b, ... in order of first
@@ -79,18 +101,19 @@ the order its unifier links variables."
 (defun native-check (source)
   (handler-case
       (handler-bind ((warning #'muffle-warning))
-        (let ((cl-sml:*native-unchecked-long-ids* t))
-          (values (cl-sml:typecheck-sml-string source) nil)))
+        (values (cl-sml:typecheck-sml-string source) nil))
     (error (condition) (values nil (princ-to-string condition)))))
 
 (defun one-line (text &optional (max 200))
   (let ((text (substitute #\Space #\Newline text)))
     (subseq text 0 (min max (length text)))))
 
+(defvar *checker* nil)
+
 (defun main (&key (names nil) (verbose t) (directory (merge-pathnames "tests/" *here*)))
   "Compare the checkers on the .sml files of DIRECTORY (by default this
 corpus; HaMLet's own hamlet/test/ is another)."
-  (let* ((checker (cl-sml:make-hamlet-type-checker))
+  (let* ((checker (or *checker* (setf *checker* (cl-sml:make-hamlet-type-checker))))
          (files (sort (directory (merge-pathnames "*.sml" directory))
                       #'string< :key #'pathname-name))
          (counts (list :both-accept 0 :both-reject 0 :only-hamlet-accepts 0

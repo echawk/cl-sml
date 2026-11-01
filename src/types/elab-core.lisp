@@ -957,9 +957,9 @@ HaMLet); they must not reach the top level (rule 87)."
                (setf (tvar-link var) (con-type (oclass-default (tvar-overload var))))))))
 
 (defun check-top-level-env (node env)
-  "No undetermined or explicit type variable may remain free on top level
-(HaMLet: rule 87 and the remark after it)."
-  (loop for (name . valstr) in (env-ve env)
+  "No undetermined or explicit type variable may remain free on top level,
+in ENV or its structures (HaMLet: rule 87 and the remark after it)."
+  (loop for (name . valstr) in (env-latest (env-ve env))
         do (dolist (var (scheme-free-tvars (valstr-scheme valstr)))
              (cond ((tvar-unknown var))
                    (*saw-unknown* (setf (tvar-unknown var) t))
@@ -968,23 +968,58 @@ HaMLet); they must not reach the top level (rule 87)."
                                 (tvar-name var) name))
                    (t (elab-error node "the type of ~A, ~A, is not determined on top level ~
                                         (value restriction)"
-                                  name (scheme->string (valstr-scheme valstr))))))))
+                                  name (scheme->string (valstr-scheme valstr)))))))
+  (loop for (nil . sub) in (env-latest (env-se env))
+        do (check-top-level-env node sub)))
+
+(defun program-boundary-p (node)
+  "Does a `;' end the program before declaration NODE (Section 8: a
+program is a sequence of top-level declarations, each ended by `;')?"
+  (let ((offset (and cl-sml::*sml-declaration-positions*
+                     (gethash node cl-sml::*sml-declaration-positions*))))
+    (when (and offset *source*)
+      (let ((i (1- offset)))
+        (loop
+          (loop while (and (>= i 0) (member (char *source* i) '(#\Space #\Tab #\Newline #\Return #\Page)))
+                do (decf i))
+          (if (and (>= i 1) (char= (char *source* i) #\)) (char= (char *source* (1- i)) #\*))
+              ;; Skip a (nested) comment backwards.
+              (let ((depth 1))
+                (decf i 2)
+                (loop while (and (>= i 1) (plusp depth))
+                      do (cond ((and (char= (char *source* i) #\)) (char= (char *source* (1- i)) #\*))
+                                (incf depth) (decf i 2))
+                               ((and (char= (char *source* i) #\*) (char= (char *source* (1- i)) #\())
+                                (decf depth) (decf i 2))
+                               (t (decf i)))))
+              (return)))
+        (and (>= i 0) (char= (char *source* i) #\;))))))
 
 (defun elab-top-level-decs (c decs)
   "Elaborate the top-level declarations DECS in context C, resolving
 overloading at the end of each.  Returns the environment they bind.  As in
-HaMLet, the types of the bindings must be determined by the end of the
-program (a `;'-terminated top-level declaration), not of each declaration."
+HaMLet, the types of the bindings must be determined by the end of each
+program (top-level declarations ended by `;', or the end of the text)."
   (let ((env (make-env))
+        (program (make-env))
+        (last-node nil)
         (saw-unknown nil))
-    (dolist (group (dec-groups decs))
-      (let* ((*overloaded* nil)
-             (*saw-unknown* nil)
-             (*level* 0)
-             (increment (elab-dec (context-plus-env c env) group)))
-        (resolve-overloading)
-        (when *saw-unknown* (setf saw-unknown t))
-        (setf env (env-plus env increment))))
-    (let ((*saw-unknown* saw-unknown))
-      (check-top-level-env (first (last decs)) (make-env (env-latest (env-ve env)))))
+    (flet ((end-program ()
+             (let ((*saw-unknown* saw-unknown))
+               (check-top-level-env last-node program))
+             (setf program (make-env)
+                   saw-unknown nil)))
+      (dolist (group (dec-groups decs))
+        (when (and last-node (program-boundary-p (first group)))
+          (end-program))
+        (let* ((*overloaded* nil)
+               (*saw-unknown* nil)
+               (*level* 0)
+               (increment (elab-dec (context-plus-env c env) group)))
+          (resolve-overloading)
+          (when *saw-unknown* (setf saw-unknown t))
+          (setf env (env-plus env increment)
+                program (env-plus program increment)
+                last-node (first group))))
+      (end-program))
     env))

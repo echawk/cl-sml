@@ -18,7 +18,7 @@
 (defvar *t-ref* (make-tyname "ref" 1 :equality :ref :constructors '(("ref" . t))))
 (defvar *t-exn* (make-tyname "exn" 0 :equality nil))
 (defvar *t-vector* (make-tyname "vector" 1))
-(defvar *t-word8* (make-tyname "word" 0))
+(defvar *t-word8* (make-tyname "word8" 0))  ; as HaMLet names it
 ;; Set to the Basis's option once it is elaborated (for the relaxed value
 ;; restriction, which counts option as covariant).
 (defvar *t-option* nil)
