@@ -18,13 +18,20 @@
   "Parse SOURCE in the parser environment SCOPES and elaborate it in ENV.
 Returns the environment it binds and the parser environment it leaves."
   (let ((cl-sml::*sml-ast-positions* (cl-sml::make-sml-ast-position-table))
-        (cl-sml::*sml-declaration-positions* (make-hash-table :test 'eq))
-        (*source* source)
-        (*filename* filename))
+        (cl-sml::*sml-declaration-positions* (make-hash-table :test 'eq)))
     (multiple-value-bind (program scopes)
-        (parse-sml-program source :source-name filename :scopes scopes)
-      (values (elab-top-level-decs (make-context env) (rest program))
+        (let ((cl-sml::*sml-static-facts* nil))
+          (parse-sml-program source :source-name filename :scopes scopes))
+      (values (elaborate-ast env program source :filename filename)
               scopes))))
+
+(defun elaborate-ast (env program source &key filename)
+  "Elaborate PROGRAM, the (:program dec...) AST the parser made of SOURCE
+(its positions in the parser's tables, which must still be bound), in ENV.
+Returns the environment it binds."
+  (let ((*source* source)
+        (*filename* filename))
+    (elab-top-level-decs (make-context env) (rest program))))
 
 (defun basis-structure-tynames (env tycon &rest members)
   "The type names TYCON denotes in the top-level structures of ENV that
@@ -39,6 +46,31 @@ also have the values MEMBERS."
                    (when (and tyname (zerop (tyname-arity tyname)))
                      (pushnew tyname tynames))))))
     (nreverse tynames)))
+
+(defvar *instance-names* nil
+  "Alist from the type names of the Basis's integer, word and real
+structures that are not the built-in ones (IntInf.int, Int32.int,
+Word32.word, ...) to the name the code generator knows them by: the
+structure's name in lower case, e.g. \"intinf\" or \"word32\".")
+
+(defun basis-instance-names (env)
+  (let ((names nil)
+        (builtin (list *t-int* *t-word* *t-word8* *t-real* *t-char* *t-string*)))
+    (loop for (strid . sub) in (reverse (env-latest (env-se env)))
+          do (dolist (tycon '("int" "word" "real"))
+               (let ((tystr (cdr (assoc tycon (env-te sub) :test #'string=))))
+                 (when tystr
+                   (let ((tyname (tyfcn-tyname (tystr-tyfcn tystr))))
+                     (when (and tyname (zerop (tyname-arity tyname))
+                                (not (member tyname builtin))
+                                (not (assoc tyname names)))
+                       (push (cons tyname (string-downcase strid)) names)))))))
+    names))
+
+(defun tyname-instance-name (tyname)
+  "The name of TYNAME as an overloading instance (see *INSTANCE-NAMES*)."
+  (or (cdr (assoc tyname *instance-names*))
+      (tyname-name tyname)))
 
 (defun elaborate-basis (&optional (files (cl-sml::sml-basis-source-files)))
   "Elaborate the Basis Library sources FILES; set *BASIS-ENV* and
@@ -65,6 +97,7 @@ classes Int, Word and Real: DESIGN-TYPECHECKER.md, section 4, item 3."
      :ints (basis-structure-tynames env "int" "toInt" "fromInt")
      :words (basis-structure-tynames env "word" "toInt" "fromInt")
      :reals (basis-structure-tynames env "real" "fromInt" "/"))
+    (setf *instance-names* (basis-instance-names env))
     (let ((option (cdr (assoc "option" (env-te env) :test #'string=))))
       (setf *t-option* (and option (tyfcn-tyname (tystr-tyfcn option)))))
     (setf *basis-elaboration-seconds*

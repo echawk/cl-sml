@@ -25,7 +25,8 @@ before it is matched against a signature."
   (let ((env (make-env)))
     (dolist (group (dec-groups decs) env)
       (setf env (env-plus env (elab-dec (context-plus-env c env) group)))
-      (resolve-overloading))))
+      (let ((*position-fallback* (first group)))
+        (resolve-overloading)))))
 
 (defun elab-strexp (c strexp)
   "The environment STREXP elaborates to."
@@ -75,7 +76,11 @@ the functor body generates."
             (loop for node in group
                   collect (cons (second node)
                                 (let ((*position-fallback* node))
-                                  (elab-strexp c (node-key node :strexp)))))))
+                                  (let ((env (elab-strexp c (node-key node :strexp))))
+                                    ;; For the code generator: the members
+                                    ;; the structure has after ascription.
+                                    (annotate node :members env)
+                                    env))))))
 
 ;;;; Signature expressions [rules 62-65]
 
