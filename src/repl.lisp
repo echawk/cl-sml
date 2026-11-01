@@ -59,7 +59,8 @@
     (t nil)))
 
 (defvar *repl-checked-value-types* nil
-  "Alist from value name to the type HaMLet inferred for the current phrase.")
+  "Alist from value name to the type the static checker inferred for the
+current phrase.")
 
 (defun hamlet-description-value-types (description)
   "Parse the `val NAME : TYPE' entries of a HaMLet basis description, joining
@@ -259,7 +260,9 @@ recording to commit once the form has been evaluated."
   "When our parser rejects SOURCE, prefer the static checker's diagnostic: the
 phrase may simply be invalid SML.  Returns NIL if there is no checker or it
 accepts SOURCE (which then points at a gap in our parser)."
-  (when *sml-type-checker*
+  ;; The native checker parses with our parser: it has nothing to add.
+  (when (and *sml-type-checker*
+             (not (native-sml-checker-p *sml-type-checker*)))
     (handler-case (progn (type-check-repl-input :program source) nil)
       (sml-static-type-error (condition) condition))))
 
@@ -368,18 +371,24 @@ accepts SOURCE (which then points at a gap in our parser)."
                (with-sml-cell-reservations
                  (evaluate-phrase kind)))
              (evaluate-phrase (kind)
-               (multiple-value-bind (form ast recording)
-                   (compile-repl-phrase kind buffer :first-line buffer-line)
-                 (setf *repl-checked-value-types*
-                       (and (hamlet-type-checker-p *sml-type-checker*)
-                            (hamlet-description-value-types
-                             (hamlet-type-checker-last-description
-                              *sml-type-checker*))))
-                 (when show-lisp
-                   (print-sml-lisp form :stream output))
-                 (ecase kind
-                   (:program (eval-repl-program form ast recording))
-                   (:expr (eval-repl-expression form ast)))))
+               ;; A phrase that fails, statically or when it runs, binds
+               ;; nothing: the checker forgets it too.
+               (call-preserving-sml-checker-session
+                *sml-type-checker*
+                (lambda ()
+                  (multiple-value-bind (form ast recording)
+                      (compile-repl-phrase kind buffer :first-line buffer-line)
+                    (setf *repl-checked-value-types*
+                          (and *sml-type-checker*
+                               (hamlet-description-value-types
+                                (or (sml-checker-last-description *sml-type-checker*)
+                                    ""))))
+                    (when show-lisp
+                      (print-sml-lisp form :stream output))
+                    (ecase kind
+                      (:program (eval-repl-program form ast recording))
+                      (:expr (eval-repl-expression form ast)))))
+                :always nil))
              (evaluate-and-report (kind)
                (dolist (line (if time-phases
                                  (with-sml-phase-timings (output)
@@ -430,12 +439,13 @@ accepts SOURCE (which then points at a gap in our parser)."
 ;;; The cl-sml executable (see build-repl.sh).
 
 (defparameter *main-usage*
-  "Usage: cl-sml [--time] [--run FILE.sml | --emit-lisp FILE.sml | --help]
+  "Usage: cl-sml [--time] [--unchecked] [--run FILE.sml | --emit-lisp FILE.sml | --help]
 
 Without --run or --emit-lisp, start the SML REPL (:help lists its commands).
   --run FILE.sml        Load and run FILE.sml, then exit.
   --emit-lisp FILE.sml  Print the Common Lisp generated for FILE.sml, then exit.
   --time                Report how long each compilation phase takes.
+  --unchecked           Compile without the static checker (plain mode).
   --help                Show this message.
 ")
 
@@ -454,6 +464,8 @@ and return the exit status."
                (cond
                  ((string= argument "--time")
                   (setf time-phases t))
+                 ((string= argument "--unchecked")
+                  (setf *sml-type-checker* nil))
                  ((member argument '("--help" "-h") :test #'string=)
                   (setf action (list :help)))
                  ((and (member argument '("--run" "--emit-lisp") :test #'string=)

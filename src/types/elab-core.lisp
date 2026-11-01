@@ -415,7 +415,9 @@ variables (Section 2.9)."
 (defun constructor-spat (valstr result-type name arg-spat)
   (if (eq (valstr-status valstr) :e)
       (list :con (valstr-id valstr) *t-exn* arg-spat)
-      (let ((result (repr result-type)))
+      (let ((result (repr result-type))
+            ;; A long constructor (S.C) is the datatype's constructor C.
+            (name (subseq name (1+ (or (position #\. name :from-end t) -1)))))
         (list :con name (if (and (consp result) (eq (car result) :con))
                             (second result)
                             *t-exn*)
@@ -905,6 +907,7 @@ HaMLet); they must not reach the top level (rule 87)."
               (let ((name (third node)))
                 (let ((tystr (or (lookup-long-tycon c name node)
                                  (elab-error node "cannot replicate unchecked type ~A" name))))
+                  (annotate node :constructors (tystr-ve tystr))
                   (make-env (tystr-ve tystr)
                             (list (cons (second node)
                                         (make-tystr (tystr-tyfcn tystr) (tystr-ve tystr)
@@ -949,12 +952,39 @@ HaMLet); they must not reach the top level (rule 87)."
 
 ;;;; Top-level declarations
 
+(defun literal-range (instance)
+  "The (low . high) range of the values of the integer or word type named
+INSTANCE (see TYNAME-INSTANCE-NAME), or NIL if it is unbounded or not one."
+  (flet ((signed (bits) (cons (- (ash 1 (1- bits))) (1- (ash 1 (1- bits)))))
+         (unsigned (bits) (cons 0 (1- (ash 1 bits)))))
+    (cond ((string= instance "int") (cons cl-sml::+sml-min-int+ cl-sml::+sml-max-int+))
+          ((string= instance "word") (unsigned cl-sml::+sml-word-size+))
+          ((member instance '("int8" "int16" "int32" "int64") :test #'string=)
+           (signed (parse-integer instance :start 3)))
+          ((member instance '("word8" "word16" "word32" "word64") :test #'string=)
+           (unsigned (parse-integer instance :start 4))))))
+
+(defun check-literal-range (node type)
+  "[Section 2.2, Appendix E.1] A special constant must denote a value of its type."
+  (let ((value (cond ((integerp node) node)
+                     ((and (consp node) (eq (car node) :word) (integerp (second node)))
+                      (second node))))
+        (type (repr type)))
+    (when (and value (consp type) (eq (car type) :con))
+      (let ((range (literal-range (tyname-instance-name (second type)))))
+        (when (and range (not (<= (car range) value (cdr range))))
+          (elab-error node "constant ~D is out of the range of type ~A"
+                      value (tyname-name (second type))))))))
+
 (defun resolve-overloading ()
-  "Default the overloaded type variables still unresolved [Appendix E]."
+  "Default the overloaded type variables still unresolved [Appendix E],
+then check that the integer and word constants fit their types."
   (loop for (nil . var) in (reverse *overloaded*)
         do (let ((var (repr var)))
              (when (and (tvar-p var) (tvar-overload var))
-               (setf (tvar-link var) (con-type (oclass-default (tvar-overload var))))))))
+               (setf (tvar-link var) (con-type (oclass-default (tvar-overload var)))))))
+  (loop for (node . var) in *overloaded*
+        do (check-literal-range node var)))
 
 (defun check-top-level-env (node env)
   "No undetermined or explicit type variable may remain free on top level,
@@ -1016,7 +1046,8 @@ program (top-level declarations ended by `;', or the end of the text)."
                (*saw-unknown* nil)
                (*level* 0)
                (increment (elab-dec (context-plus-env c env) group)))
-          (resolve-overloading)
+          (let ((*position-fallback* (first group)))
+            (resolve-overloading))
           (when *saw-unknown* (setf saw-unknown t))
           (setf env (env-plus env increment)
                 program (env-plus program increment)

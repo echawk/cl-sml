@@ -369,7 +369,7 @@ val _ = print (Int.toString x ^ \"\\n\")"))))
   (let ((output (make-string-output-stream))
         (error-output (make-string-output-stream)))
     (cl-sml:repl :input (make-string-input-stream
-                         (format nil "val x = 1;~%fun getx () = x;~%val x = 2;~%getx ();~%x;~%val x = raise Fail \"no\";~%x;~%:quit~%"))
+                         (format nil "val x = 1;~%fun getx () = x;~%val x = 2;~%getx ();~%x;~%val x : int = raise Fail \"no\";~%x;~%:quit~%"))
                  :output output
                  :error-output error-output
                  :prompt nil

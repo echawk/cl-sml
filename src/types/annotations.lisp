@@ -17,6 +17,10 @@
 ;;;   :exhaustive, :redundant   match checks of fn, case, handle, fun and
 ;;;                 val bindings
 ;;;   :env          the environment a declaration binds
+;;;   :members      the environment of a structure binding, after
+;;;                 ascription (the code generator's "str" facts)
+;;;   :constructors the constructor environment a datatype replication
+;;;                 binds ("dtrep")
 
 (defvar *native-annotations* nil
   "The annotation table (an EQ hash table) of the last native check, as
@@ -32,15 +36,18 @@ returned by TYPECHECK-SML-STRING.")
 
 (defun native-overloaded-instance (node &optional (table *native-annotations*))
   "The type name (\"int\", \"word\", \"real\", \"char\", \"string\") at which
-the overloaded identifier or constant NODE is used, or NIL (compare
-SML-OVERLOADED-INSTANCE)."
+the overloaded identifier or constant NODE is used, or NIL; the Basis's
+other integer, word and real types are named after their structures, e.g.
+\"intinf\" or \"word32\" (see *INSTANCE-NAMES*).  Compare
+SML-OVERLOADED-INSTANCE."
   (let ((var (find-if #'tvar-overload
                       (or (native-annotation node :instances table)
                           (let ((type (native-annotation node :type table)))
                             (and (tvar-p type) (list type)))))))
     (when var
       (let ((type (repr var)))
-        (and (consp type) (eq (car type) :con) (tyname-name (second type)))))))
+        (and (consp type) (eq (car type) :con)
+             (tyname-instance-name (second type)))))))
 
 (defun native-equality-type (node &optional (table *native-annotations*))
   "The type compared by an occurrence NODE of = or <>, or NIL."
@@ -69,3 +76,24 @@ the overloaded instance."
          (native-annotation node :status table))
         ((string= kind "ov") (native-overloaded-instance node table))
         (t nil)))
+
+(defun ve-members (ve prefix)
+  (loop for (vid . valstr) in (env-latest ve)
+        collect (cons (status-string valstr) (concatenate 'string prefix vid))))
+
+(defun env-members (env &optional (prefix ""))
+  "The value members of ENV and of its structures, as (status . longvid)."
+  (append (ve-members (env-ve env) prefix)
+          (loop for (strid . sub) in (env-latest (env-se env))
+                append (env-members sub (concatenate 'string prefix strid ".")))))
+
+(defun native-structure-members (node &optional (table *native-annotations*))
+  "The value members (status . longvid) of the structure that binding NODE
+declares, after signature matching, or :UNKNOWN."
+  (let ((env (native-annotation node :members table)))
+    (if env (env-members env) :unknown)))
+
+(defun native-replicated-constructors (node &optional (table *native-annotations*))
+  "The constructors (status . vid) datatype replication NODE binds, or NIL."
+  (let ((ve (native-annotation node :constructors table)))
+    (and ve (ve-members ve ""))))

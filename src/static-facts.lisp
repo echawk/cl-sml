@@ -17,7 +17,13 @@
   (structures (make-hash-table :test #'equal) :type hash-table))
 
 (defvar *sml-static-facts* nil
-  "The SML-STATIC-FACTS for the text currently being parsed and compiled.")
+  "What the static checker learned about the text currently being parsed
+and compiled: an SML-STATIC-FACTS from HaMLet, keyed by source offset, or
+the native checker's annotation table (an EQ hash table, see
+src/types/annotations.lisp), keyed by AST node.")
+
+(defun native-sml-static-facts-p (&optional (facts *sml-static-facts*))
+  (hash-table-p facts))
 
 (defvar *sml-static-facts-offset* 0
   "Offset of the parsed text within the text the checker saw.")
@@ -109,7 +115,7 @@ fresh strings until they become (:var op) nodes."
 (defun sml-static-facts-at (offset kind &optional name)
   "Facts of KIND (and NAME, if given) about the phrase at OFFSET of the
 parsed text."
-  (when (and *sml-static-facts* offset)
+  (when (and (sml-static-facts-p *sml-static-facts*) offset)
     (loop for fact in (gethash (+ offset *sml-static-facts-offset*)
                                (sml-static-facts-table *sml-static-facts*))
           when (and (string= (first fact) kind)
@@ -121,8 +127,10 @@ parsed text."
 
 (defun sml-node-fact-info (node kind &optional name)
   "The info of the KIND fact about AST NODE, or NIL."
-  (sml-static-fact-info (sml-ast-position node) kind
-                        (or name (and (stringp (second node)) (second node)))))
+  (if (native-sml-static-facts-p)
+      (funcall 'cl-sml.types:native-node-fact-info node kind *sml-static-facts*)
+      (sml-static-fact-info (sml-ast-position node) kind
+                            (or name (and (stringp (second node)) (second node))))))
 
 ;;; Identifier status: "v" (variable), "c"/"c1" (constructor without/with an
 ;;; argument), "e"/"e1" (exception constructor without/with an argument).
@@ -150,5 +158,5 @@ parsed text."
 (defun sml-static-structure-members (name)
   "The value members (status . name) of structure NAME bound in the checked
 text, or NIL when unknown."
-  (and *sml-static-facts*
+  (and (sml-static-facts-p *sml-static-facts*)
        (gethash name (sml-static-facts-structures *sml-static-facts*))))

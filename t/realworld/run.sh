@@ -3,7 +3,8 @@
 # print the classification table.
 #
 #   MODES="plain checked"  checker modes to run (plain = no static checker,
-#                          checked = HaMLet checker; add -bare to skip the
+#                          checked = HaMLet checker, native = the native
+#                          checker, cl-sml's default; add -bare to skip the
 #                          HaMLet-basis preload, e.g. MODES=plain-bare)
 #   JOBS=6                 parallel programs
 #   TIMEOUT=120            seconds per program (hard kill at +60s)
