@@ -1,13 +1,38 @@
 # cl-sml
 
 cl-sml compiles Standard ML (SML97) to Common Lisp.  An SML program is read,
-statically checked (optionally, by [HaMLet](https://github.com/rossberg/hamlet)'s
-SML97 elaborator), parsed, translated to ordinary Common Lisp forms, and then
-compiled and run by the host Lisp:
+parsed, statically checked by cl-sml's own SML97 type checker (`src/types/`,
+see DESIGN-TYPECHECKER.md), translated to ordinary Common Lisp forms, and
+then compiled and run by the host Lisp:
 
 ```
-SML text -> static check (HaMLet) -> parse -> SML -> Lisp -> compile Lisp -> load / run
+SML text -> parse -> static check -> SML -> Lisp -> compile Lisp -> load / run
 ```
+
+## Checked and unchecked modes
+
+`cl-sml:*sml-type-checker*` chooses the static checker that files, strings,
+the REPL and `#@sml` blocks go through:
+
+- `:native` (the default): the native checker.  Ill-typed programs are
+  rejected before any code runs, with the position and the two types that
+  clash (`SML-NATIVE-TYPE-ERROR`, a subtype of `SML-STATIC-TYPE-ERROR`).
+  Non-exhaustive and redundant matches are warnings on `*error-output*`
+  (`cl-sml:*native-match-warnings*` turns them off).  The code generator
+  uses what the checker learned: identifier status, overloading resolved
+  at `int`, `IntInf.int`, `Word8.word`, `real`, ..., and the members of
+  structures after signature matching.
+- `nil` (`(cl-sml:disable-type-checker)`, or `cl-sml --unchecked`): plain
+  mode, no checking; the compiler guesses what a checker would tell it,
+  e.g. overloading is resolved at run time.
+- `:hamlet` (`(cl-sml:enable-hamlet-type-checker)`):
+  [HaMLet](https://github.com/rossberg/hamlet)'s elaborator, compiled by
+  cl-sml and loaded on first use (some 30 s).  It is kept as the oracle
+  the native checker is tested against.
+
+A checker keeps one static basis per SML package, starting from the Basis:
+each top-level declaration or REPL input that is accepted extends it, and
+rebinding a name shadows it without changing code compiled earlier.
 
 The generated Lisp is a supported artifact: it can be inspected, written to
 files, compiled and shipped.  SML bindings live in per-program Lisp packages
@@ -16,25 +41,27 @@ files, compiled and shipped.  SML bindings live in per-program Lisp packages
 
 ## Building and running
 
-Requirements: SBCL (ECL and ABCL are also supported), Quicklisp, and the
-`hamlet` git submodule (`git submodule update --init hamlet`).  Put this
-repository where ASDF finds it (e.g. Quicklisp's local projects), then:
+Requirements: SBCL (ECL and ABCL are also supported) and Quicklisp; the
+`hamlet` git submodule (`git submodule update --init hamlet`) only for the
+`:hamlet` checker and its tests.  Put this repository where ASDF finds it
+(e.g. Quicklisp's local projects), then:
 
 ```lisp
 (ql:quickload :cl-sml)
-(cl-sml:enable-hamlet-type-checker)   ; optional: SML97 type checking, ~30s
 (cl-sml:repl)                         ; an SML REPL; :help lists its commands
 (cl-sml:load-sml-file #p"program.sml")
 ```
 
-`./build-repl.sh` builds `./cl-sml`, an executable with the type checker
-preloaded (`CL_SML_NO_TYPE_CHECKER=1` builds one without it):
+`./build-repl.sh` builds `./cl-sml`, an executable with the checker's
+Basis preloaded (`CL_SML_NO_TYPE_CHECKER=1` builds one that does not
+check, `CL_SML_HAMLET=1` one that checks with HaMLet):
 
 ```
 ./cl-sml                          # the REPL
 ./cl-sml --run program.sml        # load and run a file
 ./cl-sml --emit-lisp program.sml  # print the Lisp generated for a file
 ./cl-sml --time --run program.sml # also report the time of each phase
+./cl-sml --unchecked --run program.sml  # plain mode
 ```
 
 Loading HaMLet needs a deep control stack: start SBCL with
@@ -48,8 +75,8 @@ primitives (`use{b = "Name"}`, implemented by `sml-basis-primitive` in
 `src/runtime.lisp`).  Compiling cl-sml compiles them once, into the package
 `SML.BASIS` and the FASL of `src/basis.lisp`; every SML package sees the
 basis's bindings, and its own bindings shadow them without changing them.
-HaMLet's checker elaborates the same sources as the initial basis of the
-programs it checks.
+Both checkers elaborate the same sources as the initial basis of the
+programs they check.
 
 ## SML in Lisp files
 
@@ -81,8 +108,10 @@ blocks.  Turn the syntax on for the rest of a file with
   evaluated where the block is, in its lexical environment, every time it
   runs.  `$name` takes letters, digits and `-_*%!?`; write `$(x)` before
   other characters.  A `$` after a symbolic character (`<$>`) is SML.
-  Blocks with splices are not checked by `*sml-type-checker*`; annotate a
-  splice, `($x : int)`, to say what its type is meant to be.
+  Blocks are type-checked.  A splice has a type of its own, which the SML
+  around it determines; annotate it, `($x : int)`, to fix it (an
+  overloaded operator on splices alone defaults to `int`).  HaMLet does
+  not check blocks with splices.
 - `}#` and `$` in SML strings, characters and comments are SML.
 - The SML is compiled when the block is macroexpanded, so `compile-file`
   puts compiled code in the FASL and loading it does not compile SML.

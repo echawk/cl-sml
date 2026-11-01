@@ -15,7 +15,7 @@ sbcl --control-stack-size 1GB --dynamic-space-size 8GB --noinform --non-interact
   --eval '(load "~/.sbclrc")' \
   --eval "(push #p\"$P/\" asdf:*central-registry*)" \
   --eval '(ql:quickload :cl-sml :silent t)' \
-  --eval '(let ((*standard-output* (make-broadcast-stream)) (*error-output* (make-broadcast-stream))) (cl-sml:enable-hamlet-type-checker) (cl-sml:disable-type-checker))' \
+  --eval '(let ((*standard-output* (make-broadcast-stream)) (*error-output* (make-broadcast-stream))) (cl-sml:enable-hamlet-type-checker) (cl-sml:disable-type-checker) (uiop:symbol-call (quote #:cl-sml.types) (quote #:initial-env)))' \
   --eval "(sb-ext:save-lisp-and-die \"$S/cl-sml-rw.core.new\")" > "$S/build-image.log" 2>&1
 mv "$S/cl-sml-rw.core.new" "$S/cl-sml-rw.core"
 echo "built $S/cl-sml-rw.core"

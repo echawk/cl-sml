@@ -1,8 +1,8 @@
 # Design: a native type checker, and a Coalton backend
 
-Status: milestones M1 (2026-10-31) and M2 (2026-11-01) implemented in
-`src/types/`, opt-in through `cl-sml:typecheck-sml-string`; M3 and M4 are
-still design. This expands
+Status: milestones M1 (2026-10-31), M2 and M3 (2026-11-01) implemented in
+`src/types/`; the native checker is the compiler's static front end by
+default. M4 is still design. This expands
 ROADMAP.md items 18-20 (core elaboration, typed IR, modules elaboration) and
 item 22 (Coalton backend).
 
@@ -75,6 +75,70 @@ M2 as built:
   (layered patterns in `val rec`, which the AST's `:val-rec` node cannot
   express). The parser now accepts a lone `'` as a type variable and
   repeated `rec`.
+
+M3 as built:
+
+- `cl-sml:*sml-type-checker*` is `:native` by default; `nil` is plain mode
+  (no checker, today's unchecked compilation) and `:hamlet` selects HaMLet,
+  which is compiled and loaded only when first selected (or by the HaMLet
+  test suite and `native-diff.lisp`). A checker object or a function still
+  works. `src/type-checker.lisp` holds both checkers' glue.
+- Pipeline (`native-check-and-compile-sml-program`, `src/reader.lisp`): the
+  text is parsed once, in the SML package's parser environment; the checker
+  elaborates that AST in the package's static session; the code generator
+  compiles the same AST with the annotation table bound as
+  `*sml-static-facts*`. HaMLet's path (check the text, then parse with
+  position-keyed facts) is unchanged. `sml-node-fact-info`,
+  `sml-overloaded-instance`, the status predicates, structure members
+  (`:members`, HaMLet's "str") and replicated constructors
+  (`:constructors`, "dtrep") dispatch on the kind of facts.
+- The parser can only guess identifier status for names from structures
+  it does not know (functor results). After checking,
+  `adjust-sml-identifier-nodes` makes `:var`/`:ctor`/`:pat-var` nodes
+  agree with the status the checker annotated.
+- Overloading instances are named for the code generator: the built-in
+  types by their names (`int`, `word`, `word8`, `real`, `char`, `string`),
+  the Basis's other integer, word and real types after their structures
+  (`intinf`, `int32`, `word32`, ...: `*instance-names*`, computed after
+  the Basis is elaborated). `+` and friends are specialised at `intinf`
+  (CL arithmetic, no Overflow) and at `word16/32/64` (wrapping); the
+  `intN` types keep the generic operations.
+- Literals: integer, real and character constants are Lisp atoms, not
+  nodes, so the table has no entry for them; the code generator does not
+  need one, since a constant's run-time value is the same at every type of
+  its class. Instead the checker checks, once overloading is resolved,
+  that integer and word constants fit their type (Definition section 2.2:
+  `0w256 : Word8.word` and an `int` constant beyond 62 bits are errors;
+  IntInf constants are unbounded). `(:word n)` constants and strings are
+  nodes and are annotated as before.
+- Sessions: one static environment per SML package, starting from the
+  Basis, extended by each accepted program (the description of the new
+  bindings is what the REPL prints as types). A rejected program leaves it
+  unchanged. In the REPL a phrase that fails at run time is also forgotten
+  (`call-preserving-sml-checker-session :always nil`), so the static and
+  the dynamic basis agree; shadowing never changes earlier code (binding
+  cells). Files that `use` others are loaded one `;`-terminated program at
+  a time (Definition section 8, as HaMLet and SML/NJ), so a program sees
+  what the files used before it bound.
+- `#@sml` blocks are checked. Splices are bound, for that block only, to
+  variables of a fresh "unknown" type (the type of an unchecked long
+  identifier), which the SML determines, e.g. `($x : int)`. An overloaded
+  operator applied only to splices defaults to `int`, as any SML would.
+  With `:hamlet`, blocks with splices are still not checked.
+- Match warnings are reported on `*error-output*` as `FILE:LINE:COL:
+  warning: ...` and muffled.
+- Performance: the Basis is elaborated once per image on first use (about
+  0.05 s on SBCL; `build-repl.sh` and the real-world image do it at build
+  time). The SBCL suite runs no slower than in plain mode (see the M3
+  numbers below).
+- Tests that assumed unchecked behaviour and were wrong per the Definition
+  were fixed: `op before (7, 99)` (needs `unit`), `sqrt 9` (`sqrt` is
+  `Math.sqrt`, on reals), `val x = raise Fail "no"` at top level
+  (undetermined type), and `fun left@@right` after `open` of a structure
+  with constructor `@@` (a `val rec` may not rebind a constructor; that
+  test now runs in plain mode). Tests expecting the generic `sml-+` now
+  expect `sml-int-+`, and the REPL prints record types as the checker
+  does (`{x : int, y : int}`).
 
 ## 1. Goals
 

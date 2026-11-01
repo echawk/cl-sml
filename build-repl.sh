@@ -13,17 +13,20 @@ if [ "$(basename "${LISP:-$SBCL}")" != sbcl ]; then
     exit 2
 fi
 
-# Loading HaMLet needs a deep control stack; :save-runtime-options bakes this
+# HaMLet and deep SML recursion need a deep control stack; :save-runtime-options bakes this
 # size into the executable.
 STACK="${CL_SML_STACK:-1GB}"
 
-# The REPL type-checks every phrase with HaMLet's static semantics.  The
-# checker (HaMLet plus its elaborated basis) is created here so that it is
-# part of the image.  Set CL_SML_NO_TYPE_CHECKER=1 to build without it.
+# The REPL type-checks every phrase with the native checker (src/types/),
+# whose elaborated Basis is made here so that it is part of the image.
+# CL_SML_HAMLET=1 makes HaMLet the checker instead (loaded into the image);
+# CL_SML_NO_TYPE_CHECKER=1 builds an image that does not check (plain mode).
 if [ -n "${CL_SML_NO_TYPE_CHECKER:-}" ]; then
-    ENABLE='nil'
-else
+    ENABLE='(cl-sml:disable-type-checker)'
+elif [ -n "${CL_SML_HAMLET:-}" ]; then
     ENABLE='(cl-sml:enable-hamlet-type-checker)'
+else
+    ENABLE='(uiop:symbol-call (quote #:cl-sml.types) (quote #:initial-env))'
 fi
 
 # Loading HaMLet peaks near 700MB of live heap; CL_SML_HEAP sets SBCL's heap.

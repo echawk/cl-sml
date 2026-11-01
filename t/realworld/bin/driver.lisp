@@ -2,7 +2,8 @@
 ;;;;
 ;;;; Loaded into cl-sml-rw.core (see build-image.sh), one process per program:
 ;;;;   (rw:run "WORKDIR" "MODE" TIMEOUT-SECONDS)
-;;;; MODE is "plain" (no static checker) or "checked" (HaMLet checker), with an
+;;;; MODE is "plain" (no static checker), "checked" (HaMLet checker) or
+;;;; "native" (the native checker), with an
 ;;;; optional "-bare" suffix to use a package without HaMLet's basis preloaded.
 ;;;; Writes WORKDIR/MODE.out (program stdout), MODE.log (compiler noise) and
 ;;;; MODE.res (one line: CLASS<TAB>PHASE<TAB>compile-s<TAB>run-s<TAB>message)
@@ -115,7 +116,9 @@
          (class "OK") (phase "") (message "") (t-compile nil) (t-run nil)
          (warnings 0) (t0 0) (stage nil))
     (ensure-directories-exist rundir)
-    (setf cl-sml:*sml-type-checker* (and checked cl-sml::*hamlet-type-checker*))
+    (setf cl-sml:*sml-type-checker*
+          (cond ((search "native" mode) :native)
+                (checked cl-sml::*hamlet-type-checker*)))
     (uiop:chdir rundir)
     (with-open-file (out (merge-pathnames (format nil "~A.out" mode) dir)
                          :direction :output :if-exists :supersede)

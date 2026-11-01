@@ -439,12 +439,13 @@ accepts SOURCE (which then points at a gap in our parser)."
 ;;; The cl-sml executable (see build-repl.sh).
 
 (defparameter *main-usage*
-  "Usage: cl-sml [--time] [--run FILE.sml | --emit-lisp FILE.sml | --help]
+  "Usage: cl-sml [--time] [--unchecked] [--run FILE.sml | --emit-lisp FILE.sml | --help]
 
 Without --run or --emit-lisp, start the SML REPL (:help lists its commands).
   --run FILE.sml        Load and run FILE.sml, then exit.
   --emit-lisp FILE.sml  Print the Common Lisp generated for FILE.sml, then exit.
   --time                Report how long each compilation phase takes.
+  --unchecked           Compile without the static checker (plain mode).
   --help                Show this message.
 ")
 
@@ -463,6 +464,8 @@ and return the exit status."
                (cond
                  ((string= argument "--time")
                   (setf time-phases t))
+                 ((string= argument "--unchecked")
+                  (setf *sml-type-checker* nil))
                  ((member argument '("--help" "-h") :test #'string=)
                   (setf action (list :help)))
                  ((and (member argument '("--run" "--emit-lisp") :test #'string=)
