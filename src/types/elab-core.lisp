@@ -415,7 +415,9 @@ variables (Section 2.9)."
 (defun constructor-spat (valstr result-type name arg-spat)
   (if (eq (valstr-status valstr) :e)
       (list :con (valstr-id valstr) *t-exn* arg-spat)
-      (let ((result (repr result-type)))
+      (let ((result (repr result-type))
+            ;; A long constructor (S.C) is the datatype's constructor C.
+            (name (subseq name (1+ (or (position #\. name :from-end t) -1)))))
         (list :con name (if (and (consp result) (eq (car result) :con))
                             (second result)
                             *t-exn*)

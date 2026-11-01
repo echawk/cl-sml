@@ -2,6 +2,8 @@
 # Run the cl-sml Core conformance corpus.
 # Usage: run.sh [--checker] [--timeout SECONDS] [NAME...]
 #   --checker   enable the HaMLet static checker (slow start-up)
+#   --native    use the native static checker (cl-sml's default)
+#   (neither: plain mode, no checker)
 #   NAME...     run only these tests (default: every tests/*.sml)
 # Environment: CLSML (cl-sml checkout, default /Users/ethan/sml/cl-sml), LISP (sbcl).
 set -e
@@ -13,6 +15,7 @@ CONF_TIMEOUT=60
 while [ $# -gt 0 ]; do
   case "$1" in
     --checker) CONF_CHECKER=1; shift ;;
+    --native) CONF_CHECKER=native; shift ;;
     --timeout) CONF_TIMEOUT=$2; shift 2 ;;
     *) break ;;
   esac

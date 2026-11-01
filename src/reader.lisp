@@ -429,8 +429,10 @@ is discarded otherwise.")
 
 (defun sml-ast-uses-files-p (tree)
   (and (consp tree)
-       (or (and (eq (car tree) :var) (equal (second tree) "use"))
-           (some #'sml-ast-uses-files-p tree))))
+       (or (and (eq (car tree) :var) (consp (cdr tree)) (equal (second tree) "use"))
+           (loop for rest = tree then (cdr rest)
+                 while (consp rest)
+                 thereis (sml-ast-uses-files-p (car rest))))))
 
 (defun sml-use-program-segments (pathname package)
   "When the file PATHNAME has several programs and calls `use', the

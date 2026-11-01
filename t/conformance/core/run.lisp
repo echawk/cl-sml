@@ -11,6 +11,8 @@
 ;;;
 ;;; Environment variables (run.sh sets them from its flags):
 ;;;   CONF_CHECKER=1      enable the HaMLet static checker
+;;;   CONF_CHECKER=native use the native checker (the default of cl-sml);
+;;;                       otherwise no checker (plain mode)
 ;;;   CONF_TESTS="a b"    run only these tests (default: all)
 ;;;   CONF_TIMEOUT=60     per-test timeout in seconds (SBCL only)
 ;;;   CLSML=/path         the cl-sml checkout (default: the current directory)
@@ -38,8 +40,9 @@
     (if (and value (plusp (length value))) value default)))
 
 (defparameter *checker-p* (equal (env "CONF_CHECKER") "1"))
+(defparameter *native-p* (equal (env "CONF_CHECKER") "native"))
 (defparameter *timeout* (parse-integer (env "CONF_TIMEOUT" "60")))
-(defparameter *mode* (if *checker-p* "checked" "plain"))
+(defparameter *mode* (cond (*checker-p* "checked") (*native-p* "native") (t "plain")))
 
 (defun test-names ()
   (let ((only (env "CONF_TESTS")))
@@ -137,6 +140,7 @@
       (= passed (length results)))))
 
 ;;; HaMLet takes a while to load and elaborate its basis; do it once.
+(setf cl-sml:*sml-type-checker* (and *native-p* :native))
 (when *checker-p*
   (let ((*standard-output* (make-broadcast-stream))
         (*error-output* (make-broadcast-stream)))

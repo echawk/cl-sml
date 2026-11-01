@@ -5,7 +5,8 @@
 ;;;; Every test runs in its own fresh SML package with stdout captured.
 ;;;;
 ;;;; Configuration (environment variables, normally set by run.sh):
-;;;;   CONF_CHECKER  "1" to type-check with HaMLet (cl-sml:enable-hamlet-type-checker)
+;;;;   CONF_CHECKER  "1" to type-check with HaMLet (cl-sml:enable-hamlet-type-checker),
+;;;;                 "native" with the native checker; otherwise plain mode
 ;;;;   CONF_BASIS    ignored: every SML package sees cl-sml's Basis (kept for
 ;;;;                 older command lines; it used to preload HaMLet's)
 ;;;;   CONF_TIMEOUT  seconds per test (default 60)
@@ -32,12 +33,15 @@
 (defvar *tests* (uiop:ensure-directory-pathname
                  (env "CONF_TESTDIR" (namestring (merge-pathnames "tests/" *root*)))))
 (defvar *checker* (string= (env "CONF_CHECKER" "0") "1"))
+(defvar *native* (string= (env "CONF_CHECKER" "0") "native"))
 (defvar *basis-mode* (env "CONF_BASIS" "auto"))
 (defvar *timeout* (parse-integer (env "CONF_TIMEOUT" "60")))
 (defvar *results*
   (uiop:ensure-directory-pathname
    (env "CONF_RESULTS"
-        (namestring (merge-pathnames (if *checker* "results/checker/" "results/plain/")
+        (namestring (merge-pathnames (cond (*checker* "results/checker/")
+                                           (*native* "results/native/")
+                                           (t "results/plain/"))
                                      *root*)))))
 
 (defun test-names ()
@@ -87,7 +91,8 @@
 (defun run-test (name)
   "Run test NAME; return (values status actual diagnostic)."
   (let* ((source (merge-pathnames (format nil "~A.sml" name) *tests*))
-         (package (format nil "CONF.~:[PLAIN~;CHECKED~].~A" *checker* (string-upcase name)))
+         (package (format nil "CONF.~A.~A" (cond (*checker* "CHECKED") (*native* "NATIVE") (t "PLAIN"))
+                         (string-upcase name)))
          (out (make-string-output-stream))
          (err (make-string-output-stream))
          (status nil)
@@ -225,7 +230,8 @@
                (note (if (member status '("PASS" "FAIL") :test #'string=) "" (first-line diag 160))))
           (incf (gethash status counts 0))
           (format s "~A	~A	~A	~A~%" status name secs note))))
-    (format t "~&~%mode: checker=~:[off~;on~] basis=~A~%" *checker* *basis-mode*)
+    (format t "~&~%mode: checker=~A basis=~A~%"
+            (cond (*checker* "hamlet") (*native* "native") (t "off")) *basis-mode*)
     (maphash (lambda (k v) (format t "~A: ~D~%" k v)) counts)
     (= (gethash "PASS" counts 0) (length names))))
 
@@ -239,6 +245,9 @@ CONF_RESUME=1), print one line per test and a summary."
         (note-crashed-test)
         (dolist (name names)
           (let ((f (result-path name "status"))) (when (probe-file f) (delete-file f)))))
+    (setf cl-sml:*sml-type-checker* (and *native* :native))
+    ;; Elaborate the Basis once, before any fork.
+    (when *native* (uiop:symbol-call '#:cl-sml.types '#:initial-env))
     (when *checker*
       (format t "~&;; enabling HaMLet type checker...~%")
       (quietly #'cl-sml:enable-hamlet-type-checker))

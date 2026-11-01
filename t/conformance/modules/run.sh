@@ -2,8 +2,9 @@
 # Run the cl-sml Modules/Basis conformance corpus.
 #   ./run.sh                 plain mode (no static checker)
 #   ./run.sh --checker       with the HaMLet type checker
+#   ./run.sh --native        with the native type checker (cl-sml's default)
 #   ./run.sh [--checker] [--basis auto|none|all] [--timeout N] [--isolate fork|none] [test-name ...]
-# Results: results/{plain,checker}/NAME.{status,actual,diag} and summary.txt.
+# Results: results/{plain,checker,native}/NAME.{status,actual,diag} and summary.txt.
 # CL_SML_ROOT defaults to /Users/ethan/sml/cl-sml.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=${CL_SML_ROOT:-/Users/ethan/sml/cl-sml}
@@ -11,6 +12,7 @@ CONF_CHECKER=0; CONF_BASIS=auto; CONF_TIMEOUT=60; CONF_TESTS=; ISOLATE=
 while [ $# -gt 0 ]; do
   case "$1" in
     --checker) CONF_CHECKER=1 ;;
+    --native) CONF_CHECKER=native ;;
     --basis) shift; CONF_BASIS=$1 ;;
     --timeout) shift; CONF_TIMEOUT=$1 ;;
     --isolate) shift; ISOLATE=$1 ;;
