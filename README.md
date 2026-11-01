@@ -25,10 +25,12 @@ the REPL and `#@sml` blocks go through:
 - `nil` (`(cl-sml:disable-type-checker)`, or `cl-sml --unchecked`): plain
   mode, no checking; the compiler guesses what a checker would tell it,
   e.g. overloading is resolved at run time.
-- `:hamlet` (`(cl-sml:enable-hamlet-type-checker)`):
-  [HaMLet](https://github.com/rossberg/hamlet)'s elaborator, compiled by
-  cl-sml and loaded on first use (some 30 s).  It is kept as the oracle
-  the native checker is tested against.
+- `:hamlet` (`(cl-sml:enable-hamlet-type-checker)`), test-only:
+  [HaMLet](https://github.com/rossberg/hamlet) (commit 37275b9)'s
+  elaborator, compiled by cl-sml and loaded on first use (some 30 s), the
+  oracle the native checker is tested against.  It needs the `hamlet`
+  submodule and the system `cl-sml/hamlet-oracle`
+  (`t/hamlet-oracle/`): `(ql:quickload :cl-sml/hamlet-oracle)`.
 
 A checker keeps one static basis per SML package, starting from the Basis:
 each top-level declaration or REPL input that is accepted extends it, and
@@ -43,7 +45,8 @@ files, compiled and shipped.  SML bindings live in per-program Lisp packages
 
 Requirements: SBCL (ECL and ABCL are also supported) and Quicklisp; the
 `hamlet` git submodule (`git submodule update --init hamlet`) only for the
-`:hamlet` checker and its tests.  Put this repository where ASDF finds it
+`:hamlet` oracle and its tests; without it cl-sml builds and runs, and
+`./test.sh` skips the HaMLet suite.  Put this repository where ASDF finds it
 (e.g. Quicklisp's local projects), then:
 
 ```lisp
@@ -54,7 +57,7 @@ Requirements: SBCL (ECL and ABCL are also supported) and Quicklisp; the
 
 `./build-repl.sh` builds `./cl-sml`, an executable with the checker's
 Basis preloaded (`CL_SML_NO_TYPE_CHECKER=1` builds one that does not
-check, `CL_SML_HAMLET=1` one that checks with HaMLet):
+check, `CL_SML_HAMLET=1` one that checks with the HaMLet oracle):
 
 ```
 ./cl-sml                          # the REPL

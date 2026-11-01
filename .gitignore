@@ -1,7 +1,5 @@
 # ASDF's FASL cache (test.sh and the corpus runners default XDG_CACHE_HOME here)
 /.cache/
-# The executable build-hamlet saves
-/cl-hamlet
 # Conformance runners' output
 /t/conformance/core/build/
 /t/conformance/modules/.cache/

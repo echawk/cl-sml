@@ -19,12 +19,14 @@ STACK="${CL_SML_STACK:-1GB}"
 
 # The REPL type-checks every phrase with the native checker (src/types/),
 # whose elaborated Basis is made here so that it is part of the image.
-# CL_SML_HAMLET=1 makes HaMLet the checker instead (loaded into the image);
+# CL_SML_HAMLET=1 makes HaMLet the checker instead (the test-only system
+# cl-sml/hamlet-oracle and HaMLet, from hamlet/, loaded into the image);
 # CL_SML_NO_TYPE_CHECKER=1 builds an image that does not check (plain mode).
 if [ -n "${CL_SML_NO_TYPE_CHECKER:-}" ]; then
     ENABLE='(cl-sml:disable-type-checker)'
 elif [ -n "${CL_SML_HAMLET:-}" ]; then
-    ENABLE='(cl-sml:enable-hamlet-type-checker)'
+    SYSTEMS=':cl-sml :cl-sml/hamlet-oracle'
+    ENABLE='(uiop:symbol-call (quote #:cl-sml) (quote #:enable-hamlet-type-checker))'
 else
     ENABLE='(uiop:symbol-call (quote #:cl-sml.types) (quote #:initial-env))'
 fi
@@ -34,6 +36,6 @@ fi
     --control-stack-size "$STACK" --noinform --non-interactive \
     --eval '(load "~/.sbclrc")' \
     --eval "(push #p\"$ROOT/\" asdf:*central-registry*)" \
-    --eval "(ql:quickload '(:cl-sml))" \
+    --eval "(ql:quickload '(${SYSTEMS:-:cl-sml}))" \
     --eval "$ENABLE" \
     --eval "(sb-ext:save-lisp-and-die \"$OUTPUT\" :executable t :save-runtime-options t :toplevel (lambda () (sb-ext:exit :code (cl-sml:main))))"

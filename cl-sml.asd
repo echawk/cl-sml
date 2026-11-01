@@ -50,16 +50,26 @@
                              (:file "typecheck")))
                (:file "type-checker")
                (:file "repl")
-               (:cl-sml-basis-file "basis")
-               ;; SML source cl-sml loads into HaMLet at run time.
-               (:static-file "hamlet-check.sml"))
+               (:cl-sml-basis-file "basis"))
   :in-order-to ((test-op (test-op #:cl-sml/tests))))
 
-;;; The HaMLet suite loads HaMLet, which needs a deep control stack, e.g.
+;;; HaMLet (https://github.com/rossberg/hamlet, the hamlet/ submodule) as a
+;;; static checker: the differential oracle of the native checker, for tests
+;;; only.  Loading HaMLet needs a deep control stack, e.g.
 ;;; `sbcl --control-stack-size 1GB`; see test.sh.
+(asdf:defsystem #:cl-sml/hamlet-oracle
+  :description "HaMLet as cl-sml's static checker, the native checker's oracle"
+  :license "See LICENSE"
+  :depends-on (#:cl-sml)
+  :pathname "t/hamlet-oracle/"
+  :components ((:file "hamlet-oracle")
+               ;; SML source the oracle loads into HaMLet at run time.
+               (:static-file "hamlet-check.sml")))
+
+;;; The HaMLet suite runs only when the hamlet/ submodule is present.
 (asdf:defsystem #:cl-sml/tests
   :description "Test suites for cl-sml"
-  :depends-on (#:cl-sml #:fiveam)
+  :depends-on (#:cl-sml #:cl-sml/hamlet-oracle #:fiveam)
   :pathname "t/"
   :serial t
   :components ((:file "parser-tests")

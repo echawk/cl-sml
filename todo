@@ -29,11 +29,11 @@
   operators are specialized and word arithmetic is modular; without it `~`
   on words is special-cased only for literals).
 - [x] SML97 static semantics via HaMLet (git submodule `hamlet/`, unmodified)
-  through `src/hamlet-check.sml` and `src/type-checker.lisp`.  The checker runs before
+  through `t/hamlet-oracle/hamlet-check.sml` and `src/type-checker.lisp`.  The checker runs before
   our parser in `compile-sml-program-string`, file loading and the REPL;
   `(enable-hamlet-type-checker)` turns it on, and `build-repl.sh` preloads it
   into the `cl-sml` image.  The REPL prints HaMLet's inferred types.
-- [x] Use HaMLet's elaboration in code generation.  `src/hamlet-check.sml`
+- [x] Use HaMLet's elaboration in code generation.  `t/hamlet-oracle/hamlet-check.sml`
   reports facts keyed by source position (`src/static-facts.lisp`), which the
   parser and compiler consult, for files and REPL phrases alike:
   - identifier status decides constructor vs variable patterns
@@ -75,7 +75,7 @@
   executable smoke test.
 - [x] Produce `cl-hamlet` on SBCL (`./build-hamlet`; needs the 1GB control
   stack that `build-hamlet` bakes in via `:save-runtime-options`).
-- [ ] Preload/cache the elaborated basis in the `cl-hamlet` image so startup
+- [-] (Dropped: `build-hamlet`/`cl-hamlet` were removed; HaMLet is test-only.) Preload/cache the elaborated basis in the `cl-hamlet` image so startup
   does not re-elaborate `hamlet/basis` each time.
 - [ ] Portability (ECL, ABCL): self tail calls are compiled as jumps, but
   other tail calls (`fun even ... and odd ...`, CPS) still take a stack

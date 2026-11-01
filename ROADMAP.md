@@ -155,7 +155,7 @@ work on the AST.
 ## Type-directed: needs the type of each expression
 
 These items need types at each use. A first version can get them from
-HaMLet: extend `src/hamlet-check.sml` to report types by source
+HaMLet: extend `t/hamlet-oracle/hamlet-check.sml` to report types by source
 position, as it already does for overloaded operators. The native
 checker (items 16 to 18) gives them directly later.
 

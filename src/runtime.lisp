@@ -98,12 +98,11 @@ module registries below) sees the basis, else NIL."
 
 (defparameter *sml-current-directory* nil)
 
-(defparameter *hamlet-image-package* "SML.HAMLET-IMAGE")
-
 (defvar *sml-type-checker* :native
   "The static checker that compilation, file loading, the REPL and #@sml
 blocks run before generating code: :NATIVE (the native checker,
-src/types/), :HAMLET (HaMLet, loaded on first use), NIL (none: plain mode),
+src/types/), :HAMLET (HaMLet, with the system cl-sml/hamlet-oracle
+loaded), NIL (none: plain mode),
 a checker object, or a function of the source text and file name.  See
 src/type-checker.lisp.")
 
@@ -692,13 +691,6 @@ package sees), or signal an unbound error."
             (funcall function argument))
           arguments
           :initial-value (sml-function name *sml-package*)))
-
-(defun hamlet-image-entry-point ()
-  (with-sml-package (*hamlet-image-package*)
-    (let ((arguments (uiop:command-line-arguments)))
-      (if arguments
-          (call-sml "Sml.execFiles" arguments)
-          (call-sml "Sml.execSession" (sml-unit))))))
 
 (declaim (notinline invoke-sml-case-action))
 (defun invoke-sml-case-action (thunk)
@@ -1846,7 +1838,7 @@ Real.scan reads it."
 
 (defun sml-command-line-name (unit)
   (declare (ignore unit))
-  (or (uiop:argv0) "cl-hamlet"))
+  (or (uiop:argv0) "cl-sml"))
 
 (defun sml-command-line-arguments (unit)
   (declare (ignore unit))

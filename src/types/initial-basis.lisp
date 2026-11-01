@@ -4,7 +4,7 @@
 ;;; cl-sml's Basis Library (src/basis), elaborated from its sources in the
 ;;; order all.sml uses them, on top of the starting basis of initial.lisp,
 ;;; just as HaMLet's checker builds it (ClSmlHamlet.initialFrom in
-;;; src/hamlet-check.sml).  It is elaborated once, on first use, and kept.
+;;; t/hamlet-oracle/hamlet-check.sml).  It is elaborated once, on first use, and kept.
 
 (defvar *basis-env* nil
   "The elaborated Basis Library, an ENV, once INITIAL-ENV has built it.")

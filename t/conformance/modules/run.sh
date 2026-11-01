@@ -5,9 +5,9 @@
 #   ./run.sh --native        with the native type checker (cl-sml's default)
 #   ./run.sh [--checker] [--basis auto|none|all] [--timeout N] [--isolate fork|none] [test-name ...]
 # Results: results/{plain,checker,native}/NAME.{status,actual,diag} and summary.txt.
-# CL_SML_ROOT defaults to /Users/ethan/sml/cl-sml.
+# CL_SML_ROOT defaults to this checkout.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-ROOT=${CL_SML_ROOT:-/Users/ethan/sml/cl-sml}
+ROOT=${CL_SML_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
 CONF_CHECKER=0; CONF_BASIS=auto; CONF_TIMEOUT=60; CONF_TESTS=; ISOLATE=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -33,7 +33,7 @@ cd "$ROOT" || exit 2
 run_lisp() {
   sbcl --control-stack-size 1GB --noinform --non-interactive \
     --eval '(load "~/.sbclrc")' \
-    --eval '(ql:quickload :cl-sml :silent t)' \
+    --eval '(ql:quickload (quote (:cl-sml :cl-sml/hamlet-oracle)) :silent t)' \
     --load "$HERE/run.lisp" \
     --eval '(uiop:quit (if (cl-sml-conformance::main) 0 1))'
 }

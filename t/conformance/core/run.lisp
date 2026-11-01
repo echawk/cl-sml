@@ -23,7 +23,7 @@
     (push (uiop:ensure-directory-pathname root) asdf:*central-registry*)))
 (let ((*standard-output* (make-broadcast-stream))
       (*error-output* (make-broadcast-stream)))
-  (ql:quickload :cl-sml :silent t))
+  (ql:quickload '(:cl-sml :cl-sml/hamlet-oracle) :silent t))
 
 (defpackage #:conf-core
   (:use #:cl)
