@@ -1598,6 +1598,19 @@ end."
 (defun internal-time-nanoseconds (internal-time)
   (round (* internal-time 1000000000) internal-time-units-per-second))
 
+(defun sml-local-zone (unix-seconds)
+  "The local time zone at UNIX-SECONDS (UTC, since the Unix epoch): its
+offset west of UTC in seconds, daylight saving time included, and whether
+daylight saving time is in effect.  Times the host cannot decode (before
+1900, or far ahead) use the zone of the current time."
+  (multiple-value-bind (s mi h d mo y wd dst zone)
+      (let ((universal (+ unix-seconds +unix-epoch-universal-time+)))
+        (if (<= 0 universal (* 400 366 86400))
+            (decode-universal-time universal)
+            (decode-universal-time (get-universal-time))))
+    (declare (ignore s mi h d mo y wd))
+    (values (- (round (* zone 3600)) (if dst 3600 0)) dst)))
+
 (defun sml-time-now (unit)
   "Time.now: nanoseconds since the Unix epoch, to the precision of the
 internal real time."
@@ -2237,6 +2250,8 @@ is NIL; results beyond the range raise Overflow."
                                                    t)))
                     ("OS.FileSys.tmpName" . ,#'sml-os-file-sys-tmp-name)
                     ("Time.now" . ,#'sml-time-now)
+                    ("Date.localOffset" . ,(lambda (seconds) (values (sml-local-zone seconds))))
+                    ("Date.isDst" . ,(lambda (seconds) (nth-value 1 (sml-local-zone seconds))))
                     ("Timer.cpuTime" . ,(lambda (unit)
                                           (declare (ignore unit))
                                           (internal-time-nanoseconds (get-internal-run-time))))

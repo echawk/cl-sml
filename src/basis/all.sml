@@ -114,6 +114,8 @@ use "TIME-sig.sml";         (* cl-sml *)
 use "Time.sml";             (* cl-sml *)
 use "TIMER-sig.sml";        (* cl-sml *)
 use "Timer.sml";            (* cl-sml *)
+use "DATE-sig.sml";         (* cl-sml *)
+use "Date.sml";             (* cl-sml *)
 
 use "OS_FILE_SYS-sig.sml";
 use "OS_PATH-sig.sml";
@@ -127,8 +129,6 @@ use "OS_Process.sml";
 use "OS.sml";
 use "COMMAND_LINE-sig.sml";
 use "CommandLine.sml";
-(*use "DATE-sig.sml";*)
-(*use "Date.sml";*)
 
 use "values.sml";
 
