@@ -115,6 +115,21 @@ corpus native 63/63, modules corpus native 57/57, HOL corpus passes, real
 world native 97/119 (95 before: two programs that timed out now finish;
 the one WRONG is mandelbrot-rat, as before).
 
+Item 19 completed (no fallbacks, types on every node, IR declarations;
+before is master at f8c6a0a): run times unchanged within noise, native
+`fib` 0.005 s and 0.005 s, `tak` 0.003 s and 0.003 s, `real` 0.47 s and
+0.49 s, `bst` 0.15 s and 0.15 s, `eq` 0.10 s and 0.10 s, `word` 0.008 s
+and 0.008 s, `rec` 0.092 s and 0.093 s, bytes consed identical; plain mode
+likewise (`real` 1.93 s and 1.95 s, `rec` 0.32 s and 0.32 s).  Loading
+HaMLet: plain 6.05 s before, 5.77 s after; native failed before (the
+hoisted case actions of its parser outgrew SBCL's arm64 branch range,
+silently) and takes 6.5 s after.  The SBCL suite takes 17.9 s against
+11.9 s, almost all of it the two new tests (HaMLet loaded under the native
+checker, and the IR lint over the benchmarks and corpora).  Checks: SBCL
+suite 1085 (also passes with `CL_SML_IR_LINT=error`), ECL 1084, Core
+corpus native 63/63, modules corpus native 57/57, HOL corpus passes, real
+world native 97/119 (unchanged).
+
 ## Easy: local rewrites in the compiler, no types needed
 
 ### 1. Call binary primitives directly (S)
@@ -270,6 +285,12 @@ Workshop 2008), so each subterm is tested once, with a `case` on
 constructor tags. First check how much `trivia` already gives after
 items 2 and 10.
 
+**Status (2026-11-02):** not done.  Patterns are now IR data (item 19),
+so a decision-tree pass can be written on `:match` nodes; the simplifier
+already resolves matches on known values (case-of-known-constructor, for
+every datatype).  Matching is still compiled by trivia rule by rule; no
+benchmark here is dominated by matching, so the gain was not measured.
+
 ### 12. Inlining and simplification (M) — done
 
 **Done (2026-11-02), on the IR of item 19 (docs/IR.md):** inlining of
@@ -408,21 +429,23 @@ variables, overloading defaults, and equality types. Output a typed AST
 that the compiler reads in place of `src/static-facts.lisp`. Run HaMLet
 as a differential oracle in the tests.
 
-### 19. A typed IR between the AST and CL (L) — partly done
+### 19. A typed IR between the AST and CL (L) — done
 
 **Done (2026-11-02):** `src/ir.lisp`, described in docs/IR.md.  Every
-expression is lowered to the IR, simplified (item 12) and emitted as CL,
-in both modes.  Constructs not covered yet (`case` on literals and the
-tuple dispatch, `let` with `datatype`, `exception`, `open`, `local` or
-structures, the clause matching of `fun`) are `(:lisp ...)` nodes holding
-what the former generator, `compile-expr-direct`, makes of them; their
-subexpressions are IR terms again.  Nodes carry the checker's type where it
-records one (identifier occurrences, constants).  `cl-sml:show-sml-ir`
-prints the IR of a binding; `cl-sml:*sml-ir*` set to `nil` compiles
-without it.  Still to do: lower the remaining constructs (then patterns as
-ASTs and decision trees, item 11), types for every node, and moving items
-9, 10 and 15 from lowering into passes.
-
+expression and every function of clauses is lowered to the IR, simplified
+(item 12) and emitted as CL, in both modes; there is no `(:lisp ...)`
+fallback left, except a structure declared inside a `let` (kept as the
+declaration's CL form).  Patterns are IR data.  In native mode every node
+and pattern carries its SML type, in a representation of the IR's own
+(`src/ir-types.lisp`), and `ir-lint` checks that they fit together
+(`CL_SML_IR_LINT=error ./test.sh` lints the whole suite; a compiler test
+lints the benchmarks and both corpora).  Top-level and structure-level
+declarations, structures (flattened), datatypes, exceptions, signatures'
+abstract types, functors and their applications are recorded as IR
+declarations (`cl-sml:sml-ir-program`).  `cl-sml:show-sml-ir` prints the
+IR of a binding with its types; `cl-sml:*sml-ir*` set to `nil` compiles
+without it.  Not done: moving items 9, 10 and 15 from lowering into
+passes (lowering still decides representations).
 
 **Do:** add a small typed intermediate language (A-normal form is
 enough) between the typed AST and CL. Move items 9 to 15 onto it as
