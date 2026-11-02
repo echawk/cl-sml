@@ -68,18 +68,18 @@ vector representation alone, after 9 adds the tuple-argument workers):
 
 | program | before | after 10, 15 | after 9 | consed before | consed after 9 |
 |---|---|---|---|---|---|
-| `fib 30` | 0.008 s | 0.007 s | 0.007 s | 0 | 0 |
+| `fib 30` | 0.008 s | 0.007 s | 0.008 s | 0 | 0 |
 | `tak` | 0.015 s | 0.011 s | 0.004 s | 81 MB | 0 |
-| `real` | 0.78 s | 0.70 s | 0.69 s | 324 MB | 269 MB |
-| `bst` | 0.51 s | 0.28 s | 0.21 s | 973 MB | 228 MB |
-| `eq` | 0.21 s | 0.19 s | 0.15 s | 972 MB | 177 MB |
-| `word` | 0.31 s | 0.25 s | 0.25 s | 816 MB | 672 MB |
-| `rec` | 1.19 s | 0.16 s | 0.15 s | 1248 MB | 384 MB |
+| `real` | 0.78 s | 0.70 s | 0.73 s | 324 MB | 269 MB |
+| `bst` | 0.51 s | 0.28 s | 0.24 s | 973 MB | 228 MB |
+| `eq` | 0.21 s | 0.19 s | 0.17 s | 972 MB | 177 MB |
+| `word` | 0.31 s | 0.25 s | 0.26 s | 816 MB | 672 MB |
+| `rec` | 1.19 s | 0.16 s | 0.16 s | 1248 MB | 384 MB |
 
-Plain mode, before and after items 9, 10 and 15: `fib` 0.052 s and 0.048
-s, `tak` 0.034 s and 0.024 s, `real` 2.9 s and 2.7 s, `bst` 0.68 s and
-0.40 s, `eq` 0.32 s and 0.19 s, `word` 0.42 s and 0.29 s, `rec` 1.30 s
-and 0.49 s.  What remains is mostly boxed doubles (`real`), Basis
+Plain mode, before and after items 9, 10 and 15: `fib` 0.052 s and 0.051
+s, `tak` 0.034 s and 0.024 s, `real` 2.9 s and 2.9 s, `bst` 0.68 s and
+0.47 s, `eq` 0.32 s and 0.21 s, `word` 0.42 s and 0.30 s, `rec` 1.30 s
+and 0.54 s.  What remains is mostly boxed doubles (`real`), Basis
 functions called through a tuple (`Word.xorb`, `String.sub`), and the
 curried calls through special variables.
 

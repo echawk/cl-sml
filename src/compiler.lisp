@@ -420,6 +420,10 @@ bound to TARGET-NAME, when the argument is not a structure identifier."
 function of the tuple's fields plus a wrapper, and its calls with a tuple
 expression as direct calls (ROADMAP item 9).")
 
+(defvar *sml-tupled-worker-max-clauses* 16
+  "The most clauses a tuple-taking function compiled with a worker may
+have (TUPLED-FUN-ARITY).")
+
 (defvar *sml-local-constructor-arities* nil
   "Alist from the tags of the datatype constructors declared by the `let' and
 `local' declarations being compiled to their representation (always 0: the
@@ -467,14 +471,14 @@ fields, whose argument must match PAYLOAD, a pattern AST."
                         `(guard1 ,tag-var (eq ,tag-var ',tag))))
          (subpatterns (pattern-tuple-subpatterns payload arity)))
     (if subpatterns
-        `(guard1 ,it (typep ,it '(simple-vector ,(1+ arity)))
+        `(guard1 ,it ,(vector-width-test it (1+ arity))
                  (svref ,it 0) ,tag-pattern
                  ,@(loop for subpattern in subpatterns
                          for i from 1
                          for compiled = (compile-pat subpattern local-exceptions lexical-env)
                          unless (eq compiled '_)
                            append `((svref ,it ,i) ,compiled)))
-        `(guard1 ,it (typep ,it '(simple-vector ,(1+ arity)))
+        `(guard1 ,it ,(vector-width-test it (1+ arity))
                  (svref ,it 0) ,tag-pattern
                  (sml-flat-constructed-argument ,it)
                  ,(compile-pat payload local-exceptions lexical-env)))))
@@ -800,15 +804,22 @@ FORMS: a vector with the record's shape in slot 0."
       `(sml-tuple ,@forms)
       `(vector (load-time-value (sml-record-shape ',labels) t) ,@forms)))
 
+(defun vector-width-test (variable width)
+  "A test that VARIABLE is a simple-vector of WIDTH slots.  Not written
+(typep v '(simple-vector n)): trivia infers that type and, for a match of
+many clauses (HaMLet's APPLY has 123 on a pair), then expands to code that
+overflows ECL's binding stack when compiled."
+  `(and (simple-vector-p ,variable) (= (length ,variable) ,width)))
+
 (defun indexed-record-pattern (index-patterns width)
   "A trivia pattern matching a record of WIDTH fields whose field at each
 index of INDEX-PATTERNS, an alist from vector indices to compiled patterns,
-matches the pattern.  The record's type is tested although a well-typed
+matches the pattern.  The record's width is tested although a well-typed
 value always has it: trivia may try a subpattern before the tests of the
 patterns around it (e.g. the argument of a constructor before its tag), so
 every access must be safe on any value."
   (let ((record (gensym "RECORD")))
-    `(guard1 ,record (typep ,record '(simple-vector ,(1+ width)))
+    `(guard1 ,record ,(vector-width-test record (1+ width))
              ,@(loop for (index . pattern) in index-patterns
                      unless (eq pattern '_)
                        append `((svref ,record ,index) ,pattern)))))
@@ -1237,8 +1248,9 @@ variable or an access to one, or :REFUTABLE when PATTERN may fail."
     ((and (consp pattern) (eq (first pattern) 'guard1)
           (symbolp (second pattern))
           (let ((test (third pattern)))
-            (and (consp test) (eq (first test) 'typep)
-                 (eq (second test) (second pattern))))
+            (and (consp test) (eq (first test) 'and)
+                 (consp (second test)) (eq (first (second test)) 'simple-vector-p)
+                 (eq (second (second test)) (second pattern))))
           (loop for (generator) on (cdddr pattern) by #'cddr
                 always (and (consp generator) (eq (first generator) 'svref)
                             (eq (second generator) (second pattern)))))
@@ -2377,13 +2389,17 @@ fields), else NIL."
 (defun tupled-fun-arity (clauses)
   "N when every clause of a `fun' has one parameter, a tuple pattern of the
 same N >= 2 fields: such a function is compiled as a function of N
-arguments, its worker (ROADMAP item 9)."
+arguments, its worker (ROADMAP item 9).  Not for functions of more than
+*SML-TUPLED-WORKER-MAX-CLAUSES* clauses: a large dispatch such as
+HaMLet's APPLY (123 clauses) gains little, and keeping its one-column
+match keeps the code that ECL compiles small."
   (let ((arities (mapcar (lambda (clause)
                            (and (= (length (first clause)) 1)
                                 (length (tuple-pattern-subpatterns
                                          (first (first clause))))))
                          clauses)))
     (and (first arities)
+         (<= (length clauses) *sml-tupled-worker-max-clauses*)
          (>= (first arities) 2)
          (every (lambda (n) (eql n (first arities))) arities)
          (first arities))))
