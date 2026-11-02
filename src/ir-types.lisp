@@ -61,3 +61,43 @@ unresolved stands for its class's default, as the checker defaults it."
                       ((string= name "bool") cl-sml.types::*t-bool*)
                       ((string= name "exn") cl-sml.types::*t-exn*))))
     (and tyname (list :con (ir-tycon-of-tyname tyname)))))
+
+;;; Declarations (IR-DECLARATIONS-OF): what the checker's environments say
+;;; about the types and constructors a declaration binds.
+
+(defun ir-checker-annotation (node key)
+  (and (native-sml-static-facts-p)
+       (cl-sml.types:native-annotation node key *sml-static-facts*)))
+
+(defun ir-checker-scheme-type (valstr)
+  (ir-type-from-checker
+   (cl-sml.types::scheme-type (cl-sml.types::valstr-scheme valstr))))
+
+(defun ir-checker-type-bindings (env)
+  "The types ENV binds: ((name arity kind params body constructors) ...),
+where PARAMS are type variables, BODY the type the name stands for (for a
+datatype or an abstract type, (:con tycon . params)), and CONSTRUCTORS
+((name type) ...) with each constructor's type (an arrow from its
+argument for a constructor with one)."
+  (loop for (name . tystr) in (cl-sml.types::env-latest (cl-sml.types::env-te env))
+        collect (let* ((tyfcn (cl-sml.types::tystr-tyfcn tystr))
+                       (params (cl-sml.types::tyfcn-params tyfcn)))
+                  (list name (length params) (cl-sml.types::tystr-kind tystr)
+                        (mapcar #'ir-type-from-checker params)
+                        (ir-type-from-checker (cl-sml.types::tyfcn-body tyfcn))
+                        (loop for (con . valstr)
+                                in (cl-sml.types::env-latest (cl-sml.types::tystr-ve tystr))
+                              collect (list con (ir-checker-scheme-type valstr)))))))
+
+(defun ir-checker-value-bindings (env)
+  "The values ENV binds: ((name status type) ...)."
+  (loop for (name . valstr) in (cl-sml.types::env-latest (cl-sml.types::env-ve env))
+        collect (list name (cl-sml.types::valstr-status valstr)
+                      (ir-checker-scheme-type valstr))))
+
+(defun ir-checker-declaration-env (dec key)
+  "The type and value bindings of the environment the checker recorded
+under KEY (:ENV, or :MEMBERS for a structure after ascription) on DEC."
+  (let ((env (ir-checker-annotation dec key)))
+    (and env (cl-sml.types::env-p env)
+         (values (ir-checker-type-bindings env) (ir-checker-value-bindings env)))))

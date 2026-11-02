@@ -228,3 +228,33 @@
           (push (cons (pathname-name file) cl-sml::*sml-ir-lint-problems*) problems))))
     (is (> compiled 100))
     (is (null problems) "IR type lint problems:~{~%~S~}" problems)))
+
+(test sml-ir-program-records-declarations
+  (let* ((cl-sml:*sml-type-checker* :native)
+         (declarations
+           (cl-sml:sml-ir-program
+            "signature S = sig type t val make : int -> t end
+             structure M :> S = struct
+               datatype t = T of int | U of int * string
+               fun make n = T n
+             end
+             exception E of string
+             functor F (X : S) = struct val y = X.make 3 end
+             structure N = F (M)"
+            :package "SML.IR-PROGRAM-TEST")))
+    (flet ((find-kind (kind) (find kind declarations :key #'first)))
+      ;; Structure members are flattened, named by their paths.
+      (let ((datatype (first (second (find-kind :datatype)))))
+        (is (equal "M.t" (first datatype)))
+        (is (equal '("M.T" "M.U") (mapcar #'first (fourth datatype))))
+        ;; U's values are flat vectors of its two fields.
+        (is (eql 2 (third (second (fourth datatype))))))
+      (is (equal "M.make" (first (first (second (find-kind :val))))))
+      ;; Opaque ascription: t is abstract, a type constructor without
+      ;; constructors.
+      (let ((structure (find-kind :structure)))
+        (is (getf (cddr structure) :opaque))
+        (is (equal "t" (first (first (getf (cddr structure) :types))))))
+      (is (find-kind :exception))
+      (is (equal "F" (second (find-kind :functor))))
+      (is (equal "F" (third (find-kind :functor-application)))))))

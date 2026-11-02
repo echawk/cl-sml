@@ -3687,7 +3687,11 @@ environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
   "While *SML-DECLARATION-COMPILED-HOOK* runs: the IR terms compiled for the
 declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
 
+(defvar *sml-ir-program*)
+
 (defun note-compiled-sml-declaration (dec form &optional ir)
+  (when *sml-ir-program*
+    (ir-note-declaration dec ir))
   (when *sml-declaration-compiled-hook*
     (let ((*sml-declaration-ir* ir))
       (funcall *sml-declaration-compiled-hook* dec form)))
@@ -3696,7 +3700,7 @@ declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
 (defun compile-recorded-decl (dec local-exceptions lexical-env)
   "The form of declaration DEC, and the IR terms compiled for it when
 compiled declarations are being recorded."
-  (if *sml-declaration-compiled-hook*
+  (if (or *sml-declaration-compiled-hook* *sml-ir-program*)
       (let* ((*sml-ir-log* (list nil))
              (form (compile-decl dec local-exceptions lexical-env)))
         (values form (reverse (car *sml-ir-log*))))

@@ -2378,3 +2378,100 @@ fields as :type \"...\"; patterns are shown the same way."
        `(,(first node) ,@(mapcar #'ir-display (cddr node)) ,@(and type `(:type ,type)))))
     ((consp node) (cons (ir-display (car node)) (ir-display (cdr node))))
     (t node)))
+
+;;; Declarations (docs/IR.md, "Modules").  While *SML-IR-PROGRAM* holds a
+;;; list, each top-level or structure-level declaration compiled adds its
+;;; IR declarations to it: structures are flattened, their members named
+;;; by their paths.  A functor is recorded with its AST, and each
+;;; application with the functor and its argument, so that a whole-program
+;;; pass can specialize the applications.
+
+(defvar *sml-ir-program* nil
+  "When a cons, the IR declarations of the program being compiled are
+pushed onto its car.")
+
+(defun ir-declaration-path (name)
+  (current-qualified-sml-name name))
+
+(defun ir-declarations-of (dec terms)
+  "The IR declarations of top-level or structure-level declaration DEC,
+for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
+  (let ((simplified (mapcar #'cdr terms)))
+    (flet ((types (key) (nth-value 0 (funcall 'ir-checker-declaration-env dec key)))
+           (values* (key) (nth-value 1 (funcall 'ir-checker-declaration-env dec key))))
+      (case (car dec)
+        ((:val :vals :val-rec :val-recs :fun :funs :expr)
+         (list (list :val
+                     (mapcar (lambda (binding)
+                               (destructuring-bind (name status type) binding
+                                 (declare (ignore status))
+                                 (list (ir-declaration-path name)
+                                       (ignore-errors (current-binding-symbol name))
+                                       type)))
+                             (values* :env))
+                     simplified)))
+        (:datatype
+         (list (list :datatype
+                     (mapcar (lambda (binding)
+                               (destructuring-bind (name arity kind params body ctors) binding
+                                 (declare (ignore kind body))
+                                 (list (ir-declaration-path name) arity params
+                                       (mapcar (lambda (ctor)
+                                                 (let ((def (find (first ctor) (third dec)
+                                                                  :key #'second :test #'equal)))
+                                                   (list (ir-declaration-path (first ctor))
+                                                         (second ctor)
+                                                         (and def (datatype-constructor-flat-arity def)))))
+                                               ctors))))
+                             (types :env))
+                     simplified)))
+        (:datatype-replication
+         (list (list :datatype-replication (ir-declaration-path (second dec)) (third dec))))
+        (:type
+         (list (list :type (mapcar (lambda (binding)
+                                     (destructuring-bind (name arity kind params body ctors) binding
+                                       (declare (ignore arity kind ctors))
+                                       (list (ir-declaration-path name) params body)))
+                                   (types :env)))))
+        ((:exception :exception-alias)
+         (list (list (car dec) (ir-declaration-path (second dec))
+                     (and (eq (car dec) :exception-alias) (third dec))
+                     (third (first (values* :env))))))
+        (:structure
+         (let ((sigexp (getf (cdddr dec) :sigexp)))
+           (list (list :structure (ir-declaration-path (second dec))
+                       :signature sigexp
+                       :opaque (getf (cdddr dec) :opaque)
+                       ;; The types as the signature exports them: an
+                       ;; abstract type's body is a type constructor of its
+                       ;; own, without constructors.
+                       :types (mapcar (lambda (binding)
+                                        (destructuring-bind (name arity kind params body ctors)
+                                            binding
+                                          (list name arity kind params body
+                                                (mapcar #'first ctors))))
+                                      (types :members))))))
+        (:structure-alias
+         (list (list :structure-alias (ir-declaration-path (second dec)) (third dec))))
+        (:structure-app
+         (list (list :functor-application (ir-declaration-path (second dec))
+                     (third dec) (fourth dec)
+                     :signature (getf (cddddr dec) :sigexp)
+                     :opaque (getf (cddddr dec) :opaque))))
+        (:functor
+         (list (list :functor (second dec) :ast dec)))
+        (:signature (list (list :signature (second dec) (third dec))))
+        (:open (list (list :open (second dec))))))))
+
+(defun ir-note-declaration (dec terms)
+  "Record the IR declarations of DEC (see *SML-IR-PROGRAM*)."
+  (when (and *sml-ir-program* (null *functor-scope-variables*))
+    (dolist (declaration (ir-declarations-of dec terms))
+      (push declaration (car *sml-ir-program*)))))
+
+(defun sml-ir-program (source &key (package "SML.IR-PROGRAM"))
+  "The IR declarations of the SML program SOURCE, compiled (not run) in
+PACKAGE, in order: a structure's members come before the structure."
+  (let ((*sml-ir-program* (list nil)))
+    (compile-sml-program-string source :package package)
+    (reverse (car *sml-ir-program*))))
