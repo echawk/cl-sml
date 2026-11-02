@@ -345,7 +345,7 @@ every image, so the name also carries a random component."
 generated as it compiles it.  The report, mostly notes about generated code,
 is discarded otherwise.")
 
-(defun compile-sml-lisp-artifact (artifact)
+(defun compile-sml-lisp-artifact (artifact &optional (source artifact))
   "COMPILE-FILE ARTIFACT, discarding the compiler's report unless
 *SHOW-LISP-COMPILER-OUTPUT*."
   (flet ((compile-artifact ()
@@ -357,12 +357,22 @@ is discarded otherwise.")
         (compile-artifact)
         ;; Not kept in a string: for large programs it takes enough memory
         ;; to exhaust a 1GB heap while HaMLet loads.
-        (let* ((discard (make-broadcast-stream))
-               (*standard-output* discard)
-               (*error-output* discard)
-               (*compile-verbose* nil)
-               (*compile-print* nil))
-          (compile-artifact)))))
+        ;; An error that escapes COMPILE-FILE (a limit or a bug of the CL
+        ;; compiler itself) is reported here, after the streams are
+        ;; restored: in a non-interactive Lisp the debugger would print it
+        ;; to the discarded *ERROR-OUTPUT* and quit without a word.
+        (let ((failure
+                (handler-case
+                    (let* ((discard (make-broadcast-stream))
+                           (*standard-output* discard)
+                           (*error-output* discard)
+                           (*compile-verbose* nil)
+                           (*compile-print* nil))
+                      (return-from compile-sml-lisp-artifact
+                        (compile-artifact)))
+                  (error (condition) condition))))
+          (error "The Lisp compiler failed on the code generated for ~A:~%~A"
+                 source failure)))))
 
 (defun execute-compiled-sml-file (form target-package source-pathname
                                   &optional declarations)
@@ -382,7 +392,7 @@ is discarded otherwise.")
                                         stream declarations)))
            (multiple-value-bind (output warnings-p failure-p)
                (with-sml-phase (:cl-compile)
-                 (compile-sml-lisp-artifact artifact))
+                 (compile-sml-lisp-artifact artifact source-pathname))
              (declare (ignore warnings-p failure-p))
              ;; Some implementations report optimization/type-inference
              ;; warnings as FAILURE-P while still producing a usable FASL.

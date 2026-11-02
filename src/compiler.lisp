@@ -423,6 +423,10 @@ from the AST by COMPILE-EXPR-DIRECT, as before the IR.")
   "When true, the IR is simplified (inlining, beta reduction, constant
 folding, dead-binding elimination, known cases) before CL is emitted.")
 
+(defvar *ir-fun-type-node* nil
+  "The AST node whose type is that of the `fun' whose clauses are being
+lowered to the IR, when it is not the clauses themselves.")
+
 (defvar *sml-ir-log* nil
   "When a cons, compiling pushes (LOWERED . SIMPLIFIED) for each IR term
 onto its car (see SHOW-SML-IR).")
@@ -1057,26 +1061,35 @@ source order although the value is laid out in label order."
 
 (defun hoisted-function-parameters (lexical-env form)
   "The parameters of a hoisted function whose body FORM was compiled in
-LEXICAL-ENV: its variables, and those of the functor body being compiled
-that FORM refers to."
-  (let ((parameters (lexical-environment-symbols lexical-env)))
-    (if *functor-scope-variables*
-        (let ((seen (make-hash-table :test #'eq))
-              (extra nil))
-          (labels ((walk (x)
-                     (cond ((symbolp x)
-                            (when (and (gethash x *functor-scope-variables*)
-                                       (not (gethash x seen))
-                                       (not (member x parameters)))
-                              (setf (gethash x seen) t)
-                              (push x extra)))
-                           ((and (consp x) (not (gethash x seen)))
-                            (setf (gethash x seen) t)
-                            (walk (car x))
-                            (walk (cdr x))))))
-            (walk form))
-          (append parameters (nreverse extra)))
-        parameters)))
+LEXICAL-ENV: the variables of LEXICAL-ENV, and those of the functor body
+being compiled, that FORM refers to.  Only those: a large functor body has
+hundreds of variables in scope, and passing all of them to each of its
+hoisted case actions made code too large for SBCL's arm64 backend (HaMLet's
+parser under the native checker)."
+  (let ((occurring (make-hash-table :test #'eq))
+        (seen (make-hash-table :test #'eq)))
+    (labels ((walk (x)
+               (cond ((symbolp x) (setf (gethash x occurring) t))
+                     ((and (consp x) (not (gethash x seen)))
+                      (setf (gethash x seen) t)
+                      (walk (car x))
+                      (walk (cdr x))))))
+      (walk form))
+    (let ((parameters (remove-if-not (lambda (symbol) (gethash symbol occurring))
+                                     (lexical-environment-symbols lexical-env))))
+      (if *functor-scope-variables*
+          (let ((extra nil))
+            (maphash (lambda (symbol present)
+                       (declare (ignore present))
+                       (when (and (gethash symbol *functor-scope-variables*)
+                                  (not (member symbol parameters)))
+                         (push symbol extra)))
+                     occurring)
+            ;; A stable order, so that generated code does not depend on
+            ;; hash-table iteration.
+            (append parameters
+                    (sort extra #'string< :key #'symbol-name)))
+          parameters))))
 
 (defun compile-hoisted-case-action (ast local-exceptions branch-env)
   (let ((body (compile-expr ast local-exceptions branch-env)))
@@ -1187,6 +1200,16 @@ are function bodies and case actions that are hoisted out of the function."
                    branch
                    `(,(first branch) ,(tail (second branch)) ,@(cddr branch))))
              (tail (ast)
+               (let ((new (tail-1 ast)))
+                 ;; A rebuilt node keeps what the native checker recorded
+                 ;; about the node it replaces (its type, for the IR).
+                 (when (and (not (eq new ast)) (consp ast)
+                            (native-sml-static-facts-p)
+                            (nth-value 1 (gethash ast *sml-static-facts*)))
+                   (setf (gethash new *sml-static-facts*)
+                         (gethash ast *sml-static-facts*)))
+                 new))
+             (tail-1 (ast)
                (if (atom ast)
                    ast
                    (case (car ast)
@@ -1314,7 +1337,16 @@ variables ARGS, or NIL when a pattern is refutable."
                                     outer-lexical-env &optional tupled)
   "The curried function of ARITY arguments that CLAUSES define, or, when
 TUPLED, a (lambda (a1 ... aARITY) ...) form taking the fields of the tuple
-that each clause's one pattern matches (see TUPLED-FUN-ARITY)."
+that each clause's one pattern matches (see TUPLED-FUN-ARITY).  Through the
+IR (IR-COMPILE-FN-CLAUSES) unless *SML-IR* is false."
+  (if (and *sml-ir* (not *sml-debug-applications*))
+      (ir-compile-fn-clauses clauses local-exceptions function-name outer-lexical-env
+                             tupled)
+      (compile-fn-clauses-of-arity-direct clauses arity local-exceptions function-name
+                                          outer-lexical-env tupled)))
+
+(defun compile-fn-clauses-of-arity-direct (clauses arity local-exceptions function-name
+                                           outer-lexical-env &optional tupled)
   (let* ((tmp-args (loop repeat arity collect (gensym "ARG")))
          ;; Fresh variables for the loop: the curried parameters are closed
          ;; over by partial applications, so they must not be assigned.
@@ -2470,7 +2502,8 @@ calls it with the fields of its argument."
                                   (rest clause)))
                           (third ast)))
          (lambda-form (let ((*sml-binding-symbol-env*
-                              (acons (second ast) cell *sml-binding-symbol-env*)))
+                              (acons (second ast) cell *sml-binding-symbol-env*))
+                            (*ir-fun-type-node* (third ast)))
                         (compile-fn-clauses-of-arity clauses arity local-exceptions
                                                      (second ast)
                                                      (acons (second ast) cell lexical-env)
@@ -3654,7 +3687,11 @@ environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
   "While *SML-DECLARATION-COMPILED-HOOK* runs: the IR terms compiled for the
 declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
 
+(defvar *sml-ir-program*)
+
 (defun note-compiled-sml-declaration (dec form &optional ir)
+  (when *sml-ir-program*
+    (ir-note-declaration dec ir))
   (when *sml-declaration-compiled-hook*
     (let ((*sml-declaration-ir* ir))
       (funcall *sml-declaration-compiled-hook* dec form)))
@@ -3663,7 +3700,7 @@ declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
 (defun compile-recorded-decl (dec local-exceptions lexical-env)
   "The form of declaration DEC, and the IR terms compiled for it when
 compiled declarations are being recorded."
-  (if *sml-declaration-compiled-hook*
+  (if (or *sml-declaration-compiled-hook* *sml-ir-program*)
       (let* ((*sml-ir-log* (list nil))
              (form (compile-decl dec local-exceptions lexical-env)))
         (values form (reverse (car *sml-ir-log*))))

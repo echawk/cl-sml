@@ -48,6 +48,7 @@
            #:sml-lisp-source
            #:show-sml-lisp
            #:show-sml-ir
+           #:sml-ir-program
            #:*sml-ir*
            #:*sml-ir-simplify*
            #:*sml-ir-inline-size*

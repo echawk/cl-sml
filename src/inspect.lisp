@@ -398,8 +398,8 @@ SML-LISP-SOURCE), with comments saying where each definition came from."
                               lowered)
   "Print the IR (docs/IR.md) compiled for the SML binding NAME in PACKAGE:
 each term as simplified, or as lowered from the AST when LOWERED is true.
-A term is compiled for each expression the IR covers; the CL of a construct
-it does not cover appears as a (:lisp ...) node."
+A term is compiled for each expression and each function of clauses, and
+each node is followed by its type (in native mode)."
   (let ((definitions (find-sml-lisp-definitions name package)))
     (unless definitions
       (error "No IR is recorded for ~A in ~A."

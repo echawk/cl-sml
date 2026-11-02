@@ -266,8 +266,16 @@ unchecked."
 
 ;;;; Expressions [rules 1-12]
 
+(defun annotate-type (node type)
+  "Record TYPE as the type of expression or pattern NODE, unless NODE has
+one already (an identifier occurrence's instantiated type).  The typed IR
+(docs/IR.md) reads it."
+  (when (and (consp node) (null (getf (gethash node *annotations*) :type)))
+    (annotate node :type type)))
+
 (defun elab-exp (c exp)
   (let ((type (elab-exp-1 c exp)))
+    (annotate-type exp type)
     type))
 
 (defun elab-exps-record (c node items)
@@ -429,6 +437,11 @@ variables (Section 2.9)."
 (defun elab-pat (c pat)
   "Returns the VE (alist name -> VALSTR) and type of PAT, and its simple
 pattern for match checking."
+  (multiple-value-bind (ve type spat) (elab-pat-1 c pat)
+    (annotate-type pat type)
+    (values ve type spat)))
+
+(defun elab-pat-1 (c pat)
   (cond
     ((integerp pat) (values nil (literal-type *class-int* pat) (list :const pat))) ; [Rule 33]
     ((floatp pat) (elab-error pat "real constant in pattern"))
@@ -667,6 +680,8 @@ val rec f = fn x1 => ... fn xn => case (x1, ..., xn) of (atpat11, ...) => exp1 |
                          result (elab-exp (context-plus-ve c ve) body))
                (push (nreverse spats) rows)))
     (push (list :fun node (nreverse rows)) *deferred-matches*)
+    ;; The function's type in its body, for the typed IR.
+    (annotate-type clauses type)
     type))
 
 (defun val-dec-parts (node)

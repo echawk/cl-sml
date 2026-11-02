@@ -199,3 +199,62 @@
             val r = loop (1000000, 0);"
            :package package))
     (is (eql 1000000 (cl-sml:sml-value "r" package)))))
+
+(test ir-type-lint-accepts-the-benchmarks-and-corpora
+  ;; Every IR term lowered from the benchmark programs and from the Core
+  ;; and Modules conformance corpora has a type on every node, and its
+  ;; types fit together (docs/IR.md, "The type lint").  The programs are
+  ;; compiled, not run; a program that does not compile alone is skipped.
+  (let ((files (mapcan (lambda (directory)
+                         (directory (merge-pathnames
+                                     "*.sml" (asdf:system-relative-pathname "cl-sml" directory))))
+                       '("t/bench/" "t/conformance/core/tests/"
+                         "t/conformance/modules/tests/")))
+        (problems nil)
+        (compiled 0))
+    (dolist (file files)
+      (let ((cl-sml:*sml-type-checker* :native)
+            (cl-sml::*sml-ir-lint* :collect)
+            (cl-sml::*sml-ir-lint-problems* nil)
+            (*error-output* (make-broadcast-stream)))
+        (handler-case
+            (progn
+              (handler-bind ((warning #'muffle-warning))
+                (cl-sml:compile-sml-file
+                 file :package (format nil "SML.IR-LINT-TEST.~:@(~A~)" (pathname-name file))))
+              (incf compiled))
+          (error () nil))
+        (when cl-sml::*sml-ir-lint-problems*
+          (push (cons (pathname-name file) cl-sml::*sml-ir-lint-problems*) problems))))
+    (is (> compiled 100))
+    (is (null problems) "IR type lint problems:~{~%~S~}" problems)))
+
+(test sml-ir-program-records-declarations
+  (let* ((cl-sml:*sml-type-checker* :native)
+         (declarations
+           (cl-sml:sml-ir-program
+            "signature S = sig type t val make : int -> t end
+             structure M :> S = struct
+               datatype t = T of int | U of int * string
+               fun make n = T n
+             end
+             exception E of string
+             functor F (X : S) = struct val y = X.make 3 end
+             structure N = F (M)"
+            :package "SML.IR-PROGRAM-TEST")))
+    (flet ((find-kind (kind) (find kind declarations :key #'first)))
+      ;; Structure members are flattened, named by their paths.
+      (let ((datatype (first (second (find-kind :datatype)))))
+        (is (equal "M.t" (first datatype)))
+        (is (equal '("M.T" "M.U") (mapcar #'first (fourth datatype))))
+        ;; U's values are flat vectors of its two fields.
+        (is (eql 2 (third (second (fourth datatype))))))
+      (is (equal "M.make" (first (first (second (find-kind :val))))))
+      ;; Opaque ascription: t is abstract, a type constructor without
+      ;; constructors.
+      (let ((structure (find-kind :structure)))
+        (is (getf (cddr structure) :opaque))
+        (is (equal "t" (first (first (getf (cddr structure) :types))))))
+      (is (find-kind :exception))
+      (is (equal "F" (second (find-kind :functor))))
+      (is (equal "F" (third (find-kind :functor-application)))))))
