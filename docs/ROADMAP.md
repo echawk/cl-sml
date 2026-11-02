@@ -83,7 +83,10 @@ and 0.54 s.  What remains is mostly boxed doubles (`real`), Basis
 functions called through a tuple (`Word.xorb`, `String.sub`), and the
 curried calls through special variables.
 
-CHECKS_PLACEHOLDER
+Checks after items 9, 10 and 15: SBCL suite 1048 checks, ECL 1047 (one
+REPL check is SBCL-only), Core corpus native 63/63, modules corpus native
+57/57, HOL corpus passes, real world native 95/119 (unchanged;
+t/realworld/REPORT.md).
 
 ## Easy: local rewrites in the compiler, no types needed
 
