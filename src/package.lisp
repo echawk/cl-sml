@@ -76,6 +76,8 @@
            #:native-overloaded-instance
            #:native-node-type
            #:native-equality-type
+           #:native-equality-kind
+           #:native-node-representation
            #:native-record-row
            #:native-match-info
            #:type->string))

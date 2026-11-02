@@ -447,6 +447,111 @@ val _ = t (fn () => floor 1E30)
 val _ = t (fn () => Int.quot (1, 0))
 val _ = print (Int.toString mx ^ \"\\n\")"))))
 
+(defparameter *int-overflow-boundaries*
+  "fun t f = print ((Int.toString (f ()) ^ \"\\n\") handle Overflow => \"Overflow\\n\" | Div => \"Div\\n\")
+val mx = valOf Int.maxInt
+val mn = valOf Int.minInt
+fun add (x : int, y) = x + y
+fun sub (x : int, y) = x - y
+fun mul (x : int, y) = x * y
+fun neg (x : int) = ~x
+val _ = t (fn () => mx + 1)
+val _ = t (fn () => add (mx, 1))
+val _ = t (fn () => mn - 1)
+val _ = t (fn () => sub (mn, 1))
+val _ = t (fn () => ~mn)
+val _ = t (fn () => neg mn)
+val _ = t (fn () => abs mn)
+val _ = t (fn () => mn div ~1)
+val _ = t (fn () => Int.quot (mn, ~1))
+val _ = t (fn () => mx * 2)
+val _ = t (fn () => mul (3037000500, 3037000500))
+val _ = t (fn () => mul (mn, ~1))
+val _ = t (fn () => mx * ~1)
+val _ = t (fn () => mn + 0)
+val _ = t (fn () => mx - 0)
+val _ = t (fn () => add (mx, mn))
+val _ = t (fn () => ~ (mn + 1))
+val _ = t (fn () => abs (mn + 1))
+val _ = t (fn () => mn div 1)
+val _ = t (fn () => mn mod ~1)
+val _ = t (fn () => mul (2147483648, 2147483647))
+val _ = t (fn () => foldl (op +) 0 [mx, 1])
+val _ = t (fn () => foldl (op * ) 1 [mn, ~1])"
+  "Int arithmetic at the edges of Int's range: each line is Overflow or
+the exact result.")
+
+(defparameter *int-overflow-boundary-results*
+  (list "Overflow" "Overflow" "Overflow" "Overflow" "Overflow" "Overflow" "Overflow"
+        "Overflow" "Overflow" "Overflow" "Overflow" "Overflow"
+        "~4611686018427387903" "~4611686018427387904" "4611686018427387903" "~1"
+        "4611686018427387903" "4611686018427387903" "~4611686018427387904" "0"
+        "4611686016279904256" "Overflow" "Overflow"))
+
+(test int-overflow-at-the-boundaries
+  ;; With the checker, `+' and friends are specialised at int; without it
+  ;; (plain mode) the generic operations must raise Overflow just the same.
+  (is (string= (apply #'lines *int-overflow-boundary-results*)
+               (run-sml *int-overflow-boundaries*)))
+  (is (string= (apply #'lines *int-overflow-boundary-results*)
+               (let ((cl-sml:*sml-type-checker* nil))
+                 (run-sml *int-overflow-boundaries*))))
+  (is (string= (apply #'lines *int-overflow-boundary-results*)
+               (load-sml *int-overflow-boundaries*))))
+
+(defparameter *specialised-operations*
+  "fun say s = print (s ^ \"\\n\")
+fun b x = say (Bool.toString x)
+val nan = 0.0 / 0.0
+val big = 1E308
+fun lt (x : real, y) = x < y
+fun ge (x : real, y) = x >= y
+val _ = b (nan < 1.0 orelse nan >= 1.0 orelse nan > 1.0 orelse nan <= 1.0)
+val _ = b (if lt (nan, 1.0) then true else ge (nan, 1.0))
+val _ = b (Real.isFinite (big * 10.0))
+val _ = say (Real.toString (big * 10.0 - big * 10.0))
+val _ = say (Real.toString (~ (big * 10.0)))
+val _ = say (Real.toString (abs (~ big * 10.0)))
+val _ = say (Real.toString (1.0 / 0.0))
+val _ = say (Real.toString (2.5 * 2.0 + 1.0 / 4.0 - 0.25))
+val _ = b (big * 10.0 > big)
+val w : word = 0wx3FFFFFFFFFFFFFFF
+val _ = say (Word.toString (w + 0w1))
+val _ = say (Word.toString (w * w))
+val _ = say (Word.toString (0w0 - 0w1))
+val _ = say (Word8.toString (0w255 + 0w1 : Word8.word))
+val _ = say (Word8.toString (0w16 * 0w17 : Word8.word))
+val _ = say (Word64.toString (0wxFFFFFFFFFFFFFFFF * 0w3 : Word64.word))
+val _ = b (w > 0w1 andalso (0w255 : Word8.word) >= 0w255)
+datatype color = Red | Green | Blue
+datatype shape = Dot | Circle of int
+val r = ref 1
+val r' = ref 1
+val _ = b (\"abc\" = \"ab\" ^ \"c\" andalso \"abc\" <> \"abd\")
+val _ = b (#\"a\" = #\"a\" andalso #\"a\" <> #\"b\")
+val _ = b (Blue = Blue andalso Red <> Green)
+val _ = b (Circle 1 = Circle 1 andalso Dot <> Circle 2)
+val _ = b (r = r andalso r <> r' andalso !r = !r')
+val _ = b (0w5 = 0w5 andalso (0w5 : Word8.word) <> 0w6)
+val _ = b (IntInf.pow (2, 100) = IntInf.pow (2, 100) andalso IntInf.pow (2, 64) <> 0)
+val _ = b (true = true andalso true <> false andalso LESS <> GREATER)
+val _ = b ([1, 2] = [1, 2] andalso (1, \"a\") <> (1, \"b\"))
+val _ = b (SOME Red = SOME Red andalso NONE <> SOME Blue)"
+  "Operations the compiler specialises by type, at their edges.")
+
+(defparameter *specialised-operation-results*
+  (list "false" "false" "false" "nan" "~inf" "inf" "inf" "5.0" "true"
+        "0" "1" "3FFFFFFFFFFFFFFF" "0" "10" "FFFFFFFFFFFFFFFD" "true"
+        "true" "true" "true" "true" "true" "true" "true" "true" "true" "true"))
+
+(test specialised-operations-agree-with-generic-ones
+  ;; Reals: no traps, NaN compares false.  Words wrap at their size.
+  ;; Equality: EQL, EQ, STRING= or structural, by type (ROADMAP 13, 14).
+  (is (string= (apply #'lines *specialised-operation-results*)
+               (run-sml *specialised-operations*)))
+  (is (string= (apply #'lines *specialised-operation-results*)
+               (load-sml *specialised-operations*))))
+
 (test real-to-string-is-gen-12
   (is (string= (lines "1.0" "0.333333333333" "10000000000.0" "1E22" "~2.5" "3.142")
                (run-sml "fun p r = print (r ^ \"\\n\")
