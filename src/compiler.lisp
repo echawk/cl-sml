@@ -1057,26 +1057,35 @@ source order although the value is laid out in label order."
 
 (defun hoisted-function-parameters (lexical-env form)
   "The parameters of a hoisted function whose body FORM was compiled in
-LEXICAL-ENV: its variables, and those of the functor body being compiled
-that FORM refers to."
-  (let ((parameters (lexical-environment-symbols lexical-env)))
-    (if *functor-scope-variables*
-        (let ((seen (make-hash-table :test #'eq))
-              (extra nil))
-          (labels ((walk (x)
-                     (cond ((symbolp x)
-                            (when (and (gethash x *functor-scope-variables*)
-                                       (not (gethash x seen))
-                                       (not (member x parameters)))
-                              (setf (gethash x seen) t)
-                              (push x extra)))
-                           ((and (consp x) (not (gethash x seen)))
-                            (setf (gethash x seen) t)
-                            (walk (car x))
-                            (walk (cdr x))))))
-            (walk form))
-          (append parameters (nreverse extra)))
-        parameters)))
+LEXICAL-ENV: the variables of LEXICAL-ENV, and those of the functor body
+being compiled, that FORM refers to.  Only those: a large functor body has
+hundreds of variables in scope, and passing all of them to each of its
+hoisted case actions made code too large for SBCL's arm64 backend (HaMLet's
+parser under the native checker)."
+  (let ((occurring (make-hash-table :test #'eq))
+        (seen (make-hash-table :test #'eq)))
+    (labels ((walk (x)
+               (cond ((symbolp x) (setf (gethash x occurring) t))
+                     ((and (consp x) (not (gethash x seen)))
+                      (setf (gethash x seen) t)
+                      (walk (car x))
+                      (walk (cdr x))))))
+      (walk form))
+    (let ((parameters (remove-if-not (lambda (symbol) (gethash symbol occurring))
+                                     (lexical-environment-symbols lexical-env))))
+      (if *functor-scope-variables*
+          (let ((extra nil))
+            (maphash (lambda (symbol present)
+                       (declare (ignore present))
+                       (when (and (gethash symbol *functor-scope-variables*)
+                                  (not (member symbol parameters)))
+                         (push symbol extra)))
+                     occurring)
+            ;; A stable order, so that generated code does not depend on
+            ;; hash-table iteration.
+            (append parameters
+                    (sort extra #'string< :key #'symbol-name)))
+          parameters))))
 
 (defun compile-hoisted-case-action (ast local-exceptions branch-env)
   (let ((body (compile-expr ast local-exceptions branch-env)))

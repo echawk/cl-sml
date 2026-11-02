@@ -268,3 +268,14 @@
                             :package package :type-checker *checker*))))
     (signals sml-static-type-error
       (compile-checked "val afterExpand = expandByte;" package))))
+
+(test hamlet-loads-under-the-native-checker
+  ;; HaMLet's parser is a functor whose body has hundreds of variables in
+  ;; scope.  Its hoisted case actions once took all of them as parameters,
+  ;; which made code too large for SBCL's arm64 backend, and the error was
+  ;; printed to a discarded stream: the load quit without a word.
+  (let ((*sml-type-checker* :native)
+        (*record-sml-lisp-source* nil))
+    (finishes
+      (load-sml-file (asdf:system-relative-pathname "cl-sml" "hamlet/hamlet.sml")
+                     :package "SML.HAMLET-NATIVE-LOAD"))))
