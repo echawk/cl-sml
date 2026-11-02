@@ -470,3 +470,16 @@ val _ = b (a = a)"))))
                (run-sml "val _ = print (IntInf.toString (IntInf.pow (IntInf.fromInt 2, 100)) ^ \"\\n\")
 val _ = print ((Int32.toString (Int32.+ (valOf Int32.maxInt, Int32.fromInt 1))) handle Overflow => \"Overflow\\n\")
 val _ = print (Word64.toString (Word64.fromInt ~1) ^ \"\\n\")"))))
+
+(test large-int-is-intinf
+  ;; LargeInt = IntInf (as in Poly/ML and MLton): toLarge never overflows.
+  (is (string= (lines "true" "4611686018427387904" "Overflow" "18446744073709551615"
+                      "4611686018427387904" "1000000000000000000000")
+               (run-sml "fun say s = print (s ^ \"\\n\")
+val big : LargeInt.int = IntInf.pow (2, 62)
+val _ = say (Bool.toString (LargeInt.toString big = IntInf.toString big))
+val _ = say (LargeInt.toString (LargeInt.+ (Int.toLarge (valOf Int.maxInt), 1)))
+val _ = say (Int.toString (Int.fromLarge big) handle Overflow => \"Overflow\")
+val _ = say (IntInf.toString (Word64.toLargeInt (Word64.fromInt ~1)))
+val _ = say (IntInf.toString (Real.toLargeInt IEEEReal.TO_NEAREST 4.611686018427387904E18))
+val _ = say (IntInf.toString (Time.toNanoseconds (Time.fromSeconds (IntInf.pow (10, 12)))))"))))

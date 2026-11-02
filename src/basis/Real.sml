@@ -43,8 +43,8 @@ struct
     | toInt IEEE.TO_ZERO      = trunc
     | toInt IEEE.TO_NEAREST   = round
 
-  val toLargeInt              = toInt
-  val fromLargeInt            = fromInt
+  val toLargeInt              = use{b = "Real.toLargeInt"} : IEEEReal.rounding_mode -> real -> LargeInt.int
+  val fromLargeInt            = use{b = "Real.fromInt"} : LargeInt.int -> real
 (*
   val toDecimal : real -> IEEEReal.decimal_approx
   val fromDecimal : IEEEReal.decimal_approx -> real

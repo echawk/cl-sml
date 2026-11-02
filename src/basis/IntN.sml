@@ -7,7 +7,7 @@
  *   raise Overflow outside their ranges.  The overloaded operators (+ etc.)
  *   only apply to them unchecked (HaMLet's overloading classes do not
  *   include them), and then check Int's range, not theirs.
- * - LargeInt is Int, so Int64.toLarge raises Overflow beyond Int's range.
+ * - LargeInt is IntInf.
  *)
 
 structure Int64 :> INTEGER =

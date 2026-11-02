@@ -1665,12 +1665,21 @@ internal real time."
 (defun sml-real-finite-p (x)
   (not (or (sml-real-nan-p x) (sml-real-infinite-p x))))
 
-(defun sml-real-to-integer (x rounder)
+(defun sml-real-to-integer (x rounder &optional (check #'sml-check-int))
   "Real.floor and friends: a NaN raises Domain, an infinity or a result
-beyond Int's range Overflow."
+beyond Int's range (CHECK) Overflow."
   (cond ((sml-real-nan-p x) (sml-raise-named-exception "Domain"))
         ((sml-real-infinite-p x) (sml-raise-named-exception "Overflow"))
-        (t (sml-check-int (values (funcall rounder x))))))
+        (t (funcall check (values (funcall rounder x))))))
+
+(defun sml-real-to-large-int (mode)
+  "Real.toLargeInt MODE: the IEEEReal.rounding_mode constructor MODE picks
+the rounding; the result is unbounded (LargeInt is IntInf)."
+  (let ((rounder (cdr (assoc (sml-unqualified-name mode)
+                             '(("TO_NEGINF" . floor) ("TO_POSINF" . ceiling)
+                               ("TO_ZERO" . truncate) ("TO_NEAREST" . round))
+                             :test #'string=))))
+    (lambda (x) (sml-real-to-integer x rounder #'identity))))
 
 ;;; Real.fmt.  The digits are computed from the double's exact rational
 ;;; value with integer arithmetic, rounded to nearest even, so that every
@@ -1927,6 +1936,10 @@ arithmetic (see SML-ARITHMETIC), so they reduce them modulo 2^BITS first."
                                  (sml-word-from-int +sml-word-size+
                                                     (sml-word-to-int-x bits (w x)))))
         (,(name "fromLarge") . ,(lambda (x) (w x)))
+        ;; LargeInt is IntInf.
+        (,(name "toLargeInt") . ,(lambda (x) (w x)))
+        (,(name "toLargeIntX") . ,(lambda (x) (sml-word-to-int-x bits (w x))))
+        (,(name "fromLargeInt") . ,(lambda (x) (w x)))
         (,(name "notb") . ,(lambda (x) (w (lognot x))))
         (,(name "orb") . ,(binary #'logior))
         (,(name "xorb") . ,(binary #'logxor))
@@ -1988,8 +2001,8 @@ is NIL; results beyond the range raise Overflow."
           (,(name "maxInt") . ,(lambda (unit)
                                  (declare (ignore unit))
                                  (if bits (sml-some-value max) (sml-none-value))))
-          ;; LargeInt is Int.
-          (,(name "toLarge") . ,#'sml-check-int)
+          ;; LargeInt is IntInf.
+          (,(name "toLarge") . ,#'identity)
           (,(name "toInt") . ,#'sml-check-int)
           (,(name "fromLarge") . ,(lambda (x) (check x)))
           (,(name "fromInt") . ,(lambda (x) (check x)))
@@ -2151,6 +2164,7 @@ is NIL; results beyond the range raise Overflow."
                     ("Real.ceil" . ,(lambda (x) (sml-real-to-integer x #'ceiling)))
                     ("Real.trunc" . ,(lambda (x) (sml-real-to-integer x #'truncate)))
                     ("Real.round" . ,(lambda (x) (sml-real-to-integer x #'round)))
+                    ("Real.toLargeInt" . ,#'sml-real-to-large-int)
                     ("Real.realFloor" . ,(lambda (x) (if (sml-real-finite-p x) (ffloor x) x)))
                     ("Real.realCeil" . ,(lambda (x) (if (sml-real-finite-p x) (fceiling x) x)))
                     ("Real.realTrunc" . ,(lambda (x) (if (sml-real-finite-p x) (ftruncate x) x)))

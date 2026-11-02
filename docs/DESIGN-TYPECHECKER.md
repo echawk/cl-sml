@@ -161,6 +161,11 @@ M3 as built:
   is still an error at the end of the top-level declaration.
   `native-diff.lisp` counts programs HaMLet rejects only for an
   unresolved flexible record as `expected-native-accepts`.
+- LargeInt is IntInf (after M3, decided with the user; the Basis allows
+  it, Poly/ML and MLton do it). IntInf is elaborated before INTEGER
+  (ascribed `INT_INF_CORE`, INT_INF without toLarge/fromLarge), then
+  `LargeInt.sml` defines INTEGER and INT_INF and completes IntInf.
+  `Int.toLarge`, `Word*.toLargeInt` and `Real.toLargeInt` never overflow.
 - Left open: type errors between two type names printed alike (`int` and
   `IntInf.int`) show the same name twice.
 
