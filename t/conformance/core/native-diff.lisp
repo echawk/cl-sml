@@ -10,6 +10,12 @@
 ;;; compared without white space and without HaMLet's `(* ... *)' comments,
 ;;; which list type names; bindings that differ only in the names of their
 ;;; type variables count as renamed.
+;;;
+;;; Expected disagreement: the native checker resolves flexible records at
+;;; the end of the top-level declaration (Poly/ML, MLton), HaMLet at the
+;;; innermost value declaration (docs/DESIGN-TYPECHECKER.md).  A program
+;;; only HaMLet rejects for an unresolved flexible record counts as
+;;; :expected-native-accepts.
 
 (defpackage #:native-diff
   (:use #:cl)
@@ -117,7 +123,7 @@ corpus; HaMLet's own hamlet/test/ is another)."
          (files (sort (directory (merge-pathnames "*.sml" directory))
                       #'string< :key #'pathname-name))
          (counts (list :both-accept 0 :both-reject 0 :only-hamlet-accepts 0
-                       :only-native-accepts 0 :types-agree 0 :types-differ 0
+                       :only-native-accepts 0 :expected-native-accepts 0 :types-agree 0 :types-differ 0
                        :bindings-compared 0 :bindings-renamed 0 :bindings-differ 0
                        :bindings-unknown 0)))
     (dolist (file files)
@@ -152,6 +158,10 @@ corpus; HaMLet's own hamlet/test/ is another)."
                    (incf (getf counts :only-hamlet-accepts))
                    (when verbose
                      (format t "~&NATIVE REJECTS ~A: ~A~%" name (one-line native-error))))
+                  ((search "unresolved flexible record" hamlet-error)
+                   (incf (getf counts :expected-native-accepts))
+                   (when verbose
+                     (format t "~&HAMLET REJECTS ~A (expected, flexible record)~%" name)))
                   (t
                    (incf (getf counts :only-native-accepts))
                    (when verbose

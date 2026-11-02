@@ -14,7 +14,8 @@ M1 as built, where it settles what this document left open:
   Differential against HaMLet: `t/conformance/core/native-diff.lisp`.
 - Overloading is defaulted at the end of each top-level declaration (HaMLet
   defaults at the innermost value declaration). Flexible records must be
-  resolved by the innermost value declaration, as in HaMLet. Undetermined
+  resolved by the end of the top-level declaration (since after M3; see
+  below). Undetermined
   types are an error at the end of the program, as in HaMLet.
 - A type name may not be substituted for a type variable older than it
   (HaMLet's time stamps); `let` additionally checks its result type.
@@ -148,9 +149,19 @@ M3 as built:
   `LargeInt.int`, to `IntInf.toString`, and our Basis has LargeInt = Int);
   real world native 90/119, plain 86/119 (previously plain 81, HaMLet 62;
   details in t/realworld/REPORT.md).
-- Left open: flexible records are still resolved at the innermost value
-  declaration (HaMLet), which rejects two real-world programs Poly
-  accepts; type errors between two type names printed alike (`int` and
+- Flexible records (after M3, decided with the user; a deliberate
+  difference from HaMLet): a `#lab` or `{a, ...}` row must be resolved by
+  the end of the enclosing top-level declaration, as in Poly/ML and MLton,
+  not the innermost value declaration as in HaMLet (Section 4.11, item 1,
+  leaves the scope to the implementation). HOL's `Count.sml` needs this
+  (`val l = [#ABS, #COMB, ...]` resolved by a later function). To stay
+  sound, a binding whose type still contains an unresolved row is not
+  generalised at all (like an overloaded variable, but the whole type, so
+  field types stay shared until the row is known). A row never resolved
+  is still an error at the end of the top-level declaration.
+  `native-diff.lisp` counts programs HaMLet rejects only for an
+  unresolved flexible record as `expected-native-accepts`.
+- Left open: type errors between two type names printed alike (`int` and
   `IntInf.int`) show the same name twice.
 
 ## 1. Goals
