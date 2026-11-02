@@ -955,7 +955,8 @@ that FORM refers to."
     (if *sml-hoisting-enabled*
         (let ((name (next-hoisted-sml-function-name))
               (parameters (hoisted-function-parameters branch-env body)))
-          (push `(defun ,name ,parameters ,body) *sml-hoisted-forms*)
+          (push `(defun ,name ,parameters ,@(portable-tail-call-declarations) ,body)
+                *sml-hoisted-forms*)
           `(,name ,@parameters))
         body)))
 

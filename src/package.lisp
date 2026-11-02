@@ -17,6 +17,7 @@
            #:lookup-sml-binding-type
            #:sml-type->string
            #:*sml-type-checker*
+           #:*sml-optimize-policy*
            #:type-check-sml-string
            #:with-sml-type-checker
            #:sml-static-type-error

@@ -157,3 +157,25 @@
                             :package "SML.COMPILED-DISPATCH-TEST")
     (is (not (null result)))
     (is (= 42 (cl-sml:sml-value "dispatch_result" package)))))
+
+(test emitted-functions-declare-the-optimize-policy
+  ;; ROADMAP item 6: every generated function declares the policy, and
+  ;; the debug policy still runs a deep tail-recursive loop.
+  (flet ((declares-p (policy qualities)
+           (let ((cl-sml:*sml-optimize-policy* policy))
+             (let ((form (cl-sml:compile-sml-program-string
+                          "fun f x = x + 1;" :package "SML.POLICY-TEST")))
+               (labels ((walk (x)
+                          (or (equal x `(declare (optimize ,@qualities)))
+                              (and (consp x) (or (walk (car x)) (walk (cdr x)))))))
+                 (walk form))))))
+    (is (declares-p :default '((speed 1) (safety 1) (debug 1))))
+    (is (declares-p :debug '((speed 0) (safety 3) (debug 2))))
+    (is (declares-p '((speed 3)) '((speed 3)))))
+  (let ((cl-sml:*sml-optimize-policy* :debug)
+        (package "SML.POLICY-RUN-TEST"))
+    (eval (cl-sml:compile-sml-program-string
+           "fun loop (0, acc) = acc | loop (n, acc) = loop (n - 1, acc + 1);
+            val r = loop (1000000, 0);"
+           :package package))
+    (is (eql 1000000 (cl-sml:sml-value "r" package)))))

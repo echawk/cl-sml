@@ -4,13 +4,28 @@
   #+sbcl (make-hash-table :test #'eq :weakness :key)
   #-sbcl (make-hash-table :test #'eq))
 
-;;; SML programs loop by tail recursion.  The compiler turns a function's
-;;; calls to itself in tail position into jumps on every implementation; SBCL
-;;; also merges the other tail calls, but only below DEBUG 3, so generated
-;;; functions ask for SBCL's default debug level.
+;;; The optimize policy of the Lisp the compiler emits (ROADMAP item 6),
+;;; declared in each function it generates rather than proclaimed, so that
+;;; loading SML never changes the policy of other Lisp code.  SML programs
+;;; loop by tail recursion: the compiler turns a function's calls to itself
+;;; in tail position into jumps on every implementation, and SBCL also
+;;; merges the other tail calls, but only below DEBUG 3, so no policy here
+;;; reaches it.
+(defvar *sml-optimize-policy* :default
+  "The optimize policy of compiled SML: :DEFAULT (safe, and the CL compiler
+may optimize as usual), :DEBUG (full run-time checks and more debugging
+information, still with tail calls merged), or a list of OPTIMIZE
+qualities such as ((SPEED 3) (SAFETY 1) (DEBUG 1)).  Read when SML is
+compiled.")
+
+(defun sml-optimize-qualities ()
+  (case *sml-optimize-policy*
+    (:default '((speed 1) (safety 1) (debug 1)))
+    (:debug '((speed 0) (safety 3) (debug 2)))
+    (t *sml-optimize-policy*)))
+
 (defun portable-tail-call-declarations ()
-  #+sbcl '((declare (optimize (debug 1))))
-  #-sbcl nil)
+  `((declare (optimize ,@(sml-optimize-qualities)))))
 
 (defun portable-sml-lambda-form (name arg body)
   #+sbcl (if name
@@ -18,7 +33,7 @@
                 ,@(portable-tail-call-declarations)
                 ,body)
              `(lambda (,arg) ,@(portable-tail-call-declarations) ,body))
-  #-sbcl (progn name `(lambda (,arg) ,body)))
+  #-sbcl (progn name `(lambda (,arg) ,@(portable-tail-call-declarations) ,body)))
 
 ;;; SML reals are IEEE doubles whose operations never trap: overflow gives an
 ;;; infinity, invalid operations a NaN.  SBCL and ECL trap by default; ABCL
