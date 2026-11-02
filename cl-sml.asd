@@ -30,6 +30,7 @@
                (:file "lexer")
                (:file "parser")
                (:file "compiler")
+               (:file "ir")
                (:file "inspect")
                (:file "reader")
                ;; The native checker (docs/DESIGN-TYPECHECKER.md).

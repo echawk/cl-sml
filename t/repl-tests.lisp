@@ -153,6 +153,16 @@
     (is (search "(defparameter |replSquare;" output))
     (is (string= "" error-output))))
 
+(test repl-ir-command-shows-the-ir
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil "fun replInc n = n + 1;~%:ir replInc~%:quit~%")
+       "SML.REPL-IR-TEST")
+    (is (eq :quit result))
+    (is (search ";;; fun replInc" output))
+    (is (search "(:overloaded \"+\" \"int\")" output))
+    (is (string= "" error-output))))
+
 (test repl-lisp-local-command-shows-enclosing-local
   (multiple-value-bind (result output error-output)
       (run-repl-session-in-package
@@ -166,12 +176,12 @@
 (test repl-expand-command-compiles-without-running
   (multiple-value-bind (result output error-output)
       (run-repl-session-in-package
-       (format nil ":expand val replGhost = 7~%replGhost;~%:expand 1 + 2~%:quit~%")
+       (format nil ":expand val replGhost = 7~%replGhost;~%:expand fn n => n + 2~%:quit~%")
        "SML.REPL-EXPAND-TEST")
     (is (eq :quit result))
     (is (search "(defparameter |replGhost;1| 7)" output))
     ;; The checker resolves `+' at int.
-    (is (search "(cl-sml::sml-int-+ 1 2)" output))
+    (is (search "(cl-sml::sml-int-+ " output))
     (is (not (search "val it = 7" output)))
     (is (search "Error:" error-output))))
 

@@ -415,6 +415,18 @@ bound to TARGET-NAME, when the argument is not a structure identifier."
                (member (car entry) names :test #'string=))
              env))
 
+(defvar *sml-ir* t
+  "When true, expressions are compiled through the IR; when NIL, directly
+from the AST by COMPILE-EXPR-DIRECT, as before the IR.")
+
+(defvar *sml-ir-simplify* t
+  "When true, the IR is simplified (inlining, beta reduction, constant
+folding, dead-binding elimination, known cases) before CL is emitted.")
+
+(defvar *sml-ir-log* nil
+  "When a cons, compiling pushes (LOWERED . SIMPLIFIED) for each IR term
+onto its car (see SHOW-SML-IR).")
+
 (defvar *sml-tupled-workers* t
   "Compile a top-level `fun' whose parameter is a tuple pattern as a
 function of the tuple's fields plus a wrapper, and its calls with a tuple
@@ -1746,6 +1758,7 @@ names LEXICAL-ENV binds, which they shadow."
               (cell (new-sml-binding-cell (second pat))))
          `(progn
             (defparameter ,cell ,compiled-expr)
+            ,@(ir-note-basis-primitive cell expr)
             ,@(compile-binding-publication cell expr-type))))
       ((eq pat :wild)
        (compile-expr expr local-exceptions lexical-env))
@@ -2181,7 +2194,15 @@ gives the record's labels, else a lookup by label."
         `(sml-record-ref ,form ,label))))
 
 (defun compile-expr (ast &optional local-exceptions lexical-env)
-  "Compiles an SML expression AST into a Common Lisp form."
+  "Compiles an SML expression AST into a Common Lisp form: through the IR
+(src/ir.lisp), unless *SML-IR* is false or applications are debugged."
+  (if (and *sml-ir* (not *sml-debug-applications*))
+      (ir-compile-expression ast local-exceptions lexical-env)
+      (compile-expr-direct ast local-exceptions lexical-env)))
+
+(defun compile-expr-direct (ast &optional local-exceptions lexical-env)
+  "Compiles an SML expression AST directly into a Common Lisp form; its
+subexpressions go through COMPILE-EXPR."
   (cond
     ((numberp ast) ast)
     ((stringp ast) ast)
@@ -2463,6 +2484,7 @@ calls it with the fields of its argument."
          ,(sml-lambda-form (second ast) tuple
                            `(,worker ,@(loop for i from 1 to arity
                                              collect `(svref ,tuple ,i)))))
+       ,@(ir-note-inline-template ast cell arity local-exceptions lexical-env)
        ,@(compile-binding-publication cell :unknown))))
 
 (defun compile-curried-top-level-fun (ast cell local-exceptions lexical-env)
@@ -2480,6 +2502,7 @@ calls it with the fields of its argument."
                                                   (acons (second ast)
                                                          cell
                                                          lexical-env))))
+       ,@(ir-note-inline-template ast cell nil local-exceptions lexical-env)
        ,@(compile-binding-publication cell fun-type))))
 
 (defun compile-decl (ast &optional local-exceptions lexical-env)
@@ -3627,17 +3650,31 @@ bound to the package's symbols, and the members known only at run time."
 the CL form compiled for it, while the declaration's compile-time
 environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
 
-(defun note-compiled-sml-declaration (dec form)
+(defvar *sml-declaration-ir* nil
+  "While *SML-DECLARATION-COMPILED-HOOK* runs: the IR terms compiled for the
+declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
+
+(defun note-compiled-sml-declaration (dec form &optional ir)
   (when *sml-declaration-compiled-hook*
-    (funcall *sml-declaration-compiled-hook* dec form))
+    (let ((*sml-declaration-ir* ir))
+      (funcall *sml-declaration-compiled-hook* dec form)))
   form)
+
+(defun compile-recorded-decl (dec local-exceptions lexical-env)
+  "The form of declaration DEC, and the IR terms compiled for it when
+compiled declarations are being recorded."
+  (if *sml-declaration-compiled-hook*
+      (let* ((*sml-ir-log* (list nil))
+             (form (compile-decl dec local-exceptions lexical-env)))
+        (values form (reverse (car *sml-ir-log*))))
+      (compile-decl dec local-exceptions lexical-env)))
 
 (defun compile-program-decls (decs &optional (local-exceptions nil) lexical-env)
   (if (null decs)
       nil
       (let* ((dec (first decs))
-             (form (note-compiled-sml-declaration
-                    dec (compile-decl dec local-exceptions lexical-env)))
+             (form (multiple-value-call #'note-compiled-sml-declaration
+                     dec (compile-recorded-decl dec local-exceptions lexical-env)))
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
              (module-bindings (declaration-local-module-member-bindings dec))
              (symbol-bindings (declaration-binding-symbol-bindings dec))

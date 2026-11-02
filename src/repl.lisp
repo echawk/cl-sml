@@ -280,6 +280,7 @@ accepts SOURCE (which then points at a gap in our parser)."
     ("lisp" "NAME" "Show the Lisp generated for the binding NAME, e.g. Foo.bar.")
     ("lisp-local" "NAME"
      "Show it with its enclosing `local' declaration, if any.")
+    ("ir" "NAME" "Show the IR compiled for the binding NAME (docs/IR.md).")
     ("expand" "PHRASE" "Show the Lisp for an SML phrase without running it.")
     ("show-lisp" "on|off" "Print the Lisp of each phrase as it is evaluated.")
     ("time" "on|off" "Report how long each compilation phase takes.")
@@ -356,6 +357,9 @@ accepts SOURCE (which then points at a gap in our parser)."
                     (show-sml-lisp (repl-required-argument argument command "NAME")
                                    :stream output
                                    :enclosing (string= command "lisp-local")))
+                   ((string= command "ir")
+                    (show-sml-ir (repl-required-argument argument command "NAME")
+                                 :stream output))
                    ((string= command "expand")
                     (print-sml-lisp
                      (sml->lisp (repl-required-argument argument command "PHRASE"))

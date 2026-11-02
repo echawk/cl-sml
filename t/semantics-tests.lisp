@@ -614,3 +614,62 @@ val _ = say (Bool.toString (Date.toTime l = now) ^ \" \"
              ^ Bool.toString (Date.offset l = NONE andalso isSome (Date.isDst l)))
 val _ = say (Date.toString (Date.fromTimeUniv (Time.fromSeconds ~1)))
 val _ = say (case Date.fromString \"Xyz Mar 08 19:06:45 1995\" of NONE => \"NONE\" | SOME _ => \"SOME\")"))))
+
+;;; The IR simplifier (docs/IR.md) must not change what programs do.
+
+(defun run-sml-both-ways (&rest sources)
+  "What SOURCES print with the IR simplifier on, after checking that they
+print the same with it off and with the IR off."
+  (let ((simplified (apply #'run-sml sources)))
+    (is (string= simplified
+                 (let ((cl-sml:*sml-ir-simplify* nil)) (apply #'run-sml sources))))
+    (is (string= simplified
+                 (let ((cl-sml:*sml-ir* nil)) (apply #'run-sml sources))))
+    simplified))
+
+(test ir-inlining-keeps-static-scoping
+  ;; g inlines f, which is rebound later: g still sees the first f.
+  (is (string= "4 30 4"
+               (run-sml-both-ways
+                "fun f x = x + 1
+fun g y = f y
+val a = g 3
+fun f x = x * 10
+val _ = print (Int.toString a ^ \" \" ^ Int.toString (f 3) ^ \" \" ^ Int.toString (g 3))")))
+  ;; The same across compilation units.
+  (is (string= "4"
+               (run-sml-both-ways "fun f x = x + 1  fun g y = f y"
+                                  "fun f x = x * 10  val _ = print (Int.toString (g 3))"))))
+
+(test ir-simplifier-keeps-effects-and-exceptions
+  (is (string= "ab 3 Overflow Div 7 12 true"
+               (run-sml-both-ways
+                "fun twice f x = f (f x)
+val r = ref \"\"
+fun note s = (r := !r ^ s; 1)
+val n = (fn (x, y) => x + y) (note \"a\", note \"b\") + 1
+val _ = print (!r ^ \" \" ^ Int.toString n ^ \" \")
+val _ = print ((Int.toString (valOf Int.maxInt + 1)) handle Overflow => \"Overflow \")
+val _ = print ((Int.toString (1 div 0)) handle Div => \"Div \")
+val _ = print (Int.toString (let val p = (3, 4) in #1 p + #2 p end) ^ \" \")
+val _ = print (Int.toString (twice (fn x => x * 2) 3) ^ \" \")
+val _ = print (Bool.toString (not (1 > 2)))"))))
+
+(test ir-opens-basis-primitives
+  (is (string= "6 2 0 1 98 c true"
+               (run-sml-both-ways
+                "val w = Word.xorb (0w5, 0w3)
+val s = Word.<< (0w1, 0w1)
+val z = Word.>> (0w1, Word.fromInt Word.wordSize)
+val o1 = Word.toInt (Word.andb (0w13, 0w1))
+val _ = print (Word.toString w ^ \" \" ^ Word.toString s ^ \" \" ^ Word.toString z
+               ^ \" \" ^ Int.toString o1 ^ \" \" ^ Int.toString (Char.ord (String.sub (\"abc\", 1)))
+               ^ \" \" ^ String.str (Char.chr 99) ^ \" \")
+val _ = print (Bool.toString ((String.sub (\"abc\", 5); false) handle Subscript => true))"))))
+
+(test ir-folding-does-not-hide-overflow
+  (is (string= "Overflow Overflow 0w3"
+               (run-sml-both-ways
+                "val _ = print ((Int.toString (4611686018427387903 + 1)) handle Overflow => \"Overflow \")
+val _ = print ((Int.toString (~4611686018427387904 - 1 * 1)) handle Overflow => \"Overflow \")
+val _ = print (\"0w\" ^ Word.toString (0w4611686018427387903 + 0w4))"))))

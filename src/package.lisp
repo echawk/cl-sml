@@ -47,6 +47,10 @@
            #:*show-lisp-compiler-output*
            #:sml-lisp-source
            #:show-sml-lisp
+           #:show-sml-ir
+           #:*sml-ir*
+           #:*sml-ir-simplify*
+           #:*sml-ir-inline-size*
            #:print-sml-lisp
            #:clear-sml-lisp-source
            #:sml->lisp

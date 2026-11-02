@@ -144,7 +144,10 @@ val six = AddThree.addY 3;"
       (is (or (null symbol) (not (boundp symbol)))))
     (is (null (sml-lisp-source "notEvaluated" :package package)))
     (is (equal '(cl-sml::sml-int-+ 1 2)
-               (sml->lisp "1 + 2" :package package)))
+               (let ((cl-sml::*sml-ir-simplify* nil))
+                 (sml->lisp "1 + 2" :package package))))
+    ;; The IR simplifier folds constants (docs/IR.md).
+    (is (eql 3 (sml->lisp "1 + 2" :package package)))
     (is (equal '(cl-sml::sml-+ 1 2)
                (sml->lisp "1 + 2" :package package :type-checker nil)))
     (is (equal (sml->lisp "1 + 2" :package package)
@@ -210,3 +213,18 @@ val six = AddThree.addY 3;"
         (load lisp)
         (is (= 10 (sml-value "doubled" package)))
         (is (functionp (sml-value "LIST" package)))))))
+
+(test show-sml-ir-prints-the-simplified-terms
+  (let ((package "SML.INSPECT-IR-TEST"))
+    (load-sml-string (format nil "fun sq x = x * x;~%fun k n = sq (n + 1) + 2 * 3;") package)
+    (let ((simplified (with-output-to-string (stream)
+                        (show-sml-ir "k" :package package :stream stream)))
+          (lowered (with-output-to-string (stream)
+                     (show-sml-ir "k" :package package :stream stream :lowered t))))
+      (is (search ";;; fun k -- inspect.sml:2" simplified))
+      ;; sq is inlined and 2 * 3 folded.
+      (is (search "(:const 6)" simplified))
+      (is (not (search "|sq;" simplified)))
+      (is (search "|sq;" lowered)))
+    (signals error
+      (show-sml-ir "missing" :package package :stream (make-broadcast-stream)))))

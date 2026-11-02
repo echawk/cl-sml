@@ -88,6 +88,33 @@ REPL check is SBCL-only), Core corpus native 63/63, modules corpus native
 57/57, HOL corpus passes, real world native 95/119 (unchanged;
 t/realworld/REPORT.md).
 
+Items 19 and 12, the IR and its simplifier (before is master at aa1aace;
+docs/IR.md):
+
+| program | before | after | consed before | consed after |
+|---|---|---|---|---|
+| `fib 30` | 0.005 s | 0.005 s | 0 | 0 |
+| `tak` | 0.003 s | 0.003 s | 0 | 0 |
+| `real` | 0.51 s | 0.51 s | 269 MB | 269 MB |
+| `bst` | 0.19 s | 0.18 s | 228 MB | 228 MB |
+| `eq` | 0.11 s | 0.10 s | 177 MB | 96 MB |
+| `word` | 0.17 s | 0.009 s | 672 MB | 0 |
+| `rec` | 0.10 s | 0.09 s | 384 MB | 288 MB |
+
+`word` gains from opening `Word.xorb`, `Word.<<` and `Word.>>` (no tuple,
+no closure call), `eq` from `String.sub`, `rec` from inlining `divmod`
+and destructuring its pair without building it.  Plain mode: `word` 0.20
+s to 0.016 s (765 MB to 0), `eq` 177 MB to 96 MB, `rec` 448 MB to 352 MB,
+the others unchanged.  Compile time: the SBCL suite takes 11.95 s against
+11.8 s (warm caches); loading HaMLet (plain mode, as the tests do) takes
+6.0 s without the IR, 6.0 s with it and 6.4 s with the simplifier.
+`real` is left to unboxed reals and workers for local functions.
+
+Checks after items 19 and 12: SBCL suite 1073 checks, ECL 1072, Core
+corpus native 63/63, modules corpus native 57/57, HOL corpus passes, real
+world native 97/119 (95 before: two programs that timed out now finish;
+the one WRONG is mandelbrot-rat, as before).
+
 ## Easy: local rewrites in the compiler, no types needed
 
 ### 1. Call binary primitives directly (S)
@@ -243,7 +270,22 @@ Workshop 2008), so each subterm is tested once, with a `case` on
 constructor tags. First check how much `trivia` already gives after
 items 2 and 10.
 
-### 12. Inlining and simplification (M)
+### 12. Inlining and simplification (M) — done
+
+**Done (2026-11-02), on the IR of item 19 (docs/IR.md):** inlining of
+small non-recursive top-level functions through templates recorded on
+their cells (so a later rebinding of the name, which makes a new cell,
+does not affect code compiled before it; the Basis's templates, such as
+`Int.max`, reach programs), of `let`-bound `fn`s, and of Basis primitives
+(`Word.xorb`, `Word.<<`, `Word.toInt`, `String.sub`, `Char.ord`, ...,
+`not`, `o`); beta reduction; constant folding that never folds an
+operation raising `Overflow`, `Div` or another exception; dropping unused
+pure bindings; `if` on a constant and matches on `true`/`false`.
+`cl-sml:*sml-ir-simplify*` turns it off, `cl-sml:*sml-ir-inline-size*`
+(40 nodes) bounds what is inlined.  Measured: see the table under
+"Measured 2026-11-02".  Not done: case-of-known-constructor for other
+datatypes, and inlining of functions of several clauses.
+
 
 **Do:** inline small Basis functions (`not`, `o`, `!`, `:=`, `fst`) and
 small user functions, beta-reduce `(fn x => e) a`, and drop unused pure
@@ -366,7 +408,21 @@ variables, overloading defaults, and equality types. Output a typed AST
 that the compiler reads in place of `src/static-facts.lisp`. Run HaMLet
 as a differential oracle in the tests.
 
-### 19. A typed IR between the AST and CL (L)
+### 19. A typed IR between the AST and CL (L) — partly done
+
+**Done (2026-11-02):** `src/ir.lisp`, described in docs/IR.md.  Every
+expression is lowered to the IR, simplified (item 12) and emitted as CL,
+in both modes.  Constructs not covered yet (`case` on literals and the
+tuple dispatch, `let` with `datatype`, `exception`, `open`, `local` or
+structures, the clause matching of `fun`) are `(:lisp ...)` nodes holding
+what the former generator, `compile-expr-direct`, makes of them; their
+subexpressions are IR terms again.  Nodes carry the checker's type where it
+records one (identifier occurrences, constants).  `cl-sml:show-sml-ir`
+prints the IR of a binding; `cl-sml:*sml-ir*` set to `nil` compiles
+without it.  Still to do: lower the remaining constructs (then patterns as
+ASTs and decision trees, item 11), types for every node, and moving items
+9, 10 and 15 from lowering into passes.
+
 
 **Do:** add a small typed intermediate language (A-normal form is
 enough) between the typed AST and CL. Move items 9 to 15 onto it as
