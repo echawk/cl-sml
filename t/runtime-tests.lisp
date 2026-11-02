@@ -64,22 +64,22 @@
          (funcall (funcall (cl-sml::sml-foldr #'cl-sml::sml-op-+) 0) '(1 2 3))))
   (let ((tuple-step
           (lambda (pair)
-            (+ (second pair) (* 10 (third pair))))))
+            (+ (cl-sml:sml-tuple-ref pair 1) (* 10 (cl-sml:sml-tuple-ref pair 2))))))
     (is (= 123
            (funcall (funcall (cl-sml::sml-foldl tuple-step) 0) '(1 2 3))))
     (is (= 321
            (funcall (funcall (cl-sml::sml-foldr tuple-step) 0) '(1 2 3)))))
   (is (= 21
-         (cl-sml::sml-before (list :tuple 21 99))))
+         (cl-sml::sml-before (cl-sml::sml-tuple 21 99))))
   (is (= 21
          (funcall (cl-sml::sml-o
-                   (list :tuple
+                   (cl-sml::sml-tuple
                          (lambda (x) (+ x 1))
                          (lambda (x) (* x 2))))
                   10)))
   ;; Binary operators are two-argument primitives and pair-taking values.
   (is (= 5 (cl-sml::sml-+ 2 3)))
-  (is (= 5 (cl-sml::sml-op-+ (list :tuple 2 3)))))
+  (is (= 5 (cl-sml::sml-op-+ (cl-sml::sml-tuple 2 3)))))
 
 (test runtime-string-and-char-functions
   (is (string= "abcd" (cl-sml::sml-concat '("ab" "cd"))))
@@ -102,7 +102,7 @@
     (handler-case
         (progn
           (funcall (cl-sml::sml-basis-primitive "String.sub")
-                   (list :tuple "a" 1))
+                   (cl-sml::sml-tuple "a" 1))
           (fail "String.sub did not raise Subscript"))
       (cl-sml::sml-raised-exception (condition)
         (is (string= "Subscript"
@@ -126,7 +126,7 @@
 (test runtime-reference-functions
   (let ((cell (cl-sml::sml-ref 10)))
     (is (= 10 (cl-sml::sml-deref cell)))
-    (is (equal '(:tuple) (cl-sml::sml-assign cell 42)))
+    (is (eq (cl-sml::sml-unit) (cl-sml::sml-assign cell 42)))
     (is (= 42 (cl-sml::sml-deref cell)))))
 
 (test runtime-text-io-output-primitives
@@ -139,16 +139,16 @@
           (*error-output* stderr))
       (setf output-result
             (funcall (cl-sml::sml-basis-primitive "TextIO.output")
-                     (list :tuple :text-io-stdout "hello"))
+                     (cl-sml::sml-tuple :text-io-stdout "hello"))
             output1-result
             (funcall (cl-sml::sml-basis-primitive "TextIO.output1")
-                     (list :tuple :text-io-stderr #\!))
+                     (cl-sml::sml-tuple :text-io-stderr #\!))
             flush-result
             (funcall (cl-sml::sml-basis-primitive "TextIO.flushOut")
                      :text-io-stdout)))
-    (is (equal '(:tuple) output-result))
-    (is (equal '(:tuple) output1-result))
-    (is (equal '(:tuple) flush-result))
+    (is (eq (cl-sml::sml-unit) output-result))
+    (is (eq (cl-sml::sml-unit) output1-result))
+    (is (eq (cl-sml::sml-unit) flush-result))
     (is (string= "hello" (get-output-stream-string stdout)))
     (is (string= "!" (get-output-stream-string stderr)))))
 
@@ -162,7 +162,7 @@
          (stream (funcall open-in (asdf:system-relative-pathname "cl-sml" "t/testdata/text-io-input.txt"))))
     (unwind-protect
          (progn
-           (is (string= "alpha" (funcall input-n (list :tuple stream 5))))
+           (is (string= "alpha" (funcall input-n (cl-sml::sml-tuple stream 5))))
            (is (string= (string #\Newline) (cdr (funcall input-line stream))))
            (is-false (funcall end-of-stream stream))
            (is (string= (format nil "beta~%last~%")
@@ -180,10 +180,10 @@
     (unwind-protect
          (progn
            (let ((stream (funcall open-out pathname)))
-             (funcall output (list :tuple stream "first"))
+             (funcall output (cl-sml::sml-tuple stream "first"))
              (funcall close-out stream))
            (let ((stream (funcall open-append pathname)))
-             (funcall output (list :tuple stream "+second"))
+             (funcall output (cl-sml::sml-tuple stream "+second"))
              (funcall close-out stream))
            (with-open-file (stream pathname :direction :input)
              (is (string= "first+second" (cl-sml::read-sml-source stream)))))
@@ -328,10 +328,8 @@
       val prefix_tuple_sum = op plus ((1, 2), (3, 4));
       val infix_tuple_sum = (1, 2) plus (3, 4);
       val uppercase_tuple_var = pickUpper (1, 2, 3, 4);")
-    (is (equal '(:tuple 4 6)
-               (sml-value "prefix_tuple_sum" *test-sml-package*)))
-    (is (equal '(:tuple 4 6)
-               (sml-value "infix_tuple_sum" *test-sml-package*)))
+    (is (equal '(4 6) (cl-sml::sml-tuple->list (sml-value "prefix_tuple_sum" *test-sml-package*))))
+    (is (equal '(4 6) (cl-sml::sml-tuple->list (sml-value "infix_tuple_sum" *test-sml-package*))))
     (is (= 4 (sml-value "uppercase_tuple_var" *test-sml-package*)))))
 
 (test integration-parenthesized-infix-fun-with-trailing-parameter
@@ -381,7 +379,7 @@
   (is (= 10 (sml-value "x")))
   (is (= 20 (sml-value "y")))
   (is (= 9 (sml-value "z")))
-  (is (equal '(:tuple 20 10) (sml-value "swapped")))
+  (is (equal '(20 10) (cl-sml::sml-tuple->list (sml-value "swapped"))))
   (is (= 30 (sml-value "seq_value")))
   (is (= 120 (sml-value "factorial_5"))))
 
@@ -404,14 +402,14 @@
       in
         ((raise (Local 9)) handle Local n => n | _ => 0)
       end;")
-  (is (equal '(:record ("x" . 1) ("y" . 2))
-             (sml-value "point")))
+  (is (equal (quote (("x" . 1) ("y" . 2)))
+             (cl-sml::sml-record-fields (sml-value "point"))))
   (is (= 1 (sml-value "x_coord")))
   (is (= 1 (sml-value "rx")))
   (is (= 2 (sml-value "ry")))
   (is (= 4 (sml-value "rest_x")))
-  (is (equal '(:record ("x" . 2) ("y" . 1))
-             (sml-value "swapped_point")))
+  (is (equal (quote (("x" . 2) ("y" . 1)))
+             (cl-sml::sml-record-fields (sml-value "swapped_point"))))
   (is (= 3 (sml-value "point_sum")))
   (is (= 1 (sml-value "handled_nullary")))
   (is (= 7 (sml-value "handled_payload")))
@@ -642,8 +640,10 @@
       structure Built = Make(val dummy = 0);"
     )
     (is (functionp (sml-value "Built.Header.@@" *test-sml-package*)))
-    (is (equal '(:tuple "use" "location")
-               (cdr (sml-value "Built.Header.made" *test-sml-package*))))))
+    (is (equal '("use" "location")
+               (cl-sml::sml-tuple->list
+                (cl-sml::sml-constructed-argument
+                 (sml-value "Built.Header.made" *test-sml-package*)))))))
 
 (test runtime-projects-nested-structure-members-from-functor-results
   (let* ((package "SML.RUNTIME-NESTED-MODULE-PROJECTION-TEST")
@@ -933,7 +933,7 @@
     val tailShadowed = tailShadow 3;
     fun tailGuarded 0 = 0 | tailGuarded n = tailGuarded (n - 1) handle Div => ~1;
     val tailGuardedResult = tailGuarded 100;")
-  (is (equal '(:tuple 3 13) (sml-value "tailPartial")))
+  (is (equal '(3 13) (cl-sml::sml-tuple->list (sml-value "tailPartial"))))
   (is (equal '(1 2 3) (sml-value "tailThunkValues")))
   (is (= 300 (sml-value "tailShadowed")))
   (is (= 0 (sml-value "tailGuardedResult"))))
@@ -947,14 +947,14 @@
     (is (= (1- (expt 2 62)) (primitive "Word.fromInt" -1)))
     (is (= -1 (primitive "Word.toIntX" (1- (expt 2 62)))))
     (is (= (1- (expt 2 62)) (primitive "Word.notb" 0)))
-    (is (= 0 (primitive "Word.<<" (list :tuple 1 62))))
-    (is (= (expt 2 61) (primitive "Word.<<" (list :tuple 1 61))))
-    (is (= 1 (primitive "Word.>>" (list :tuple (expt 2 61) 61))))
-    (is (= (1- (expt 2 62)) (primitive "Word.~>>" (list :tuple (expt 2 61) 61))))
+    (is (= 0 (primitive "Word.<<" (cl-sml::sml-tuple 1 62))))
+    (is (= (expt 2 61) (primitive "Word.<<" (cl-sml::sml-tuple 1 61))))
+    (is (= 1 (primitive "Word.>>" (cl-sml::sml-tuple (expt 2 61) 61))))
+    (is (= (1- (expt 2 62)) (primitive "Word.~>>" (cl-sml::sml-tuple (expt 2 61) 61))))
     (is (= -1 (primitive "Word8.toIntX" 255)))
     (is (= (1- (expt 2 62)) (primitive "Word8.toLargeX" 255)))
-    (is (= #xfe (primitive "Word8.<<" (list :tuple #xff 1))))
-    (is (= #xc0 (primitive "Word8.~>>" (list :tuple #x80 1))))))
+    (is (= #xfe (primitive "Word8.<<" (cl-sml::sml-tuple #xff 1))))
+    (is (= #xc0 (primitive "Word8.~>>" (cl-sml::sml-tuple #x80 1))))))
 
 (test char-chr-raises-chr-outside-8-bit-codes
   (is (char= (code-char 255) (cl-sml::sml-chr 255)))
@@ -982,7 +982,7 @@
     (is (eql negative-infinity (cl-sml::sml-ln 0d0)))
     (is (eql infinity (cl-sml::sml-exp 1000d0)))
     (is (eql infinity (funcall (cl-sml::sml-basis-primitive "Math.pow")
-                               (list :tuple 10d0 400d0))))
+                               (cl-sml::sml-tuple 10d0 400d0))))
     (is (eql infinity (cl-sml::sml-real (expt 10 400))))
     ;; Comparisons with a NaN are false.
     (is (null (cl-sml::sml-< nan 1d0)))
@@ -992,8 +992,8 @@
     (eval-sml-program "val nanOrdered = let val n = 0.0 / 0.0
                                         in n < 1.0 orelse n >= 1.0 end;")
     (is (null (sml-value "nanOrdered")))
-    (is (null (funcall (cl-sml::sml-basis-primitive "Real.==") (list :tuple nan nan))))
-    (is (eq t (funcall (cl-sml::sml-basis-primitive "Real.?=") (list :tuple nan 1d0))))
+    (is (null (funcall (cl-sml::sml-basis-primitive "Real.==") (cl-sml::sml-tuple nan nan))))
+    (is (eq t (funcall (cl-sml::sml-basis-primitive "Real.?=") (cl-sml::sml-tuple nan 1d0))))
     (is (string= "nan" (cl-sml::sml-real-to-string nan)))
     (flet ((raised (function value)
              (handler-case (progn (funcall (cl-sml::sml-basis-primitive function) value) nil)

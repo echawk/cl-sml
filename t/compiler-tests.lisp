@@ -14,9 +14,7 @@
                                                    :package "SML.COMPILER-TEST"))))
 
 (test compile-record-expression-string-emits-record-constructor
-  (is (equal '(cl-sml::make-sml-record
-               (list (cons "x" 1)
-                     (cons "y" 2)))
+  (is (equal '(vector (load-time-value (cl-sml::sml-record-shape '("x" "y")) t) 1 2)
              (cl-sml:compile-sml-expression-string "{y = 2, x = 1}"
                                                    :package "SML.COMPILER-TEST"))))
 

@@ -110,6 +110,11 @@ the indented continuation lines of long types."
           (= (length value) 2)
           (eq (aref value 0) :ref))
      (format nil "ref ~A" (sml-value->string (aref value 1))))
+    ((sml-tuple-p value)
+     (if (= (length value) 1)
+         "()"
+         (format nil "(~{~A~^, ~})"
+                 (mapcar #'sml-value->string (sml-tuple->list value)))))
     ((sml-record-p value)
      (format nil "{~{~A~^, ~}}"
              (mapcar (lambda (field)
@@ -117,6 +122,10 @@ the indented continuation lines of long types."
                                (car field)
                                (sml-value->string (cdr field))))
                      (sml-record-fields value))))
+    ((sml-flat-constructed-p value)
+     (format nil "~A ~A"
+             (symbol-name (svref value 0))
+             (sml-value->string (sml-flat-constructed-argument value))))
     ((and (consp value) (sml-exception-p value))
      (format nil "~A ~A"
              (sml-exception-name value)
@@ -125,11 +134,6 @@ the indented continuation lines of long types."
      (sml-exception-name value))
     ((eq value t) "true")
     ((null value) "[]")
-    ((and (listp value) (eq (car value) :tuple))
-     (if (null (cdr value))
-         "()"
-         (format nil "(~{~A~^, ~})"
-                 (mapcar #'sml-value->string (cdr value)))))
     ((constructor-value-p value)
      (format nil "~A ~A"
              (symbol-name (car value))

@@ -168,6 +168,14 @@ the native checker knows it: :REAL or NIL."
   (and (native-sml-static-facts-p)
        (funcall 'cl-sml.types:native-node-representation node *sml-static-facts*)))
 
+(defun sml-node-record-labels (node)
+  "The labels, in canonical order, of the record type of `#lab' or flexible
+record pattern NODE, when the native checker knows them all; else NIL."
+  (and (native-sml-static-facts-p)
+       (sort (copy-list (funcall 'cl-sml.types:native-record-labels
+                                 node *sml-static-facts*))
+             #'sml-label<)))
+
 (defun sml-static-structure-members (name)
   "The value members (status . name) of structure NAME bound in the checked
 text, or NIL when unknown."

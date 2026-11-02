@@ -89,6 +89,15 @@ NODE, or NIL."
   (let ((type (native-annotation node :record table)))
     (and type (second (zonk type)))))
 
+(defun native-record-labels (node &optional (table *native-annotations*))
+  "The labels of the record type of `#lab' or flexible record pattern NODE,
+in canonical order, when its row is closed; else NIL."
+  (let ((type (native-annotation node :record table)))
+    (when type
+      (let ((type (zonk type)))
+        (and (null (third type))
+             (mapcar #'car (second type)))))))
+
 (defun native-match-info (node &optional (table *native-annotations*))
   "Whether the match of NODE (fn, case, handle, fun, val binding) is
 exhaustive, and the 0-based indices of its redundant rules."
