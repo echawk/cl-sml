@@ -1008,6 +1008,23 @@ values (tuples, constructors, functions) or to a term to substitute."
                (ir-simplify-let (ir :let (ir-type node) symbol inner-body body) env))))
         ((ir-opaque-p symbol)
          (ir :let (ir-type node) symbol value (ir-simplify-node body env)))
+        ;; let x = (a, b) in c  =>  let t1 = a in let t2 = b in let x = (t1, t2)
+        ;; in c, so that x is known (and destructuring it costs nothing).
+        ((and (eq (ir-kind value) :tuple)
+              (notevery #'ir-trivial-p (third value)))
+         (let* ((temporaries (mapcar (lambda (arg)
+                                       (if (ir-trivial-p arg) arg (ir :var nil (gensym "F"))))
+                                     (third value)))
+                (inner (ir :let (ir-type node) symbol (ir :tuple (ir-type value) temporaries)
+                           body)))
+           (ir-simplify-node
+            (reduce (lambda (pair body)
+                      (if (eq (car pair) (cdr pair))
+                          body
+                          (ir :let nil (third (car pair)) (cdr pair) body)))
+                    (mapcar #'cons temporaries (third value))
+                    :from-end t :initial-value inner)
+            env)))
         ((and (zerop (ir-uses symbol)) (ir-pure-p value))
          (ir-simplify-node body env))
         ((zerop (ir-uses symbol))
@@ -1077,6 +1094,35 @@ values (tuples, constructors, functions) or to a term to substitute."
           (ir-simplify-node (ir-beta (ir-instantiate template) args) env)
           (ir :call (ir-type node) worker args cell)))))
 
+(defun ir-known-tuple-fields (node env)
+  "The fields of the tuple NODE evaluates to, when they are trivial terms
+(see IR-TRIVIAL-P) the simplifier knows, else NIL."
+  (let ((tuple (if (eq (ir-kind node) :var) (gethash (third node) env) node)))
+    (and (consp tuple) (eq (ir-kind tuple) :tuple)
+         (every #'ir-trivial-p (third tuple))
+         (third tuple))))
+
+(defun ir-tuple-pattern-fields (pattern width)
+  "When the compiled PATTERN matches a WIDTH-tuple and binds its fields to
+variables or ignores them (TUPLE-PATTERN-FORM), an alist from field index
+to variable, else NIL."
+  (when (and (consp pattern) (eq (first pattern) 'guard1)
+             (ir-variable-p (second pattern))
+             (equal (third pattern) (vector-width-test (second pattern) (1+ width))))
+    (let ((record (second pattern))
+          (fields nil))
+      (loop for (generator subpattern) on (cdddr pattern) by #'cddr
+            do (unless (and (consp generator) (eq (first generator) 'svref)
+                            (eq (second generator) record)
+                            (integerp (third generator))
+                            (<= 1 (third generator) width)
+                            (ir-variable-p subpattern))
+                 (return-from ir-tuple-pattern-fields nil))
+               (push (cons (third generator) subpattern) fields))
+      ;; An empty alist would read as false: a pattern of wildcards binds a
+      ;; dummy.
+      (or (nreverse fields) (list (cons 1 (gensym "IGNORED")))))))
+
 (defun ir-simplify-match (node env)
   (destructuring-bind (scrutinee branches failure) (cddr node)
     (let* ((scrutinee (ir-simplify-node scrutinee env))
@@ -1087,6 +1133,16 @@ values (tuples, constructors, functions) or to a term to substitute."
          (ir-simplify-node (ir :let (ir-type node) first-pattern scrutinee
                                (second (first branches)))
                            env))
+        ;; A tuple pattern of variables matching a known tuple.
+        ((let ((fields (ir-known-tuple-fields scrutinee env)))
+           (and fields (ir-tuple-pattern-fields first-pattern (length fields))))
+         (let ((fields (ir-known-tuple-fields scrutinee env)))
+           (ir-simplify-node
+            (reduce (lambda (entry body)
+                      (ir :let nil (cdr entry) (nth (1- (car entry)) fields) body))
+                    (ir-tuple-pattern-fields first-pattern (length fields))
+                    :from-end t :initial-value (second (first branches)))
+            env)))
         ((eq first-pattern '_)
          (let ((body (ir-simplify-node (second (first branches)) env)))
            (if (ir-pure-p scrutinee)

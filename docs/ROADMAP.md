@@ -243,7 +243,22 @@ Workshop 2008), so each subterm is tested once, with a `case` on
 constructor tags. First check how much `trivia` already gives after
 items 2 and 10.
 
-### 12. Inlining and simplification (M)
+### 12. Inlining and simplification (M) — done
+
+**Done (2026-11-02), on the IR of item 19 (docs/IR.md):** inlining of
+small non-recursive top-level functions through templates recorded on
+their cells (so a later rebinding of the name, which makes a new cell,
+does not affect code compiled before it; the Basis's templates, such as
+`Int.max`, reach programs), of `let`-bound `fn`s, and of Basis primitives
+(`Word.xorb`, `Word.<<`, `Word.toInt`, `String.sub`, `Char.ord`, ...,
+`not`, `o`); beta reduction; constant folding that never folds an
+operation raising `Overflow`, `Div` or another exception; dropping unused
+pure bindings; `if` on a constant and matches on `true`/`false`.
+`cl-sml:*sml-ir-simplify*` turns it off, `cl-sml:*sml-ir-inline-size*`
+(40 nodes) bounds what is inlined.  Measured: see the table under
+"Measured 2026-11-02".  Not done: case-of-known-constructor for other
+datatypes, and inlining of functions of several clauses.
+
 
 **Do:** inline small Basis functions (`not`, `o`, `!`, `:=`, `fst`) and
 small user functions, beta-reduce `(fn x => e) a`, and drop unused pure
@@ -366,7 +381,21 @@ variables, overloading defaults, and equality types. Output a typed AST
 that the compiler reads in place of `src/static-facts.lisp`. Run HaMLet
 as a differential oracle in the tests.
 
-### 19. A typed IR between the AST and CL (L)
+### 19. A typed IR between the AST and CL (L) — partly done
+
+**Done (2026-11-02):** `src/ir.lisp`, described in docs/IR.md.  Every
+expression is lowered to the IR, simplified (item 12) and emitted as CL,
+in both modes.  Constructs not covered yet (`case` on literals and the
+tuple dispatch, `let` with `datatype`, `exception`, `open`, `local` or
+structures, the clause matching of `fun`) are `(:lisp ...)` nodes holding
+what the former generator, `compile-expr-direct`, makes of them; their
+subexpressions are IR terms again.  Nodes carry the checker's type where it
+records one (identifier occurrences, constants).  `cl-sml:show-sml-ir`
+prints the IR of a binding; `cl-sml:*sml-ir*` set to `nil` compiles
+without it.  Still to do: lower the remaining constructs (then patterns as
+ASTs and decision trees, item 11), types for every node, and moving items
+9, 10 and 15 from lowering into passes.
+
 
 **Do:** add a small typed intermediate language (A-normal form is
 enough) between the typed AST and CL. Move items 9 to 15 onto it as

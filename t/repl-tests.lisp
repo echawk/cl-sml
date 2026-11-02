@@ -153,6 +153,16 @@
     (is (search "(defparameter |replSquare;" output))
     (is (string= "" error-output))))
 
+(test repl-ir-command-shows-the-ir
+  (multiple-value-bind (result output error-output)
+      (run-repl-session-in-package
+       (format nil "fun replInc n = n + 1;~%:ir replInc~%:quit~%")
+       "SML.REPL-IR-TEST")
+    (is (eq :quit result))
+    (is (search ";;; fun replInc" output))
+    (is (search "(:overloaded \"+\" \"int\")" output))
+    (is (string= "" error-output))))
+
 (test repl-lisp-local-command-shows-enclosing-local
   (multiple-value-bind (result output error-output)
       (run-repl-session-in-package

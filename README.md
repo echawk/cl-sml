@@ -167,6 +167,19 @@ compiled, together with the SML file and line it came from:
 (cl-sml:print-sml-lisp (cl-sml:sml->lisp "f 3"))
 ```
 
+Expressions are compiled through a small typed IR (docs/IR.md), which a
+simplifier rewrites first: it inlines small non-recursive top-level
+functions and Basis primitives such as `Word.xorb`, beta-reduces, folds
+constants and drops dead bindings.  `cl-sml:show-sml-ir` prints the IR of a
+binding, as `show-sml-lisp` prints its Lisp:
+
+```lisp
+(cl-sml:show-sml-ir "Foo.bar")              ; simplified IR terms
+(cl-sml:show-sml-ir "Foo.bar" :lowered t)   ; before simplification
+(setf cl-sml:*sml-ir-simplify* nil)         ; compile without the simplifier
+(setf cl-sml:*sml-ir* nil)                  ; compile without the IR
+```
+
 Forms print in the SML package, so SML names appear unqualified (`|bar|`)
 and runtime helpers as `cl-sml::sml-+`.  `sml-lisp-source` includes the
 helper functions hoisted out of large `case` expressions; with
@@ -193,6 +206,7 @@ val square = <fn>
 |---|---|
 | `:lisp NAME` | the Lisp generated for a binding, e.g. `:lisp Foo.bar` |
 | `:lisp-local NAME` | the same, with its enclosing `local` declaration |
+| `:ir NAME` | the IR compiled for a binding (docs/IR.md) |
 | `:expand PHRASE` | the Lisp for an SML phrase, without running it |
 | `:show-lisp on\|off` | print the Lisp of each phrase as it is evaluated |
 | `:time on\|off` | report the time of each compilation phase |
