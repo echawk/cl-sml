@@ -43,6 +43,34 @@ Baseline, measured 2026-10-29 on SBCL: `fib 30` takes 6.0 s and conses
 Use `external/bench/run` and the SML/NJ suite in `external/benchmarks/programs` to measure
 every change below. Keep the result checks stable.
 
+### Measured 2026-11-02
+
+`t/bench/run.lisp` (from the repository root:
+`sbcl --dynamic-space-size 4GB --script t/bench/run.lisp [native|plain]`)
+times six small programs: best of three runs, after compilation, on SBCL
+(arm64, a loaded machine, so differences under about 10% are noise).
+Before is master at d4149d5, after is items 2, 4, 6, 13 and 14 below,
+both with the native checker:
+
+| program | before | after | consed before | consed after |
+|---|---|---|---|---|
+| `fib 30` | 0.009 s | 0.006 s | 0 | 0 |
+| `tak` (20 times `tak (18, 12, 6)`) | 0.011 s | 0.012 s | 81 MB | 81 MB |
+| `real` (200x200 Mandelbrot, real arithmetic) | 1.31 s | 0.60 s | 747 MB | 324 MB |
+| `bst` (binary tree, int `=` and `<`) | 0.43 s | 0.41 s | 973 MB | 973 MB |
+| `eq` (char, string, datatype and int `=`) | 0.20 s | 0.20 s | 972 MB | 972 MB |
+| `word` (Word hash loop) | 0.30 s | 0.28 s | 909 MB | 816 MB |
+
+Plain mode (no checker) is unchanged (`fib 30` 0.047 s, `real` 2.8 s).
+What remains is allocation: tuples as lists (`(list :tuple ...)`) for
+every multi-argument call, boxed doubles inside them, and Basis functions
+such as `Word.xorb` and `String.sub` called through a tuple. Items 9 and
+10 address that, not more arithmetic specialization.
+
+Checks after these changes: SBCL suite 1026 checks, ECL 1025 (one REPL
+check is SBCL-only), Core corpus native 63/63, modules corpus native
+57/57, real world native 95/119 (unchanged; t/realworld/REPORT.md).
+
 ## Easy: local rewrites in the compiler, no types needed
 
 ### 1. Call binary primitives directly (S)
@@ -55,7 +83,12 @@ shadowed, and HaMLet's identifier status agrees when the checker is on),
 emit a two-argument call such as `(sml-add a b)`. Keep the curried
 functions for first-class uses such as `op +` or `foldl (op +)`.
 
-### 2. Test nullary constructors with `eq` (S)
+### 2. Test nullary constructors with `eq` (S) — done
+
+**Done (2026-11-02):** a constructor known at compile time (a datatype
+of the program or of an opened structure) is tested with
+`(eq x 'Leaf)`; constructors resolved only at run time keep the
+`symbol-value` test.
 
 **Today:** the compiler matches `Leaf` with a `boundp` test and a
 `symbol-value` lookup on every test.
@@ -72,7 +105,14 @@ branch, and calls CL `error`, so SML code cannot handle it.
 (or `Bind` for `val`), passing the function name and source position.
 This also closes conformance item 8.
 
-### 4. Bind irrefutable patterns directly (S)
+### 4. Bind irrefutable patterns directly (S) — done
+
+**Done (2026-11-02):** a function of one clause whose patterns are
+variables, wildcards and tuples of them binds its parameters with `let*`
+(reals as doubles when the checker knows the type), with no match and
+no failure branch. Curried functions of several clauses match their
+arguments with `trivia:match*` instead of building a tuple of them. The
+gain on `t/bench` is within noise; `val` and `case` are not changed.
 
 **Today:** every function body goes through `trivia:match`, even for a
 plain variable. `fun curry a b c = ...` builds `(list :tuple a b c)` on
@@ -89,7 +129,12 @@ emit `let` bindings, with no match and no failure branch.
 **Do:** leave out `:unknown` registrations, and emit one `export` per
 compilation unit.
 
-### 6. An explicit optimization policy (S)
+### 6. An explicit optimization policy (S) — done
+
+**Done (2026-11-02):** `cl-sml:*sml-optimize-policy*` is `:default`
+(speed 1, safety 1, debug 1), `:debug` (safety 3, debug 2, tail calls
+still merged) or a list of qualities. Every generated function declares
+it, on every host; nothing is proclaimed. `(speed 3)` measured no faster.
 
 **Do:** declare an `optimize` policy at the top of each emitted artifact.
 Choose it so that SBCL keeps merging tail calls. Make debug builds
@@ -159,7 +204,24 @@ HaMLet: extend `t/hamlet-oracle/hamlet-check.sml` to report types by source
 position, as it already does for overloaded operators. The native
 checker (items 16 to 18) gives them directly later.
 
-### 13. Specialize arithmetic and implement `Overflow` (M)
+### 13. Specialize arithmetic and implement `Overflow` (M) — done
+
+**Done (2026-11-02), with the native checker:** `int` `+ - * ~ abs div`
+are inline fixnum operations with a range check that raises `Overflow`
+(`sml-int-+`, before this session), and `< > <= >=` at `int` have an
+inline fixnum path. `real` operations are `double-float` arithmetic on
+`sml-double` operands, with one trap mask around a whole nested
+expression rather than one per operation, and comparisons are inline
+with explicit NaN tests first (SBCL folds `(>= x y)` to true after
+`(< x y)` is false, which is wrong for NaN; the tests keep it from doing
+so). Real `/` is specialized too. Word operands are declared
+`(unsigned-byte N)`, so SBCL multiplies modulo 2^62 without bignums.
+`Int.precision` is 63 on every Lisp. Plain mode keeps the generic
+operations, which also raise `Overflow` for `int` results.
+`t/semantics-tests.lisp` checks `Overflow` at the boundaries (maxInt + 1,
+minInt - 1, `~minInt`, `abs minInt`, `minInt div ~1`, `*`) in both modes
+and through `compile-file`. Tried and dropped: restoring the float modes
+without `unwind-protect` (no gain).
 
 **Today:** generic `+` is CL `+` on integers. Without the checker, an
 `int` result never overflows: `4611686018427387903 + 1` returns
@@ -172,7 +234,15 @@ all Lisps. With the checker, the compiler already specializes overloaded
 operators; extend that to the case without the checker, and to every
 use.
 
-### 14. Specialize equality (M)
+### 14. Specialize equality (M) — partly done
+
+**Done (2026-11-02):** with the native checker, `=` and `<>` compile to
+`eql` at int, word, char, IntInf and the sized integer and word types,
+to `eq` at refs and at datatypes whose constructors are all nullary
+(bool, order, enumerations), and to `string=` at string
+(`cl-sml.types:native-equality-kind`). Other types, and polymorphic
+`''a`, keep `sml-equal`. Still to do: one equality function per
+datatype, and arrays by `eq`.
 
 **Today:** `=` and `<>` use `equal` at all types (`src/runtime.lisp:857`).
 

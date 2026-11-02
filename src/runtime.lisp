@@ -1129,6 +1129,47 @@ NIL if TYNAME is not a word type."
 (defun sml-real-<= (a b) (and (not (sml-real-unordered-p a b)) (<= a b)))
 (defun sml-real->= (a b) (and (not (sml-real-unordered-p a b)) (>= a b)))
 
+;;; Operations the compiler emits once the static checker has resolved an
+;;; overloaded operator (COMPILE-OVERLOADED-OPERATION).  They tell the CL
+;;; compiler the operands' representation without trusting it: a value
+;;; of another representation is converted (reals) or reduced (words), never
+;;; an error, so they are safe at any optimization policy.
+
+(declaim (inline sml-double))
+(defun sml-double (x)
+  "Real X as a double-float (SML reals are doubles; this only informs the
+CL compiler, and converts the odd rational or single-float from Lisp)."
+  (if (typep x 'double-float) x (coerce x 'double-float)))
+
+(defmacro sml-double-nan-p (x)
+  #+sbcl `(sb-ext:float-nan-p ,x)
+  #-sbcl `(portable-float-nan-p ,x))
+
+(defmacro sml-real-comparison (operator a b)
+  "A and B, reals, compared by OPERATOR; false when either is a NaN.  The
+NaN tests come first and are explicit, so that the comparison itself never
+sees a NaN (it could trap) and SBCL's constraint propagation, which takes
+numbers to be totally ordered, cannot fold a later comparison of the same
+operands (see SML-REAL-<)."
+  (let ((x (gensym "X")) (y (gensym "Y")))
+    `(let ((,x (sml-double ,a)) (,y (sml-double ,b)))
+       (and (not (sml-double-nan-p ,x)) (not (sml-double-nan-p ,y))
+            (,operator ,x ,y)))))
+
+(defmacro sml-word-operand (bits form)
+  "FORM, a value of a BITS-bit word type, declared as one."
+  (let ((v (gensym "W")))
+    `(let ((,v ,form))
+       (if (typep ,v '(unsigned-byte ,bits)) ,v (ldb (byte ,bits 0) ,v)))))
+
+(defmacro sml-int-comparison (operator a b)
+  "A and B, Int.int values, compared by OPERATOR, inline for fixnums."
+  (let ((x (gensym "X")) (y (gensym "Y")))
+    `(let ((,x ,a) (,y ,b))
+       (if (and (typep ,x 'fixnum) (typep ,y 'fixnum))
+           (,operator (the fixnum ,x) (the fixnum ,y))
+           (,operator ,x ,y)))))
+
 (defun sml-ordered-compare (a b)
   "-1, 0 or 1 as A is less than, equal to or greater than B; NIL when they
 are unordered (a NaN is involved)."

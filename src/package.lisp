@@ -17,6 +17,7 @@
            #:lookup-sml-binding-type
            #:sml-type->string
            #:*sml-type-checker*
+           #:*sml-optimize-policy*
            #:type-check-sml-string
            #:with-sml-type-checker
            #:sml-static-type-error
@@ -76,6 +77,8 @@
            #:native-overloaded-instance
            #:native-node-type
            #:native-equality-type
+           #:native-equality-kind
+           #:native-node-representation
            #:native-record-row
            #:native-match-info
            #:type->string))

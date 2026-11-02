@@ -955,7 +955,8 @@ that FORM refers to."
     (if *sml-hoisting-enabled*
         (let ((name (next-hoisted-sml-function-name))
               (parameters (hoisted-function-parameters branch-env body)))
-          (push `(defun ,name ,parameters ,body) *sml-hoisted-forms*)
+          (push `(defun ,name ,parameters ,@(portable-tail-call-declarations) ,body)
+                *sml-hoisted-forms*)
           `(,name ,@parameters))
         body)))
 
@@ -1107,6 +1108,63 @@ are function bodies and case actions that are hoisted out of the function."
     (compile-fn-clauses-of-arity clauses arity local-exceptions function-name
                                  outer-lexical-env)))
 
+;;; A function of one clause whose patterns are variables, wildcards and
+;;; tuples of them cannot fail to match a well-typed argument (ROADMAP item
+;;; 4): its parameters are bound with LET*, without a match or a tuple of
+;;; the curried arguments.
+
+(defun irrefutable-trivia-pattern-bindings (pattern form)
+  "The LET* bindings that match the compiled PATTERN against FORM, a
+variable or an access to one, or :REFUTABLE when PATTERN may fail."
+  (cond
+    ((eq pattern '_) nil)
+    ((and (symbolp pattern) pattern (null (symbol-package pattern)))
+     (list (list pattern form)))
+    ((and (consp pattern) (eq (first pattern) 'list) (eq (second pattern) :tuple))
+     (let ((tuple (gensym "TUPLE"))
+           (bindings nil))
+       (loop for subpattern in (cddr pattern)
+             for index from 1
+             do (let ((inner (irrefutable-trivia-pattern-bindings
+                              subpattern `(nth ,index ,tuple))))
+                  (when (eq inner :refutable)
+                    (return-from irrefutable-trivia-pattern-bindings :refutable))
+                  (setf bindings (append bindings inner))))
+       (and bindings (cons (list tuple form) bindings))))
+    (t :refutable)))
+
+(defun pattern-variable-nodes (tree)
+  "The :PAT-VAR nodes in pattern TREE."
+  (cond ((atom tree) nil)
+        ((eq (car tree) :pat-var) (list tree))
+        (t (loop for sub in tree append (pattern-variable-nodes sub)))))
+
+(defun compile-irrefutable-clause (params body args local-exceptions outer-lexical-env)
+  "BODY with PARAMS, the patterns of a function's only clause, bound to the
+variables ARGS, or NIL when a pattern is refutable."
+  (let* ((var-map (pattern-variable-map (compile-clause-pattern params) local-exceptions))
+         (branch-env (append var-map outer-lexical-env))
+         (bindings
+           (loop for param in params
+                 for arg in args
+                 for inner = (irrefutable-trivia-pattern-bindings
+                              (compile-pat param local-exceptions branch-env) arg)
+                 when (eq inner :refutable)
+                   do (return-from compile-irrefutable-clause nil)
+                 append inner)))
+    ;; Reals are bound as double-floats, so that SBCL keeps them unboxed.
+    (let ((reals (loop for node in (pattern-variable-nodes params)
+                       when (eq (sml-node-representation node) :real)
+                         collect (cdr (assoc (second node) var-map :test #'string=)))))
+      (setf bindings (mapcar (lambda (binding)
+                               (if (member (first binding) reals)
+                                   `(,(first binding) (sml-double ,(second binding)))
+                                   binding))
+                             bindings)))
+    `(let* ,bindings
+       (declare (ignorable ,@(mapcar #'first bindings)))
+       ,(compile-expr body local-exceptions branch-env))))
+
 (defun compile-fn-clauses-of-arity (clauses arity local-exceptions function-name
                                     outer-lexical-env)
   (let* ((tmp-args (loop repeat arity collect (gensym "ARG")))
@@ -1133,20 +1191,30 @@ are function bodies and case actions that are hoisted out of the function."
                          (second clause)))
                    clauses))
          (args (if looping loop-args tmp-args))
-         (scrutinee (if (= arity 1) (first args) `(list :tuple ,@args)))
          (match
-           `(trivia:match ,scrutinee
+           (or
+            (and (null (rest clauses))
+                 (compile-irrefutable-clause (first (first clauses)) (first bodies)
+                                             args local-exceptions outer-lexical-env))
+            ;; Curried arguments are matched as multiple values, without
+            ;; allocating a tuple of them.
+            `(,@(if (= arity 1) `(trivia:match ,(first args)) `(trivia:match* ,args))
               ,@(mapcar (lambda (clause body)
                           (let* ((pat (compile-clause-pattern (first clause)))
                                  (var-map (pattern-variable-map pat local-exceptions))
                                  (branch-env (append var-map outer-lexical-env)))
-                            `(,(compile-pat pat local-exceptions branch-env)
+                            `(,(if (= arity 1)
+                                   (compile-pat pat local-exceptions branch-env)
+                                   (mapcar (lambda (param)
+                                             (compile-pat param local-exceptions branch-env))
+                                           (first clause)))
                               ,(compile-expr body
                                              local-exceptions
                                              branch-env))))
                         clauses bodies)
-              (_ ,(compile-match-failure "Match" (or function-name "fn")
-                                         (first (first clauses)))))))
+              (,(if (= arity 1) '_ (make-list arity :initial-element '_))
+               ,(compile-match-failure "Match" (or function-name "fn")
+                                       (first (first clauses))))))))
     (reduce (lambda (arg body) (sml-lambda-form function-name arg body))
             tmp-args
             :from-end t
@@ -1624,6 +1692,13 @@ also be matched against a tuple."
 	             lexical-ctor)
 	            (lexical-ctor
 	             `(guard1 ,it (eql ,it ,lexical-ctor)))
+            ((and known-ctor
+                  (eq global-ctor known-ctor)
+                  (or (not (boundp known-ctor))
+                      (eq (symbol-value known-ctor) known-ctor)))
+             ;; A nullary constructor's value is its tag, the symbol a
+             ;; datatype declaration binds to itself.
+             `(guard1 ,it (eq ,it ',known-ctor)))
             (known-ctor
              `(guard1 ,it
                       (and (boundp ',global-ctor)
@@ -1733,24 +1808,53 @@ name it is used at (\"int\", \"word\", \"word8\", \"real\", \"char\" or
 integer types (Int32.int, ...) take the generic operations, which check
 Int's range.")
 
+(defun masked-real-form-p (form)
+  (and (consp form)
+       (eq (car form) 'with-portable-float-traps-masked)
+       (= (length form) 2)))
+
+(defun unmasked-real-form (form)
+  "FORM without an outermost WITH-PORTABLE-FLOAT-TRAPS-MASKED: real
+operations nested in one another need only the outermost one, which every
+caller of this puts around the result."
+  (if (masked-real-form-p form) (second form) form))
+
 (defun compile-overloaded-operation (name tyname args)
   "Specialized CL for overloaded identifier NAME used at type TYNAME and
 applied to the compiled ARGS (one for unary, two for binary operators).
 Returns NIL for combinations without a specialization.  At \"intinf\"
-(IntInf.int) the operations are CL's, which never overflow."
+(IntInf.int) the operations are CL's, which never overflow.  Int
+operations raise Overflow (SML-INT-+), real ones are double-float
+arithmetic with IEEE results (no traps), and word ones wrap at the word
+type's size; the operands are declared (SML-DOUBLE, SML-WORD-OPERAND) so
+that SBCL compiles them as machine arithmetic."
   (unless (member tyname *specialized-overloading-instances* :test #'string=)
     (return-from compile-overloaded-operation nil))
-  (let ((bits (sml-word-type-bits tyname))
-        (int-p (string= tyname "int"))
-        (comparison (cdr (assoc name '(("<" . <) (">" . >)
-                                       ("<=" . <=) (">=" . >=))
-                                :test #'string=))))
+  (let* ((original-args args)
+         (bits (sml-word-type-bits tyname))
+         (int-p (string= tyname "int"))
+         (real-p (string= tyname "real"))
+         (comparison (cdr (assoc name '(("<" . <) (">" . >)
+                                        ("<=" . <=) (">=" . >=))
+                                 :test #'string=)))
+         (args (cond (real-p (mapcar (lambda (arg) `(sml-double ,(unmasked-real-form arg)))
+                                     args))
+                     (bits (mapcar (lambda (arg) `(sml-word-operand ,bits ,arg)) args))
+                     (t args))))
     (flet ((wrap (form)
              (cond (bits `(ldb (byte ,bits 0) ,form))
                    ;; IEEE results (infinities, NaNs) rather than traps.
-                   ((string= tyname "real")
-                    `(with-portable-float-traps-masked ,form))
-                   (t form))))
+                   (real-p `(with-portable-float-traps-masked ,form))
+                   (t form)))
+           (remask (form)
+             ;; Real operands lost their own masking above (one is enough
+             ;; around nested operations): restore it around the whole.
+             (if (and form real-p
+                      (not (masked-real-form-p form))
+                      (some #'masked-real-form-p original-args))
+                 `(with-portable-float-traps-masked ,form)
+                 form)))
+     (remask
       (cond
         ((= (length args) 1)
          (let ((x (first args)))
@@ -1758,6 +1862,8 @@ Returns NIL for combinations without a specialization.  At \"intinf\"
              ;; Int arithmetic raises Overflow (see SML-INT-+).
              ((and int-p (string= name "~")) `(sml-int-negate ,x))
              ((and int-p (string= name "abs")) `(sml-int-abs ,x))
+             ;; Negation and abs of a double never trap.
+             ((and real-p (string= name "~")) `(- ,x))
              ((string= name "~") (wrap `(- ,x)))
              ((and (string= name "abs") (not bits)) `(abs ,x)))))
         ((/= (length args) 2) nil)
@@ -1773,10 +1879,8 @@ Returns NIL for combinations without a specialization.  At \"intinf\"
                                               (<= . string<=) (>= . string>=))))
                     ,x ,y)
                    t nil))
-             ((string= tyname "real")
-              `(,(cdr (assoc comparison '((< . sml-real-<) (> . sml-real->)
-                                          (<= . sml-real-<=) (>= . sml-real->=))))
-                ,x ,y))
+             (real-p `(sml-real-comparison ,comparison ,x ,y))
+             (int-p `(sml-int-comparison ,comparison ,x ,y))
              (t `(,comparison ,x ,y)))))
         ((and int-p (member name '("+" "-" "*") :test #'string=))
          `(,(cdr (assoc name '(("+" . sml-int-+) ("-" . sml-int--) ("*" . sml-int-*))
@@ -1785,8 +1889,11 @@ Returns NIL for combinations without a specialization.  At \"intinf\"
         ((member name '("+" "-" "*") :test #'string=)
          (destructuring-bind (x y) args
            (wrap `(,(intern name :cl) ,x ,y))))
+        ((and real-p (string= name "/"))
+         (destructuring-bind (x y) args
+           (wrap `(/ ,x ,y))))
         ((string= name "div") `(,(if int-p 'sml-int-div 'sml-integer-div) ,@args))
-        ((string= name "mod") `(sml-int-mod ,@args))))))
+        ((string= name "mod") `(sml-int-mod ,@args)))))))
 
 (defun compile-overloaded-identifier-value (name tyname)
   "The function value of overloaded identifier NAME at TYNAME, or NIL.  A
@@ -1838,6 +1945,25 @@ the two-argument function to call for its application to a pair."
                  (equal (resolved-sml-symbol (second head) lexical-env)
                         (cdr (assoc (second head) *sml-env* :test #'string=))))
         (cdr primitive)))))
+
+(defun compile-equality-application (ast local-exceptions lexical-env)
+  "`x = y' or `x <> y' at a type the static checker resolved to one whose
+values compare with EQL, EQ or STRING= (SML-EQUALITY-KIND), or NIL."
+  (when (and (consp ast) (eq (car ast) :app)
+             (consp (second ast)) (eq (car (second ast)) :var)
+             (member (second (second ast)) '("=" "<>") :test #'equal)
+             (consp (third ast)) (eq (car (third ast)) :tuple)
+             (= (length (third ast)) 3)
+             (builtin-binary-primitive (second ast) lexical-env))
+    (let ((test (case (sml-equality-kind (second ast))
+                  (:eql 'eql) (:eq 'eq) (:string 'string=))))
+      (when test
+        (let ((form `(,test ,(compile-expr (second (third ast)) local-exceptions lexical-env)
+                            ,(compile-expr (third (third ast)) local-exceptions lexical-env))))
+          (if (string= (second (second ast)) "<>")
+              `(not ,form)
+              ;; STRING= returns a generalized boolean.
+              (if (eq test 'string=) `(if ,form t nil) form)))))))
 
 (defun compile-binary-primitive-application (ast local-exceptions lexical-env)
   "A direct two-argument call for `x op y' (or `op op (x, y)') when OP is an
@@ -1909,6 +2035,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
      (logand +sml-word-mask+ (- (second (third ast)))))
 
     ((compile-overloaded-application ast local-exceptions lexical-env))
+    ((compile-equality-application ast local-exceptions lexical-env))
     ((compile-binary-primitive-application ast local-exceptions lexical-env))
 
     ;; Replace the :app block in compile-expr

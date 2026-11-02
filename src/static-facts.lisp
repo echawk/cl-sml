@@ -155,6 +155,19 @@ parsed text."
 \"string\") at which the overloaded identifier NODE is used, or NIL."
   (sml-node-fact-info node "ov"))
 
+(defun sml-equality-kind (node)
+  "How occurrence NODE of = or <> can compare its operands: :EQL, :EQ,
+:STRING, or NIL for structural equality (CL-SML.TYPES:NATIVE-EQUALITY-KIND).
+Only the native checker records it."
+  (and (native-sml-static-facts-p)
+       (funcall 'cl-sml.types:native-equality-kind node *sml-static-facts*)))
+
+(defun sml-node-representation (node)
+  "The run-time representation of the variable NODE binds or refers to, when
+the native checker knows it: :REAL or NIL."
+  (and (native-sml-static-facts-p)
+       (funcall 'cl-sml.types:native-node-representation node *sml-static-facts*)))
+
 (defun sml-static-structure-members (name)
   "The value members (status . name) of structure NAME bound in the checked
 text, or NIL when unknown."
