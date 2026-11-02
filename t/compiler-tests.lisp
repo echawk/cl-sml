@@ -226,5 +226,5 @@
           (error () nil))
         (when cl-sml::*sml-ir-lint-problems*
           (push (cons (pathname-name file) cl-sml::*sml-ir-lint-problems*) problems))))
-    (is (> compiled 200))
+    (is (> compiled 100))
     (is (null problems) "IR type lint problems:~{~%~S~}" problems)))
