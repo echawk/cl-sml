@@ -88,6 +88,33 @@ REPL check is SBCL-only), Core corpus native 63/63, modules corpus native
 57/57, HOL corpus passes, real world native 95/119 (unchanged;
 t/realworld/REPORT.md).
 
+Items 19 and 12, the IR and its simplifier (before is master at aa1aace;
+docs/IR.md):
+
+| program | before | after | consed before | consed after |
+|---|---|---|---|---|
+| `fib 30` | 0.005 s | 0.005 s | 0 | 0 |
+| `tak` | 0.003 s | 0.003 s | 0 | 0 |
+| `real` | 0.51 s | 0.51 s | 269 MB | 269 MB |
+| `bst` | 0.19 s | 0.18 s | 228 MB | 228 MB |
+| `eq` | 0.11 s | 0.10 s | 177 MB | 96 MB |
+| `word` | 0.17 s | 0.009 s | 672 MB | 0 |
+| `rec` | 0.10 s | 0.09 s | 384 MB | 288 MB |
+
+`word` gains from opening `Word.xorb`, `Word.<<` and `Word.>>` (no tuple,
+no closure call), `eq` from `String.sub`, `rec` from inlining `divmod`
+and destructuring its pair without building it.  Plain mode: `word` 0.20
+s to 0.016 s (765 MB to 0), `eq` 177 MB to 96 MB, `rec` 448 MB to 352 MB,
+the others unchanged.  Compile time: the SBCL suite takes 11.95 s against
+11.8 s (warm caches); loading HaMLet (plain mode, as the tests do) takes
+6.0 s without the IR, 6.0 s with it and 6.4 s with the simplifier.
+`real` is left to unboxed reals and workers for local functions.
+
+Checks after items 19 and 12: SBCL suite 1073 checks, ECL 1072, Core
+corpus native 63/63, modules corpus native 57/57, HOL corpus passes, real
+world native 97/119 (95 before: two programs that timed out now finish;
+the one WRONG is mandelbrot-rat, as before).
+
 ## Easy: local rewrites in the compiler, no types needed
 
 ### 1. Call binary primitives directly (S)
