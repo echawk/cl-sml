@@ -38,9 +38,9 @@ if [ -z "${NORUN:-}" ]; then
     "$R/bin/build-image.sh" >&2 || { echo "image build failed; see $S/build-image.log" >&2; exit 1; }
   fi
   if [ $# -gt 0 ]; then
-    dirs=$(for n in "$@"; do ls -d "$R"/work/*"$n"*/ 2>/dev/null; done | sort -u)
+    dirs=$(for n in "$@"; do ls -d "$S"/work/*"$n"*/ 2>/dev/null; done | sort -u)
   else
-    dirs=$(ls -d "$R"/work/*/)
+    dirs=$(ls -d "$S"/work/*/)
   fi
   for m in $MODES; do for d in $dirs; do
     # SKIP_DONE=1: keep existing results (resume an interrupted run)

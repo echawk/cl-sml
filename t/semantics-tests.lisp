@@ -470,3 +470,42 @@ val _ = b (a = a)"))))
                (run-sml "val _ = print (IntInf.toString (IntInf.pow (IntInf.fromInt 2, 100)) ^ \"\\n\")
 val _ = print ((Int32.toString (Int32.+ (valOf Int32.maxInt, Int32.fromInt 1))) handle Overflow => \"Overflow\\n\")
 val _ = print (Word64.toString (Word64.fromInt ~1) ^ \"\\n\")"))))
+
+(test large-int-is-intinf
+  ;; LargeInt = IntInf (as in Poly/ML and MLton): toLarge never overflows.
+  (is (string= (lines "true" "4611686018427387904" "Overflow" "18446744073709551615"
+                      "4611686018427387904" "1000000000000000000000")
+               (run-sml "fun say s = print (s ^ \"\\n\")
+val big : LargeInt.int = IntInf.pow (2, 62)
+val _ = say (Bool.toString (LargeInt.toString big = IntInf.toString big))
+val _ = say (LargeInt.toString (LargeInt.+ (Int.toLarge (valOf Int.maxInt), 1)))
+val _ = say (Int.toString (Int.fromLarge big) handle Overflow => \"Overflow\")
+val _ = say (IntInf.toString (Word64.toLargeInt (Word64.fromInt ~1)))
+val _ = say (IntInf.toString (Real.toLargeInt IEEEReal.TO_NEAREST 4.611686018427387904E18))
+val _ = say (IntInf.toString (Time.toNanoseconds (Time.fromSeconds (IntInf.pow (10, 12)))))"))))
+
+(test date-structure
+  ;; Date (Basis DATE): calendar, normalisation, fmt, scan, time round trips.
+  (is (string= (lines "Wed Mar 08 19:06:45 1995"
+                      "1995-03-08 19:06:45 Wed Wednesday Mar March 067 10 10 3 PM 07 95 UTC"
+                      "794689605" "Sat Mar 02 01:00:00 2024 61 Sat Mar" "Wed Mar 08 19:06:45 1995"
+                      "LESS EQUAL" "true true" "Wed Dec 31 23:59:59 1969" "NONE")
+               (run-sml "fun say s = print (s ^ \"\\n\")
+val d = Date.fromTimeUniv (Time.fromSeconds 794689605)
+val _ = say (Date.toString d)
+val _ = say (Date.fmt \"%Y-%m-%d %H:%M:%S %a %A %b %B %j %U %W %w %p %I %y %Z\" d)
+val _ = say (IntInf.toString (Time.toSeconds (Date.toTime d)))
+val d2 = Date.date {year = 2024, month = Date.Feb, day = 30, hour = 25, minute = 0,
+                    second = 0, offset = SOME Time.zeroTime}
+val _ = say (Date.toString d2 ^ \" \" ^ Int.toString (Date.yearDay d2) ^ \" \"
+             ^ Date.fmt \"%a\" d2 ^ \" \" ^ (if Date.month d2 = Date.Mar then \"Mar\" else \"?\"))
+val d3 = valOf (Date.fromString \" Wed Mar 08 19:06:45 1995 rest\")
+val _ = say (Date.toString d3)
+fun ord LESS = \"LESS\" | ord EQUAL = \"EQUAL\" | ord GREATER = \"GREATER\"
+val _ = say (ord (Date.compare (d, d2)) ^ \" \" ^ ord (Date.compare (d, d3)))
+val now = Time.fromSeconds (Time.toSeconds (Time.now ()))
+val l = Date.fromTimeLocal now
+val _ = say (Bool.toString (Date.toTime l = now) ^ \" \"
+             ^ Bool.toString (Date.offset l = NONE andalso isSome (Date.isDst l)))
+val _ = say (Date.toString (Date.fromTimeUniv (Time.fromSeconds ~1)))
+val _ = say (case Date.fromString \"Xyz Mar 08 19:06:45 1995\" of NONE => \"NONE\" | SOME _ => \"SOME\")"))))

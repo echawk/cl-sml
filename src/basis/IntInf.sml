@@ -7,10 +7,12 @@
  *   overflow; the overloaded ones (+ etc.) only apply to it unchecked, and
  *   then raise Overflow when both operands are in Int's range and the
  *   result is not (HaMLet's overloading classes do not include it).
- * - LargeInt is Int, so toLarge raises Overflow beyond Int's range.
+ * - LargeInt is IntInf (as in Poly/ML and MLton).  IntInf is loaded before
+ *   INTEGER, so it is first ascribed INT_INF_CORE; LargeInt.sml adds
+ *   toLarge and fromLarge and ascribes INT_INF.
  *)
 
-structure IntInf :> INT_INF =
+structure IntInf :> INT_INF_CORE =
 struct
   type int          = Int.int (* the run time's integers, unbounded *)
 
@@ -18,8 +20,6 @@ struct
   val minInt        = NONE : int option
   val maxInt        = NONE : int option
 
-  val toLarge       = use{b = "IntInf.toLarge"} : int -> LargeInt.int
-  val fromLarge     = use{b = "IntInf.fromLarge"} : LargeInt.int -> int
   val toInt         = use{b = "IntInf.toInt"} : int -> Int.int
   val fromInt       = use{b = "IntInf.fromInt"} : Int.int -> int
 
@@ -41,8 +41,8 @@ struct
   val xorb          = use{b = "IntInf.xorb"} : int * int -> int
   val andb          = use{b = "IntInf.andb"} : int * int -> int
   val notb          = use{b = "IntInf.notb"} : int -> int
-  val <<            = use{b = "IntInf.<<"} : int * Word.word -> int
-  val ~>>           = use{b = "IntInf.~>>"} : int * Word.word -> int
+  val <<            = use{b = "IntInf.<<"} : int * word -> int
+  val ~>>           = use{b = "IntInf.~>>"} : int * word -> int
 
   fun compare(i, j) = if i < j then LESS else if i = j then EQUAL else GREATER
   fun min(i, j)     = if i < j then i else j

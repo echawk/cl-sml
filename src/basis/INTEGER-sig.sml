@@ -4,14 +4,15 @@
  * Standard ML Basis Library
  *)
 
-structure Int      = struct type int = int end
-structure LargeInt = Int
+(* cl-sml: LargeInt is IntInf, whose type is made before INTEGER can
+ * mention it, so INTEGER_CORE is INTEGER without toLarge and fromLarge, and
+ * INTEGER itself is in LargeInt.sml, after IntInf. *)
 
-signature INTEGER =
+structure Int      = struct type int = int end
+
+signature INTEGER_CORE =
 sig
   eqtype int
-  val toLarge : int -> LargeInt.int
-  val fromLarge : LargeInt.int -> int
   val toInt : int -> Int.int
   val fromInt : Int.int -> int
   val precision : Int.int option

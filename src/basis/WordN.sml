@@ -84,9 +84,9 @@ struct
   val toInt         = use{b = "Word64.toInt"} : word -> Int.int
   val toIntX        = use{b = "Word64.toIntX"} : word -> Int.int
   val fromInt       = use{b = "Word64.fromInt"} : Int.int -> word
-  val toLargeInt    = toInt
-  val toLargeIntX   = toIntX
-  val fromLargeInt  = fromInt
+  val toLargeInt    = use{b = "Word64.toLargeInt"} : word -> LargeInt.int
+  val toLargeIntX   = use{b = "Word64.toLargeIntX"} : word -> LargeInt.int
+  val fromLargeInt  = use{b = "Word64.fromLargeInt"} : LargeInt.int -> word
   val fromIntInf    = use{b = "Word64.fromIntInf"} : IntInf.int -> word
 
   val notb          = use{b = "Word64.notb"} : word -> word
@@ -134,9 +134,9 @@ struct
   val toInt         = use{b = "Word32.toInt"} : word -> Int.int
   val toIntX        = use{b = "Word32.toIntX"} : word -> Int.int
   val fromInt       = use{b = "Word32.fromInt"} : Int.int -> word
-  val toLargeInt    = toInt
-  val toLargeIntX   = toIntX
-  val fromLargeInt  = fromInt
+  val toLargeInt    = use{b = "Word32.toLargeInt"} : word -> LargeInt.int
+  val toLargeIntX   = use{b = "Word32.toLargeIntX"} : word -> LargeInt.int
+  val fromLargeInt  = use{b = "Word32.fromLargeInt"} : LargeInt.int -> word
   val fromIntInf    = use{b = "Word32.fromIntInf"} : IntInf.int -> word
 
   val notb          = use{b = "Word32.notb"} : word -> word
@@ -184,9 +184,9 @@ struct
   val toInt         = use{b = "Word16.toInt"} : word -> Int.int
   val toIntX        = use{b = "Word16.toIntX"} : word -> Int.int
   val fromInt       = use{b = "Word16.fromInt"} : Int.int -> word
-  val toLargeInt    = toInt
-  val toLargeIntX   = toIntX
-  val fromLargeInt  = fromInt
+  val toLargeInt    = use{b = "Word16.toLargeInt"} : word -> LargeInt.int
+  val toLargeIntX   = use{b = "Word16.toLargeIntX"} : word -> LargeInt.int
+  val fromLargeInt  = use{b = "Word16.fromLargeInt"} : LargeInt.int -> word
   val fromIntInf    = use{b = "Word16.fromIntInf"} : IntInf.int -> word
 
   val notb          = use{b = "Word16.notb"} : word -> word

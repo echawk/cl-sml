@@ -224,8 +224,27 @@ restriction, match checks and annotations")
   (is (rejects "fun f r = #a r" "flexible record"))
   (is (rejects "fun f {a, ...} = a" "flexible record"))
   (is (binds "fun f (r : {a : int, b : bool}) = #a r" "val f : {a : int, b : bool} -> int"))
-  ;; Resolved by the innermost value declaration, as in HaMLet.
-  (is (rejects "val x = let fun f {a, ...} = a in f {a = 1, b = 2} end" "flexible record")))
+  ;; Never resolved in its top-level declaration.
+  (is (rejects "val l = [#a, #b] val n = 1" "flexible record"))
+  (is (rejects "structure S = struct val f = #a end" "flexible record")))
+
+(test flexible-record-resolved-in-top-level-declaration
+  ;; Poly/ML and MLton resolve a flexible record by the end of the
+  ;; top-level declaration (HaMLet: the innermost value declaration).
+  (is (binds "val x = let fun f {a, ...} = a in f {a = 1, b = 2} end" "val x : int"))
+  ;; HOL's Count.sml: a list of selectors resolved by a later binding.
+  (is (binds "structure S = struct
+                val l = [#ABS, #COMB]
+                fun total (r : {ABS : int, COMB : int, VAR : int}) =
+                  foldl (fn (f, n) => f r + n) 0 l
+              end"
+             "    val l : ({ABS : int, COMB : int, VAR : int} -> int) list"))
+  ;; A type with an unresolved row is not generalised: both uses of f
+  ;; share it, so the field types must agree.
+  (is (rejects "val x = let fun f r = #a r in (f {a = 1, b = 2}, f {a = true, b = 2}) end"
+               "do not agree"))
+  (is (binds "val x = let fun f r = #a r in (f {a = 1, b = 2}, f {a = 3, b = 4}) end"
+             "val x : int * int")))
 
 (test error-escaping-local-datatype
   (is (rejects "val x = let datatype t = A in A end" "escapes"))

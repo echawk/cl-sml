@@ -12,8 +12,11 @@
 ;;;   need be, at the end of the enclosing top-level declaration (HaMLet:
 ;;;   the innermost value declaration).  Overloaded type variables are never
 ;;;   generalised.
-;;; - A flexible record must be resolved by the end of the innermost
-;;;   enclosing value declaration (as HaMLet).
+;;; - A flexible record must be resolved by the end of the enclosing
+;;;   top-level declaration (as Poly/ML and MLton; HaMLet: the innermost
+;;;   value declaration).  A type containing an unresolved row is not
+;;;   generalised at all, so the row and the field types stay shared by
+;;;   every use until the row is resolved.
 ;;; - `let' raises the level, so that the level of a type name tells the
 ;;;   scope of a local datatype; a variable of an outer level cannot be
 ;;;   bound to a type containing it (side condition of rule 4).
@@ -76,7 +79,7 @@ SML-MATCH-WARNINGs (Definition section 4.11).")
 defaulting (Appendix E).")
 
 (defvar *deferred-records* nil
-  "(node . record type) of the flexible records of the current value
+  "(node . record type) of the flexible records of the current top-level
 declaration (Section 4.11, item 1).")
 
 (defvar *deferred-matches* nil
@@ -592,10 +595,32 @@ constructor or exception constructor."
       (loop for (var . sign) in polarity
             when (eq sign :pos) collect var))))
 
+(defun has-open-row-p (type)
+  "Does TYPE contain a record whose row is still an unlinked variable?"
+  (let ((type (repr type)))
+    (and (consp type)
+         (ecase (car type)
+           (:con (some #'has-open-row-p (cddr type)))
+           (:arrow (or (has-open-row-p (second type)) (has-open-row-p (third type))))
+           (:record (multiple-value-bind (fields row) (expand-record type)
+                      (or row (some (lambda (field) (has-open-row-p (cdr field))) fields))))))))
+
+(defun check-flexible-records ()
+  "Further restriction [Section 4.11, item 1]: every flexible record of
+the top-level declaration must be resolved by its end."
+  (loop for (record-node . type) in (reverse *deferred-records*)
+        when (nth-value 1 (expand-record type))
+          do (elab-error record-node "unresolved flexible record type ~A"
+                         (type->string type))))
+
 (defun generalizable-tvars (type outer-level nonexpansive)
   "The variables of TYPE to quantify at a value binding of level
 OUTER-LEVEL: rigid ones by name, then by creation order (as HaMLet's Clos
 and TypeScheme.normalise order them)."
+  (when (has-open-row-p type)
+    ;; An unresolved flexible record: resolved later in the top-level
+    ;; declaration, so nothing in TYPE may be quantified yet.
+    (return-from generalizable-tvars nil))
   (let* ((candidates (remove-if (lambda (var)
                                   (or (<= (tvar-level var) outer-level)
                                       (tvar-overload var)
@@ -681,7 +706,6 @@ bindings ((pat exp)...) and recursive bindings ((name :exp exp ty node) or
            (names (remove-duplicates (append explicit implicit) :test #'string= :from-end t))
            (u (mapcar (lambda (name) (cons name (make-rigid-tvar name))) names))
            (c1 (context-plus-u c u))
-           (*deferred-records* nil)
            (*deferred-matches* nil)
            (bindings nil))              ; (name type nonexpansive-p)
       ;; [Rule 25]
@@ -721,11 +745,6 @@ bindings ((pat exp)...) and recursive bindings ((name :exp exp ty node) or
       (loop for (name . more) on (mapcar #'first bindings)
             when (member name more :test #'string=)
               do (elab-error node "~A is bound twice in one value declaration" name))
-      ;; Further restriction [Section 4.11, item 1]: flexible records.
-      (loop for (record-node . type) in (reverse *deferred-records*)
-            when (nth-value 1 (expand-record type))
-              do (elab-error record-node "unresolved flexible record type ~A"
-                             (type->string type)))
       ;; Closure [Section 4.8]
       (let ((ve (loop for (name type nonexpansive) in bindings
                       collect (let ((type (zonk type)))
@@ -1043,11 +1062,13 @@ program (top-level declarations ended by `;', or the end of the text)."
         (when (and last-node (program-boundary-p (first group)))
           (end-program))
         (let* ((*overloaded* nil)
+               (*deferred-records* nil)
                (*saw-unknown* nil)
                (*level* 0)
                (increment (elab-dec (context-plus-env c env) group)))
           (let ((*position-fallback* (first group)))
-            (resolve-overloading))
+            (resolve-overloading)
+            (check-flexible-records))
           (when *saw-unknown* (setf saw-unknown t))
           (setf env (env-plus env increment)
                 program (env-plus program increment)

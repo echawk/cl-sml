@@ -19,9 +19,9 @@ struct
   val toInt        = use{b = "Word.toInt"} : word -> Int.int
   val toIntX       = use{b = "Word.toIntX"} : word -> Int.int
   val fromInt      = use{b = "Word.fromInt"} : Int.int -> word
-  val toLargeInt   = toInt (* mh, if Int <> LargeInt? *)
-  val toLargeIntX  = toIntX
-  val fromLargeInt = fromInt
+  val toLargeInt   = use{b = "Word.toLargeInt"} : word -> LargeInt.int
+  val toLargeIntX  = use{b = "Word.toLargeIntX"} : word -> LargeInt.int
+  val fromLargeInt = use{b = "Word.fromLargeInt"} : LargeInt.int -> word
 
   open StringCvt
 

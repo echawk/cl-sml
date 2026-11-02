@@ -204,6 +204,9 @@
        "SML.REPL-DISASSEMBLE-TEST")
     (is (eq :quit result))
     (is (search "val replInc = <fn>" output))
+    ;; SBCL only (hence one check fewer on ECL, 92 against 93): ECL's
+    ;; DISASSEMBLE of a function compiled to native code prints no
+    ;; disassembly, only a warning that it has no source code for it.
     #+sbcl (is (search "disassembly" output))
     (is (search "replNumber is not a function" error-output))))
 

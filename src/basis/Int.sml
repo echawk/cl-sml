@@ -12,8 +12,8 @@ struct
   val minInt         = use{b = "Int.minInt"} () : int option
   val maxInt         = use{b = "Int.maxInt"} () : int option
 
-  fun toLarge i      = i
-  fun fromLarge i    = i
+  val toLarge        = use{b = "IntInf.fromInt"} : int -> LargeInt.int
+  val fromLarge      = use{b = "IntInf.toInt"} : LargeInt.int -> int
   fun toInt i        = i
   fun fromInt i      = i
 

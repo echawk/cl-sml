@@ -47,15 +47,15 @@ use "STRING_CVT-sig.sml";
 use "StringCvt.sml";
 
 use "INTEGER-sig.sml";
-use "Int.sml";
+use "INT_INF-sig.sml";      (* cl-sml *)
+use "IntInf.sml";           (* cl-sml *)
 use "LargeInt.sml";
+use "Int.sml";
 use "Position.sml";
 use "WORD-sig.sml";
 use "Word.sml";
 use "Word8.sml";
 use "LargeWord.sml";
-use "INT_INF-sig.sml";      (* cl-sml *)
-use "IntInf.sml";           (* cl-sml *)
 use "IntN.sml";             (* cl-sml: Int64, Int32, Int16, Int8 *)
 use "WordN.sml";            (* cl-sml: Word64, Word32, Word16 *)
 
@@ -114,6 +114,8 @@ use "TIME-sig.sml";         (* cl-sml *)
 use "Time.sml";             (* cl-sml *)
 use "TIMER-sig.sml";        (* cl-sml *)
 use "Timer.sml";            (* cl-sml *)
+use "DATE-sig.sml";         (* cl-sml *)
+use "Date.sml";             (* cl-sml *)
 
 use "OS_FILE_SYS-sig.sml";
 use "OS_PATH-sig.sml";
@@ -127,8 +129,6 @@ use "OS_Process.sml";
 use "OS.sml";
 use "COMMAND_LINE-sig.sml";
 use "CommandLine.sml";
-(*use "DATE-sig.sml";*)
-(*use "Date.sml";*)
 
 use "values.sml";
 

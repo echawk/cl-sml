@@ -1,6 +1,32 @@
 # cl-sml real-world corpus assessment
 
-## Latest numbers (2026-11-01, native checker M3)
+## Latest numbers (2026-11-01, after M3: flexible records, LargeInt, Date)
+
+`MODES=native`, SBCL, 6 jobs, 120 s timeout, on a loaded machine (the
+test suites ran alongside); plain mode was not rerun.
+
+| mode | PASS | CHECKER | PARSE | RUNTIME | TIMEOUT | WRONG |
+|---|---|---|---|---|---|---|
+| native (119) | 95 | 9 | 4 | 3 | 7 | 1 |
+| previous native (M3) | 90 | 13 | 4 | 3 | 9 | – |
+| previous plain / HaMLet-checked | 86 / 62 | | | | | |
+
+New passes: nbody and ln parser_combinator (flexible records now resolve
+at the end of the top-level declaration, as in Poly/ML and MLton), ln
+int-inf-rand and int64 (LargeInt is IntInf). mandelbrot-rat no longer
+times out but prints 4032708 iterations against Poly's 4053935: it
+computes with `Word.~>>` on 31-bit-truncated rationals, and our word
+size (62 bits, Poly 63) differs. The 9 CHECKER results are all not SML97
+or not our Basis: `SMLofNJ.Cont` (cml-sieve, pingpong), `Posix`
+(plclub-ray), `Int54`, `WideString`/`WideChar` (2), `''a`/`'a` in a
+local datatype or without a binding `val` (ln equality, local_datatype;
+Poly rejects both too), barnes-hut (`testit : outstream -> unit`,
+upstream BROKEN).
+
+The harness's `run.sh` and `bin/refs.sh` listed `work/` in the harness
+directory instead of `$RW_STATE`; fixed.
+
+## Numbers after M3 (2026-11-01, native checker)
 
 `MODES="plain native"`, SBCL, 6 jobs, 120 s timeout; `native` is the
 native checker (src/types/), now cl-sml's default; `checked` (HaMLet) was
@@ -15,19 +41,9 @@ not rerun.
 Native passes 9 programs plain mode fails, all of them overloading at
 IntInf (`+` etc. raised Overflow in plain mode: iter-pidigits, pidigits,
 seki-bernoulli, the int-inf-* tests); plain passes 5 that native rejects.
-The 13 CHECKER results:
-
-- Not SML97, or not our Basis (rejected correctly, or blocked on Basis
-  work): `SMLofNJ.Cont` (cml-sieve, pingpong), `Posix` (plclub-ray),
-  `Int54`, `WideString`/`WideChar` (2), `''a`/`'a` in a local datatype or
-  without a binding `val` (ln equality, local_datatype; Poly rejects both
-  too), barnes-hut (`testit : outstream -> unit`, upstream BROKEN).
-- Flexible records resolved only at the innermost value declaration, as
-  HaMLet does, while Poly and SML/NJ look at the whole top-level
-  declaration: nbody, ln parser_combinator.
-- `LargeInt` is `Int` (62 bits) in our Basis, so `LargeInt` constants
-  beyond that are out of range (ln int-inf-rand, int64). With LargeInt =
-  IntInf, as in most implementations, both would check.
+Of the 13 CHECKER results then, four are fixed since (above): flexible
+records (nbody, ln parser_combinator) and LargeInt = Int (ln
+int-inf-rand, int64).
 
 bm-aobench now runs (plain raised Overflow) but times out; ratio-regions
 takes about 42 s in both modes alone and timed out once under load.
