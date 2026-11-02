@@ -144,7 +144,10 @@ val six = AddThree.addY 3;"
       (is (or (null symbol) (not (boundp symbol)))))
     (is (null (sml-lisp-source "notEvaluated" :package package)))
     (is (equal '(cl-sml::sml-int-+ 1 2)
-               (sml->lisp "1 + 2" :package package)))
+               (let ((cl-sml::*sml-ir-simplify* nil))
+                 (sml->lisp "1 + 2" :package package))))
+    ;; The IR simplifier folds constants (docs/IR.md).
+    (is (eql 3 (sml->lisp "1 + 2" :package package)))
     (is (equal '(cl-sml::sml-+ 1 2)
                (sml->lisp "1 + 2" :package package :type-checker nil)))
     (is (equal (sml->lisp "1 + 2" :package package)

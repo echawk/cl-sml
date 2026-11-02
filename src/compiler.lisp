@@ -415,6 +415,14 @@ bound to TARGET-NAME, when the argument is not a structure identifier."
                (member (car entry) names :test #'string=))
              env))
 
+(defvar *sml-ir* t
+  "When true, expressions are compiled through the IR; when NIL, directly
+from the AST by COMPILE-EXPR-DIRECT, as before the IR.")
+
+(defvar *sml-ir-simplify* t
+  "When true, the IR is simplified (inlining, beta reduction, constant
+folding, dead-binding elimination, known cases) before CL is emitted.")
+
 (defvar *sml-tupled-workers* t
   "Compile a top-level `fun' whose parameter is a tuple pattern as a
 function of the tuple's fields plus a wrapper, and its calls with a tuple
@@ -1746,6 +1754,7 @@ names LEXICAL-ENV binds, which they shadow."
               (cell (new-sml-binding-cell (second pat))))
          `(progn
             (defparameter ,cell ,compiled-expr)
+            ,@(ir-note-basis-primitive cell expr)
             ,@(compile-binding-publication cell expr-type))))
       ((eq pat :wild)
        (compile-expr expr local-exceptions lexical-env))
@@ -2181,7 +2190,15 @@ gives the record's labels, else a lookup by label."
         `(sml-record-ref ,form ,label))))
 
 (defun compile-expr (ast &optional local-exceptions lexical-env)
-  "Compiles an SML expression AST into a Common Lisp form."
+  "Compiles an SML expression AST into a Common Lisp form: through the IR
+(src/ir.lisp), unless *SML-IR* is false or applications are debugged."
+  (if (and *sml-ir* (not *sml-debug-applications*))
+      (ir-compile-expression ast local-exceptions lexical-env)
+      (compile-expr-direct ast local-exceptions lexical-env)))
+
+(defun compile-expr-direct (ast &optional local-exceptions lexical-env)
+  "Compiles an SML expression AST directly into a Common Lisp form; its
+subexpressions go through COMPILE-EXPR."
   (cond
     ((numberp ast) ast)
     ((stringp ast) ast)
@@ -2463,6 +2480,7 @@ calls it with the fields of its argument."
          ,(sml-lambda-form (second ast) tuple
                            `(,worker ,@(loop for i from 1 to arity
                                              collect `(svref ,tuple ,i)))))
+       ,@(ir-note-inline-template ast cell arity local-exceptions lexical-env)
        ,@(compile-binding-publication cell :unknown))))
 
 (defun compile-curried-top-level-fun (ast cell local-exceptions lexical-env)
@@ -2480,6 +2498,7 @@ calls it with the fields of its argument."
                                                   (acons (second ast)
                                                          cell
                                                          lexical-env))))
+       ,@(ir-note-inline-template ast cell nil local-exceptions lexical-env)
        ,@(compile-binding-publication cell fun-type))))
 
 (defun compile-decl (ast &optional local-exceptions lexical-env)
