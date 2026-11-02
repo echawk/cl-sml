@@ -322,7 +322,10 @@ pass, emit CL declarations from the inferred types (`fixnum`,
 `double-float`, `simple-vector`) so that SBCL can generate native
 arithmetic and keep floats unboxed.
 
-### 16. Exhaustiveness and redundancy checks (M)
+### 16. Exhaustiveness and redundancy checks (M) — done
+
+**Done (2026-11-01):** the native checker warns about non-exhaustive and
+redundant matches (Maranget's usefulness algorithm, `src/types/check-pattern.lisp`).
 
 This needs the datatype of each scrutinee, from HaMLet or from item 18.
 
@@ -336,7 +339,9 @@ match is exhaustive. Use the usefulness algorithm from Maranget,
 The design is in `todo-sml-conformance.md`, item 0. The order and the
 prerequisites are below.
 
-### 17. A real front end (L)
+### 17. A real front end (L) — done
+
+**Done (2026-10-30):** `src/lexer.lisp` and `src/parser.lisp`.
 
 **Today:** the parser keeps types as text, skips signature bodies, and
 skips structure headers by scanning characters
@@ -350,7 +355,9 @@ Test it against HaMLet's parser: on every corpus file, both must accept
 or reject the same programs. This also closes conformance items 1 to 5.
 Every item below needs this one.
 
-### 18. Core elaboration (L)
+### 18. Core elaboration (L) — done
+
+**Done (2026-11-01):** `src/types/elab-core.lisp`; see docs/DESIGN-TYPECHECKER.md (M1).
 
 **Do:** implement items 0.1, 0.2 and 0.4 of `todo-sml-conformance.md`:
 unification with levels, let-polymorphism and the value restriction,
@@ -365,7 +372,11 @@ as a differential oracle in the tests.
 enough) between the typed AST and CL. Move items 9 to 15 onto it as
 separate passes, so that they compose and can be tested one at a time.
 
-### 20. Modules elaboration (XL)
+### 20. Modules elaboration (XL) — done
+
+**Done (2026-11-01):** `src/types/elab-module.lisp` and `sig.lisp`; the
+native checker elaborates our Basis and is the default front end
+(docs/DESIGN-TYPECHECKER.md, M2 and M3).
 
 **Do:** implement item 0.3 of `todo-sml-conformance.md`: signatures,
 realisations, enrichment and signature matching, transparent and opaque
