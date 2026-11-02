@@ -14,9 +14,8 @@
 ;;; In load order: the HOL sources (portableML, Holmake's file system layer,
 ;;; prekernel, src/0) that the checker accepts, each after its dependencies.
 ;;; t/testdata/hol-shims/ stands in for Poly/ML structures and for HOL's
-;;; configuration.  The kernel proper is blocked (docs/TODO.md): Lib needs
-;;; the Basis's Date, and Count resolves a flexible record after the value
-;;; declaration that makes it.
+;;; configuration.  This reaches the kernel: src/0 (KernelTypes, Type,
+;;; Term, Net) and src/thm (Compute, Thm), which the checks below exercise.
 (defparameter *sources*
   '("t/testdata/hol-shims/FixedInt.sml"
     "HOL/src/portableML/mosml/PrettyImpl.sml"
@@ -165,7 +164,29 @@
     "HOL/src/prekernel/Coding.sml"
     "HOL/src/prekernel/Context.sig"
     "HOL/src/prekernel/FinalContext-sig.sml"
-    "HOL/src/prekernel/KNametab.sml"))
+    "HOL/src/prekernel/KNametab.sml"
+    "HOL/src/prekernel/Lib.sml"
+    "HOL/src/prekernel/Count.sml"
+    "HOL/src/prekernel/Dep.sml"
+    "HOL/src/prekernel/FinalTag-sig.sml"
+    "HOL/src/prekernel/Tag.sig"
+    "HOL/src/prekernel/Tag.sml"
+    "HOL/src/prekernel/Lexis.sml"
+    "HOL/src/prekernel/Context.sml"
+    "HOL/src/prekernel/FinalType-sig.sml"
+    "HOL/src/prekernel/FinalTerm-sig.sml"
+    "HOL/src/prekernel/FinalThm-sig.sml"
+    "HOL/src/0/KernelTypes.sml"
+    "HOL/src/0/Type.sig"
+    "HOL/src/0/Type.sml"
+    "HOL/src/0/Term.sig"
+    "HOL/src/0/Term.sml"
+    "HOL/src/0/Net.sig"
+    "HOL/src/0/Net.sml"
+    "HOL/src/thm/Compute.sig"
+    "HOL/src/thm/Compute.sml"
+    "HOL/src/thm/std-thmsig.ML"
+    "HOL/src/thm/std-thm.ML"))
 
 ;;; SML programs run against the loaded corpus: (name source expected).
 (defparameter *checks*
@@ -192,7 +213,20 @@
      42)
     ("holppString"
      "val holppString = HOLPP.pp_to_string 70 HOLPP.add_string \"pretty\";"
-     "pretty")))
+     "pretty")
+    ;; The kernel: types, terms and a theorem.
+    ("funType"
+     "val funType = #1 (Type.dest_type (Type.--> (Type.alpha, Type.mk_vartype \"'b\")));"
+     "fun")
+    ("varName"
+     "val varName = #1 (Term.dest_var (Term.mk_var (\"x\", Type.alpha)));"
+     "x")
+    ("absAconv"
+     "val absAconv = let val x = Term.mk_var (\"x\", Type.alpha) val y = Term.mk_var (\"y\", Type.alpha) in Term.aconv (Term.mk_abs (x, x)) (Term.mk_abs (y, y)) end;"
+     t)
+    ("reflTheorem"
+     "val reflTheorem = let val x = Term.mk_var (\"x\", Type.alpha) val th = Thm.REFL x val (l, r) = Term.dest_eq (Thm.concl th) in Int.toString (length (Thm.hyp th)) ^ Bool.toString (Term.aconv l r) ^ Type.dest_vartype (Term.type_of l) end;"
+     "0true'a")))
 
 (unless (probe-file #P"HOL/README.md")
   (error "HOL checkout is not available at ./HOL; run `git submodule update --init HOL`."))

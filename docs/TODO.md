@@ -9,17 +9,12 @@
     REPL.  Known gaps: basis library is re-elaborated on every start (~6s),
     and `sml-primitive-stub`s remain for rarely used primitives.
   - [ ] Load and run representative programs from `HOL/`.  `scripts/test-hol`
-    loads 148 portableML, Holmake hfs, prekernel and src/0 sources (with
-    shims in `t/testdata/hol-shims/`), checked by the native checker
-    (`t/hol-corpus.lisp`), including Portable, Globals, Feedback, KernelSig
-    and Type_dtype.  Next blockers:
-    - `Lib.sml` needs the Basis's `Date` structure (missing); Lib blocks
-      Dep, Tag, Lexis, Context, the Final*-sig files and all of src/0
-      (Type, Term, Net, KernelTypes).
-    - `Count.sml`: `val l = [#ABS, ...]` is a flexible record resolved
-      only by later declarations; the native checker (like HaMLet) wants
-      it resolved by the end of the value declaration, Poly/ML and MLton
-      by the end of the top-level declaration.
+    loads 170 portableML, Holmake hfs, prekernel, src/0 and src/thm
+    sources (with shims in `t/testdata/hol-shims/`), checked by the native
+    checker (`t/hol-corpus.lisp`): everything up to the kernel, Lib, Count,
+    Dep, Tag, Lexis, Context, KernelTypes, Type, Term, Net, Compute and Thm
+    (std-thm), and runs checks that build types, terms and a theorem
+    (`REFL`).  Next: `src/thm/Overlay.sml`, then `src/1` onwards.
     - Not attempted: HOLsexp_parser (ML-Yacc output), SHA1 (SHA1_ML),
       holpathdb (TOML), tools-poly Help/Mosml/quse (Poly/ML specific).
 - [ ] Replace shallow module handling with explicit module/signature
