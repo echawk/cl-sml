@@ -166,6 +166,10 @@ M3 as built:
   (ascribed `INT_INF_CORE`, INT_INF without toLarge/fromLarge), then
   `LargeInt.sml` defines INTEGER and INT_INF and completes IntInf.
   `Int.toLarge`, `Word*.toLargeInt` and `Real.toLargeInt` never overflow.
+- Numbers after these (2026-11-01, SBCL): Core corpus native 63/63,
+  modules corpus native 57/57 (`b18_time_timer` fixed by LargeInt =
+  IntInf), real world native 95/119 (t/realworld/REPORT.md); HOL loads
+  through the kernel (Thm).
 - Left open: type errors between two type names printed alike (`int` and
   `IntInf.int`) show the same name twice.
 
