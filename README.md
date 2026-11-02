@@ -122,9 +122,31 @@ blocks.  Turn the syntax on for the rest of a file with
   later blocks know their constructors, structures and fixity.  SML errors
   are reported with the Lisp file's name and line.
 - Values are cl-sml's runtime values: integers, reals (double floats),
-  strings, chars, `t`/`nil` for booleans, Lisp lists for lists, `(:tuple
-  a b)` for tuples, `(:record ("a" . 1) ...)` for records.  SML functions
-  are Lisp functions of one argument (curried functions return functions).
+  strings, chars, `t`/`nil` for booleans, Lisp lists for lists, Lisp
+  vectors for SML vectors.  SML functions are Lisp functions of one
+  argument (curried functions return functions).  Tuples and records are
+  simple-vectors whose slot 0 describes their labels; build and take them
+  apart with the functions below rather than by hand:
+
+  | Function | |
+  |---|---|
+  | `(sml-tuple a b ...)` | the tuple `(a, b, ...)`; `(sml-tuple)` is `()` |
+  | `(sml-unit)` | `()`, the one value of type `unit` |
+  | `(sml-tuple-ref tuple i)` | field `#i` (1-based) |
+  | `(sml-tuple->list tuple)`, `(list->sml-tuple list)` | conversions |
+  | `(make-sml-record '(("a" . 1) ("b" . 2)))` | the record `{a = 1, b = 2}`; labels are strings (or integers), in any order |
+  | `(sml-record-ref record "a")` | field `#a` |
+  | `(sml-record-fields record)`, `(sml-record-labels record)` | the record as an alist, its labels |
+  | `(sml-tuple-p x)`, `(sml-record-p x)` | tuples and the unit are records too |
+  | `(sml-constructed-tag x)`, `(sml-constructed-argument x)` | for `C v`, the symbol tagging `C`'s values and `v` |
+
+  A tuple is the record with labels `1`, ..., `n`: `(sml-tuple 1 2)` is
+  `{1 = 1, 2 = 2}`, and field `i` of a tuple is `(svref tuple i)`.  A
+  nullary constructor is a symbol (`NONE` is the symbol `|NONE|` of the
+  `SML.BASIS` package); `SOME 1` and other constructed values are opaque
+  objects, so use `sml-constructed-tag` and `sml-constructed-argument`, or
+  build them with the constructor's SML value, e.g.
+  `(funcall (cl-sml:sml-value "SOME") 1)`.
 
 `examples/embedded-sml.lisp` shows it all.
 

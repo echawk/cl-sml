@@ -224,14 +224,15 @@
 
 (test hamlet-infix-application-of-pair-operands
   ;; With pair operands, the curried call was mistaken for a tuple call.
-  (is (equal '(:tuple t 6)
-             (checked-value "structure PairOps = struct
+  (is (equal '(t 6)
+             (cl-sml::sml-tuple->list
+              (checked-value "structure PairOps = struct
                                fun ((true, n1) + (true, n2)) = (true, n1 * n2)
                                  | ((x, n1) + (y, n2)) = (false, 0)
                                fun i - j = i + j
                              end;
                              val pairOpsResult = PairOps.- ((true, 2), (true, 3));"
-                            "pairOpsResult"))))
+                            "pairOpsResult")))))
 
 (test hamlet-keeps-one-session-per-package
   (compile-checked "val sessionOnlyInA = 1;" "SML.HAMLET-SESSION-A")

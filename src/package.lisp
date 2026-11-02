@@ -4,6 +4,19 @@
            #:enable-sml-syntax
            #:sml-adt
            #:make-sml-adt
+           #:sml-unit
+           #:sml-tuple
+           #:sml-tuple-p
+           #:sml-tuple-ref
+           #:sml-tuple->list
+           #:list->sml-tuple
+           #:make-sml-record
+           #:sml-record-p
+           #:sml-record-ref
+           #:sml-record-labels
+           #:sml-record-fields
+           #:sml-constructed-tag
+           #:sml-constructed-argument
            #:compile-sml-expression-string
            #:compile-sml-declarations-string
            #:compile-sml-program-string
@@ -80,5 +93,6 @@
            #:native-equality-kind
            #:native-node-representation
            #:native-record-row
+           #:native-record-labels
            #:native-match-info
            #:type->string))

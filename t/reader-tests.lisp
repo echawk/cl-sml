@@ -95,9 +95,13 @@
              (write-string "(in-package #:cl-sml-reader-tests)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf *readtable* (cl-sml:enable-sml-syntax (copy-readtable))))
-#@sml{ datatype reader_u = RU of int
-   fun reader_unwrap (RU n) = n }#
-(defun reader-file-test (k) #@sml{ reader_unwrap (RU ($k : int)) * 2 }#)
+#@sml{ datatype reader_u = RU of int | RP of int * int
+   fun reader_unwrap (RU n) = n | reader_unwrap (RP (a, b)) = a + b
+   fun reader_field ({a, ...} : {a : int, b : bool}) = a }#
+(defun reader-file-test (k)
+  #@sml{ reader_unwrap (RU ($k : int)) * 2
+         + reader_unwrap (RP (1, 2)) - #b {a = 1, b = 3}
+         + reader_field {b = true, a = 0} }#)
 " out))
            (setf fasl (let ((*standard-output* (make-broadcast-stream))
                             (*error-output* (make-broadcast-stream)))
@@ -107,3 +111,30 @@
            (is (= 42 (funcall 'reader-file-test 21))))
       (when (and fasl (probe-file fasl)) (delete-file fasl))
       (delete-file path))))
+
+(test tuples-and-records-cross-the-boundary
+  ;; Tuples and records built in Lisp go into SML, and SML's come out.
+  (is (= 5 (eval-with-sml "#@sml{ (fn (x, y) => x + y) $(cl-sml:sml-tuple 2 3) }#")))
+  (is (equal '(1 "a")
+             (sml-tuple->list (eval-with-sml "#@sml{ (1, \"a\") }#"))))
+  (is (= 7 (eval-with-sml
+            "#@sml{ #b ($(cl-sml:make-sml-record '((\"b\" . 7) (\"a\" . 1))) : {a : int, b : int}) }#")))
+  (let ((record (eval-with-sml "#@sml{ {name = \"x\", size = 2} }#")))
+    (is (sml-record-p record))
+    (is (not (sml-tuple-p record)))
+    (is (equal "x" (sml-record-ref record "name")))
+    (is (equal '("name" "size") (sml-record-labels record)))
+    (is (equal '(("name" . "x") ("size" . 2)) (sml-record-fields record))))
+  (let ((pair (sml-tuple 10 20)))
+    (is (sml-tuple-p pair))
+    (is (= 20 (sml-tuple-ref pair 2)))
+    (is (= 10 (sml-record-ref pair 1)))
+    (is (= 10 (svref pair 1)))
+    (is (eq (sml-unit) (sml-tuple)))
+    (is (equal '(10 20) (sml-tuple->list (list->sml-tuple '(10 20))))))
+  ;; `{1 = a, 2 = b}' is the pair `(a, b)'.
+  (is (eq t (eval-with-sml "#@sml{ {1 = 3, 2 = 4} = (3, 4) }#")))
+  ;; Constructed values.
+  (let ((value (eval-with-sml "#@sml{ SOME (1, 2) }#")))
+    (is (string= "SOME" (symbol-name (sml-constructed-tag value))))
+    (is (equal '(1 2) (sml-tuple->list (sml-constructed-argument value))))))

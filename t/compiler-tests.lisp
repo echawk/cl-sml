@@ -14,9 +14,7 @@
                                                    :package "SML.COMPILER-TEST"))))
 
 (test compile-record-expression-string-emits-record-constructor
-  (is (equal '(cl-sml::make-sml-record
-               (list (cons "x" 1)
-                     (cons "y" 2)))
+  (is (equal '(vector (load-time-value (cl-sml::sml-record-shape '("x" "y")) t) 1 2)
              (cl-sml:compile-sml-expression-string "{y = 2, x = 1}"
                                                    :package "SML.COMPILER-TEST"))))
 
@@ -102,6 +100,28 @@
       (is (search "TAGBODY" looping))
       (is (search "(GO " looping))
       (is (not (search "TAGBODY" recursive))))))
+
+(test tuple-taking-functions-get-a-worker
+  ;; ROADMAP item 9: `fun f (x, y)' is a two-argument worker plus a
+  ;; wrapper; a call with a tuple expression calls the worker, and a
+  ;; self tail call through a tuple is a jump.
+  (let* ((package "SML.COMPILER-WORKER-TEST")
+         (form (cl-sml:compile-sml-program-string
+                "fun sumTo (0, acc) = acc | sumTo (n, acc) = sumTo (n - 1, acc + n);
+                 fun swap (a, b) = (b, a);
+                 val viaWorker = sumTo (100000, 0);
+                 val p = (3, 4);
+                 val viaWrapper = sumTo p;
+                 val mapped = map swap [(1, 2), (3, 4)];"
+                :package package))
+         (printed (write-to-string form :pretty nil)))
+    (is (search "sumTo;1/2" printed))
+    (is (search "TAGBODY" printed))
+    (eval form)
+    (is (= 5000050000 (cl-sml:sml-value "viaWorker" package)))
+    (is (= 10 (cl-sml:sml-value "viaWrapper" package)))
+    (is (equal '((2 1) (4 3))
+               (mapcar #'cl-sml:sml-tuple->list (cl-sml:sml-value "mapped" package))))))
 
 (test compile-large-tuple-case-hoists-branch-actions
   (let* ((source

@@ -428,7 +428,11 @@ names the instance's datatype constructors."
   "The tag of the values of datatype constructor NAME (qualified by the
 structures it is declared in, relative to the functor body) of the functor
 instance INSTANCE-NAME: each instance has constructors of its own."
-  (sml-symbol-in-package-name (format nil "~A.~A" instance-name name) package-name))
+  (let ((tag (sml-symbol-in-package-name (format nil "~A.~A" instance-name name)
+                                         package-name)))
+    ;; Their values are (tag . argument) (SML-CONSTRUCTOR-ARITY).
+    (setf (get tag 'sml-constructor-arity) 0)
+    tag))
 
 (defun make-sml-instance-constructor (tag)
   "The function that builds the values of a functor instance's datatype
@@ -859,46 +863,233 @@ package sees), or signal an unbound error."
              (sml-type->string (third type))))
     (t (princ-to-string type))))
 
-(defun sort-sml-record-fields (fields)
-  (sort (copy-list fields) #'string< :key #'car))
+;;; Records and tuples (docs/ROADMAP.md items 10 and 15).  A record is a
+;;; simple-vector whose slot 0 is its shape, an SML-RECORD-SHAPE naming its
+;;; labels, and whose slots 1, ..., n hold its fields in canonical label
+;;; order: numeric labels in numeric order, then the others in STRING<
+;;; order.  A tuple is the record with labels 1, ..., n, so field i of a
+;;; tuple is at index i, and `{1 = a, 2 = b}' is the same value as `(a, b)'.
+;;; Shapes are interned, so values of one record type share their shape.
+;;; The unit is the record with no fields, one object (SML-UNIT).
+;;;
+;;; The shape lets code that does not know a record's type find a field by
+;;; its label (SML-RECORD-REF): plain mode does so for `#lab' and flexible
+;;; record patterns, whose full label set it does not know.  With the native
+;;; checker, and for tuples and non-flexible record patterns, the compiler
+;;; computes the index and uses SVREF.
 
-(defun make-sml-record (fields)
-  (cons :record (sort-sml-record-fields fields)))
+(defstruct (sml-record-shape (:constructor %make-sml-record-shape (labels))
+                             (:copier nil))
+  (labels #() :type simple-vector :read-only t))
+
+(defmethod print-object ((shape sml-record-shape) stream)
+  (print-unreadable-object (shape stream :type t)
+    (format stream "~{~A~^ ~}" (coerce (sml-record-shape-labels shape) 'list))))
+
+(defun sml-numeric-label-p (label)
+  (and (plusp (length label))
+       (every #'digit-char-p label)
+       (char/= (char label 0) #\0)))
+
+(defun sml-label< (a b)
+  "SML's canonical order of record labels: numeric labels first, in numeric
+order, then alphanumeric ones."
+  (let ((na (sml-numeric-label-p a))
+        (nb (sml-numeric-label-p b)))
+    (cond ((and na nb) (< (parse-integer a) (parse-integer b)))
+          (na t)
+          (nb nil)
+          (t (string< a b)))))
+
+(defun sml-label-string (label)
+  (if (integerp label) (princ-to-string label) (string label)))
+
+(defun sort-sml-record-fields (fields)
+  "FIELDS, an alist from labels, in canonical label order."
+  (sort (copy-list fields) #'sml-label< :key #'car))
+
+(defvar *sml-record-shapes* (make-hash-table :test #'equal)
+  "Interned record shapes, by their list of labels.")
+
+(defun sml-record-shape (labels)
+  "The interned shape of the records with LABELS (strings, any order)."
+  (let ((labels (sort (mapcar #'sml-label-string labels) #'sml-label<)))
+    (or (gethash labels *sml-record-shapes*)
+        (setf (gethash labels *sml-record-shapes*)
+              (%make-sml-record-shape (coerce labels 'simple-vector))))))
+
+(defmethod make-load-form ((shape sml-record-shape) &optional environment)
+  (declare (ignore environment))
+  `(sml-record-shape ',(coerce (sml-record-shape-labels shape) 'list)))
+
+(defvar *sml-tuple-shapes* (make-array 16 :initial-element nil :adjustable t))
+
+(defun sml-tuple-shape (n)
+  "The shape of N-tuples."
+  (when (>= n (length *sml-tuple-shapes*))
+    (adjust-array *sml-tuple-shapes* (* 2 (1+ n)) :initial-element nil))
+  (or (aref *sml-tuple-shapes* n)
+      (setf (aref *sml-tuple-shapes* n)
+            (sml-record-shape (loop for i from 1 to n collect i)))))
+
+(defvar *sml-unit* (vector (sml-tuple-shape 0)))
+
+(declaim (inline sml-unit))
+(defun sml-unit ()
+  "The unit value, ()."
+  *sml-unit*)
+
+(defun sml-tuple (&rest fields)
+  "The SML tuple of FIELDS (the unit when there are none)."
+  (if fields
+      (apply #'vector (sml-tuple-shape (length fields)) fields)
+      *sml-unit*))
+
+(define-compiler-macro sml-tuple (&rest fields)
+  (if fields
+      `(vector (load-time-value (sml-tuple-shape ,(length fields)) t) ,@fields)
+      '(sml-unit)))
 
 (defun sml-record-p (value)
-  (and (consp value)
-       (eq (car value) :record)))
+  "Is VALUE an SML record?  Tuples and the unit are records."
+  (and (simple-vector-p value)
+       (plusp (length value))
+       (sml-record-shape-p (svref value 0))))
+
+(defun sml-tuple-p (value)
+  "Is VALUE an SML tuple: a record whose labels are 1, ..., n, n /= 1?"
+  (and (sml-record-p value)
+       (let ((labels (sml-record-shape-labels (svref value 0))))
+         (and (/= (length labels) 1)
+              (eq (svref value 0) (sml-tuple-shape (length labels)))))))
 
 (defun sml-record-or-tuple-p (value)
-  "Can VALUE be the value of a record type?  Tuples (and the unit) are the
-records whose labels are 1, ..., n."
-  (and (consp value)
-       (or (eq (car value) :record)
-           (eq (car value) :tuple))))
+  (sml-record-p value))
+
+(defun sml-record-labels (record)
+  "The labels of RECORD, in canonical order."
+  (coerce (sml-record-shape-labels (svref record 0)) 'list))
 
 (defun sml-record-fields (record)
-  (if (sml-record-p record)
-      (cdr record)
-      (error "Expected SML record, got ~S" record)))
+  "RECORD as an alist from labels to values, in canonical label order."
+  (unless (sml-record-p record)
+    (error "Expected SML record, got ~S" record))
+  (loop for label across (sml-record-shape-labels (svref record 0))
+        for i from 1
+        collect (cons label (svref record i))))
+
+(defun make-sml-record (fields)
+  "The SML record with FIELDS, an alist from labels (strings, or integers
+for numeric labels) to values, in any order."
+  (let ((sorted (sort (mapcar (lambda (field)
+                                (cons (sml-label-string (car field)) (cdr field)))
+                              fields)
+                      #'sml-label< :key #'car)))
+    (apply #'vector (sml-record-shape (mapcar #'car sorted)) (mapcar #'cdr sorted))))
+
+(defun sml-record-index (record label)
+  "The index of the field LABEL of RECORD."
+  (let ((labels (sml-record-shape-labels (svref record 0))))
+    (if (integerp label)
+        (and (<= 1 label (length labels))
+             (string= (svref labels (1- label)) (princ-to-string label))
+             label)
+        (let ((position (position label labels :test #'string=)))
+          (and position (1+ position))))))
+
+(defun sml-record-ref (record label)
+  "The field LABEL (a string, or an integer for a numeric label) of RECORD."
+  (unless (sml-record-p record)
+    (error "Expected SML record or tuple, got ~S" record))
+  (let ((index (sml-record-index record label)))
+    (if index
+        (svref record index)
+        (error "Record does not contain field ~A: ~S" label record))))
+
+(defun sml-record-field (record label)
+  "The field LABEL of RECORD, or NIL when RECORD is not a record with that
+field."
+  (let ((index (and (sml-record-p record) (sml-record-index record label))))
+    (and index (svref record index))))
 
 (defun sml-record-select (record label)
-  (cond
-    ((sml-record-p record)
-     (let ((field (assoc label (sml-record-fields record) :test #'string=)))
-       (if field
-           (cdr field)
-           (error "Record does not contain field ~A: ~S" label record))))
-    ((and (consp record)
-          (eq (car record) :tuple)
-          (stringp label)
-          (plusp (length label))
-          (every #'digit-char-p label))
-     (let ((index (parse-integer label)))
-       (if (<= 1 index (length (cdr record)))
-           (nth index record)
-           (error "Tuple does not contain field ~A: ~S" label record))))
-    (t
-     (error "Expected SML record or tuple, got ~S" record))))
+  (sml-record-ref record label))
+
+(declaim (inline sml-tuple-ref))
+(defun sml-tuple-ref (tuple i)
+  "Field I (1-based, as in `#1') of TUPLE."
+  (svref tuple i))
+
+(declaim (inline sml-tuple-first sml-tuple-second))
+(defun sml-tuple-first (tuple)
+  (svref tuple 1))
+
+(defun sml-tuple-second (tuple)
+  (svref tuple 2))
+
+(defun sml-tuple->list (tuple)
+  "The fields of TUPLE, a list."
+  (loop for i from 1 below (length tuple) collect (svref tuple i)))
+
+(defun list->sml-tuple (list)
+  "The tuple of the elements of LIST."
+  (apply #'sml-tuple list))
+
+;;; Constructed values.  A nullary constructor's value is its tag, a
+;;; symbol.  A constructor whose argument type is written as a tuple type,
+;;; `C of t1 * ... * tn', has the "flat" representation: the n-tuple with
+;;; the tag in slot 0 instead of the shape, so `Node (l, x, r)' is one
+;;; vector.  Other constructors, and exception constructors, pair their tag
+;;; with the argument: (tag . argument).  The two cannot be confused (a cons
+;;; and a vector), so code that does not know a constructor's
+;;; representation tests the value (SML-CONSTRUCTED-TAG,
+;;; SML-CONSTRUCTED-ARGUMENT).  The compiler knows it for constructors
+;;; whose declaration it has seen (SML-CONSTRUCTOR-ARITY).
+
+(declaim (inline sml-constructed-tag))
+(defun sml-constructed-tag (value)
+  "The tag of the constructed value VALUE built by a constructor with an
+argument, or NIL when VALUE is not one."
+  (cond ((consp value) (car value))
+        ((and (simple-vector-p value) (plusp (length value)))
+         (let ((tag (svref value 0)))
+           (and (symbolp tag) tag)))))
+
+(declaim (inline sml-flat-constructed-tag-p))
+(defun sml-flat-constructed-tag-p (value tag)
+  "Is VALUE a flat constructed value of the constructor with tag TAG?"
+  (and (simple-vector-p value) (eq (svref value 0) tag)))
+
+(defun sml-flat-constructed-argument (value)
+  "The argument, a tuple, of the flat constructed value VALUE."
+  (let ((tuple (copy-seq value)))
+    (setf (svref tuple 0) (sml-tuple-shape (1- (length value))))
+    tuple))
+
+(defun sml-constructed-argument (value)
+  "The argument of the constructed value VALUE."
+  (if (consp value)
+      (cdr value)
+      (sml-flat-constructed-argument value)))
+
+(defun sml-construct-flat (tag tuple)
+  "The flat constructed value of constructor TAG applied to TUPLE."
+  (let ((value (copy-seq tuple)))
+    (setf (svref value 0) tag)
+    value))
+
+(defun sml-constructor-arity (symbol)
+  "How the values of the constructor whose tag is SYMBOL are represented, as
+far as known: N > 1 for the flat representation of an N-tuple argument, 0
+for (tag . argument) or nullary, NIL when unknown."
+  (get symbol 'sml-constructor-arity))
+
+(defun sml-flat-constructed-p (value)
+  "Is VALUE a flat constructed value?"
+  (and (simple-vector-p value)
+       (> (length value) 2)
+       (symbolp (svref value 0))
+       (eql (sml-constructor-arity (svref value 0)) (1- (length value)))))
 
 (define-condition sml-raised-exception (error)
   ((value :initarg :value :reader sml-exception-value)
@@ -926,9 +1117,6 @@ records whose labels are 1, ..., n."
 
 (defun make-sml-adt (tag &optional payload)
   (cons tag payload))
-
-(defun sml-unit ()
-  (list :tuple))
 
 (defun make-sml-ref (value)
   (vector :ref value))
@@ -1288,13 +1476,13 @@ infinities."
     (lambda (list)
       (let ((acc init))
         (dolist (item list acc)
-          (setf acc (funcall fn (list :tuple item acc))))))))
+          (setf acc (funcall fn (sml-tuple item acc))))))))
 (defun sml-foldr (fn)
   (lambda (init)
     (lambda (list)
       (let ((acc init))
         (dolist (item (reverse list) acc)
-          (setf acc (funcall fn (list :tuple item acc))))))))
+          (setf acc (funcall fn (sml-tuple item acc))))))))
 (defun sml-concat (strings)
   (apply #'concatenate 'string strings))
 
@@ -1427,12 +1615,6 @@ POSITION is the source offset of the match, when known."
         (funcall (symbol-value some) value)
         (cons some value))))
 
-(defun sml-tuple-first (tuple)
-  (second tuple))
-
-(defun sml-tuple-second (tuple)
-  (third tuple))
-
 (defun sml-word-not (value)
   (logand +sml-word-mask+ (lognot value)))
 
@@ -1461,7 +1643,7 @@ follows the locale, ABCL the JVM), so it is always given explicitly.")
   "The cause of an IO.Io exception: OS.SysErr (MESSAGE, NONE)."
   (let ((sys-err (sml-basis-symbol "OS.SysErr" nil)))
     (if (and sys-err (functionp (symbol-value sys-err)))
-        (funcall (symbol-value sys-err) (list :tuple message (sml-none-value)))
+        (funcall (symbol-value sys-err) (sml-tuple message (sml-none-value)))
         (funcall (sml-initial-exception "Fail") message))))
 
 (defun sml-raise-io (function name message)
@@ -2109,7 +2291,7 @@ is NIL; results beyond the range raise Overflow."
                     ("String.maxSize" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("String.size" . ,#'sml-size)
                     ("String.sub" . ,(lambda (tuple)
-                                       (sml-sequence-sub (second tuple) (third tuple))))
+                                       (sml-sequence-sub (sml-tuple-first tuple) (sml-tuple-second tuple))))
                     ("String.str" . ,#'sml-str)
                     ("String.^" . ,#'sml-op-^)
                     ("Char.ord" . ,#'sml-ord)
@@ -2118,9 +2300,9 @@ is NIL; results beyond the range raise Overflow."
                     ("Int.minInt" . ,(sml-constant-primitive (sml-some-value +sml-min-int+)))
                     ("Int.maxInt" . ,(sml-constant-primitive (sml-some-value +sml-max-int+)))
                     ("Int.quot" . ,(lambda (tuple)
-                                      (sml-int-quot (second tuple) (third tuple))))
+                                      (sml-int-quot (sml-tuple-first tuple) (sml-tuple-second tuple))))
                     ("Int.rem" . ,(lambda (tuple)
-                                     (sml-int-rem (second tuple) (third tuple))))
+                                     (sml-int-rem (sml-tuple-first tuple) (sml-tuple-second tuple))))
                     ("Vector.maxLen" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("Vector.length" . ,#'length)
                     ("Vector.sub" . ,(lambda (tuple)

@@ -51,6 +51,14 @@
   (format t "adder           = ~A~%" (funcall (make-adder 10) 32))
   (format t "banner          = ~A~%"
           (symbol-value (find-symbol "banner" "SML.SML-SHOWCASE")))
-  ;; Lists are Lisp lists; tuples are (:tuple ...).
+  ;; Lists are Lisp lists; tuples and records are taken apart with
+  ;; cl-sml's accessors (see the README).
   (format t "map             = ~A~%"
-          #@sml{ List.map (fn x => (x, x * x)) $(list 1 2 3) }#))
+          (mapcar #'cl-sml:sml-tuple->list
+                  #@sml{ List.map (fn x => (x, x * x)) $(list 1 2 3) }#))
+  (format t "record field    = ~A~%"
+          (cl-sml:sml-record-ref #@sml{ {name = "disc", area = area (Circle 1.0)} }#
+                                 "name"))
+  ;; A tuple made in Lisp, passed to SML.
+  (format t "rect area       = ~A~%"
+          #@sml{ area (Rect $(cl-sml:sml-tuple 2.0d0 3.0d0)) }#))

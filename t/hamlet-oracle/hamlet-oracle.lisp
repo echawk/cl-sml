@@ -101,8 +101,8 @@ checker has not been created yet."
 (defun sml-list->list (value)
   "HaMLet facts arrive as an SML list of 5-tuples."
   (mapcar (lambda (tuple)
-            (if (and (consp tuple) (eq (car tuple) :tuple))
-                (cdr tuple)
+            (if (sml-tuple-p tuple)
+                (sml-tuple->list tuple)
                 tuple))
           value))
 
@@ -127,7 +127,7 @@ unchanged, if SOURCE is rejected."
     (handler-case
         (with-sml-package (package)
           (let* ((source-pair
-                   (list :tuple
+                   (sml-tuple
                          (if filename
                              (sml-some-value (namestring filename))
                              (sml-none-value))
@@ -137,10 +137,10 @@ unchanged, if SOURCE is rejected."
                          (concatenate 'string source (string #\Newline) ";")))
                  (result (let ((*error-output* diagnostics))
                            (call-sml "ClSmlHamlet.elab"
-                                     (list :tuple
+                                     (sml-tuple
                                            (hamlet-type-checker-argument checker session)
                                            source-pair)))))
-            (destructuring-bind (argument description facts) (cdr result)
+            (destructuring-bind (argument description facts) (sml-tuple->list result)
               (setf (hamlet-type-checker-argument checker session) argument
                     (hamlet-type-checker-last-description checker) description
                     (hamlet-type-checker-last-facts checker)

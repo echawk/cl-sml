@@ -47,10 +47,12 @@ every change below. Keep the result checks stable.
 
 `t/bench/run.lisp` (from the repository root:
 `sbcl --dynamic-space-size 4GB --script t/bench/run.lisp [native|plain]`)
-times six small programs: best of three runs, after compilation, on SBCL
-(arm64, a loaded machine, so differences under about 10% are noise).
-Before is master at d4149d5, after is items 2, 4, 6, 13 and 14 below,
-both with the native checker:
+times seven small programs: best of three runs, after compilation, on SBCL
+(arm64; differences under about 10% are noise).  `rec` (records, `#lab`,
+a flexible pattern, a function returning a pair) was added with items 9,
+10 and 15.
+
+Items 2, 4, 6, 13 and 14, native checker (before is master at d4149d5):
 
 | program | before | after | consed before | consed after |
 |---|---|---|---|---|
@@ -61,15 +63,30 @@ both with the native checker:
 | `eq` (char, string, datatype and int `=`) | 0.20 s | 0.20 s | 972 MB | 972 MB |
 | `word` (Word hash loop) | 0.30 s | 0.28 s | 909 MB | 816 MB |
 
-Plain mode (no checker) is unchanged (`fib 30` 0.047 s, `real` 2.8 s).
-What remains is allocation: tuples as lists (`(list :tuple ...)`) for
-every multi-argument call, boxed doubles inside them, and Basis functions
-such as `Word.xorb` and `String.sub` called through a tuple. Items 9 and
-10 address that, not more arithmetic specialization.
+Items 9, 10 and 15 (before is master at 34b93fd; after 10 and 15 is the
+vector representation alone, after 9 adds the tuple-argument workers):
 
-Checks after these changes: SBCL suite 1026 checks, ECL 1025 (one REPL
-check is SBCL-only), Core corpus native 63/63, modules corpus native
-57/57, real world native 95/119 (unchanged; t/realworld/REPORT.md).
+| program | before | after 10, 15 | after 9 | consed before | consed after 9 |
+|---|---|---|---|---|---|
+| `fib 30` | 0.008 s | 0.007 s | 0.008 s | 0 | 0 |
+| `tak` | 0.015 s | 0.011 s | 0.004 s | 81 MB | 0 |
+| `real` | 0.78 s | 0.70 s | 0.73 s | 324 MB | 269 MB |
+| `bst` | 0.51 s | 0.28 s | 0.24 s | 973 MB | 228 MB |
+| `eq` | 0.21 s | 0.19 s | 0.17 s | 972 MB | 177 MB |
+| `word` | 0.31 s | 0.25 s | 0.26 s | 816 MB | 672 MB |
+| `rec` | 1.19 s | 0.16 s | 0.16 s | 1248 MB | 384 MB |
+
+Plain mode, before and after items 9, 10 and 15: `fib` 0.052 s and 0.051
+s, `tak` 0.034 s and 0.024 s, `real` 2.9 s and 2.9 s, `bst` 0.68 s and
+0.47 s, `eq` 0.32 s and 0.21 s, `word` 0.42 s and 0.30 s, `rec` 1.30 s
+and 0.54 s.  What remains is mostly boxed doubles (`real`), Basis
+functions called through a tuple (`Word.xorb`, `String.sub`), and the
+curried calls through special variables.
+
+Checks after items 9, 10 and 15: SBCL suite 1048 checks, ECL 1047 (one
+REPL check is SBCL-only), Core corpus native 63/63, modules corpus native
+57/57, HOL corpus passes, real world native 95/119 (unchanged;
+t/realworld/REPORT.md).
 
 ## Easy: local rewrites in the compiler, no types needed
 
@@ -165,7 +182,21 @@ ABCL do not eliminate tail calls, so without this a tail-recursive SML
 loop runs out of stack. This is also a portability fix, and it is in
 progress on the portability branch.
 
-### 9. Uncurrying and flattening tuple arguments (M)
+### 9. Uncurrying and flattening tuple arguments (M) — partly done
+
+**Done (2026-11-02), tuple arguments of top-level functions:** a
+top-level (or structure-level) `fun f (p1, ..., pn) = ...` whose clauses
+all take one n-tuple pattern compiles to a global function `|f;k/n|` of n
+arguments (the worker) and the one-argument wrapper bound to `f`, which
+calls the worker with the tuple's fields.  A call `f (e1, ..., en)` whose
+head resolves to that binding calls the worker directly, so the tuple is
+not built, and a self tail call through a tuple is a jump
+(`compile-tupled-top-level-fun`; `*sml-tupled-workers*` turns it off).
+It works in both modes.  Measured: `tak` 0.011 s to 0.004 s and 61 MB to
+nothing, `bst` 820 MB to 228 MB, `eq` 972 MB to 177 MB consed.  Still to
+do: `let`-bound and functor-body functions, and curried functions
+(`fun f a b`), which already take their arguments one at a time.
+
 
 **Do:** emit a worker function and a wrapper for each known function.
 `fun f a b c` gets a 3-argument worker plus the curried wrapper, and a
@@ -174,7 +205,29 @@ call that supplies all arguments calls the worker directly.
 without allocating the tuple. Needs item 7 to know which function a
 call reaches.
 
-### 10. Cheaper representations for tuples and constructors (M)
+### 10. Cheaper representations for tuples and constructors (M) — done
+
+**Done (2026-11-02):** a tuple or record is a simple-vector: slot 0 holds
+its shape (an interned `sml-record-shape` naming its labels in canonical
+order, numeric labels first), slots 1..n the fields in that order.  A
+tuple is the record with labels 1..n, so `{1 = a, 2 = b}` is `(a, b)` and
+`#i` is `(svref r i)`.  The unit is one object, `(sml-unit)`.  A
+constructor declared with a tuple argument, `C of t1 * ... * tn`, has the
+flat representation: one vector `#(C f1 ... fn)`, so `Node (l, x, r)`
+allocates once and `Node (l, x, r)` as a pattern reads slots 1..3.  Other
+constructors, those of datatypes declared in `let` expressions and functor bodies, and
+exceptions keep `(tag . argument)`; nullary constructors stay symbols.
+Values tell their representation (cons or vector), so code that does not
+know a constructor's (`sml-constructed-tag`, `sml-constructed-argument`)
+still works; the compiler knows it from the declaration
+(`sml-constructor-arity` on the tag).  Polymorphic equality, the REPL
+printer and the CL interop functions (`sml-tuple`, `sml-tuple-ref`,
+`sml-record-ref`, `make-sml-record`, ..., see the README) work on the new
+values.  Patterns test the vector type and length before reading a slot,
+because trivia may try a subpattern before the tests around it.  Not
+done: flat records as constructor arguments (`C of {a : t, ...}`, one more
+allocation), and unboxed real fields.
+
 
 **Do:** represent tuples as simple vectors, not tagged lists, so access
 takes constant time. Represent constructed values with a small fixnum
@@ -250,7 +303,17 @@ datatype, and arrays by `eq`.
 Generate one equality function per datatype. Compare refs and arrays
 with `eq`.
 
-### 15. Records at fixed offsets, plus type declarations (L)
+### 15. Records at fixed offsets, plus type declarations (L) — records done
+
+**Done (2026-11-02):** records are vectors in canonical label order (item
+10).  Record expressions and patterns without `...` know their labels, so
+their fields are at constant indices in both modes.  For `#lab` and
+flexible patterns the native checker records the full row
+(`native-record-labels`), and they compile to `svref` at a constant
+index; in plain mode, or when the row is unknown, they look the label up
+in the value's shape (`sml-record-ref`).  The type declarations are still
+to do.
+
 
 **Do:** represent a record as a vector with its labels in sorted order,
 so `#a r` becomes `svref` at a constant index. This needs the full label

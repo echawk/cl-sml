@@ -415,6 +415,90 @@ bound to TARGET-NAME, when the argument is not a structure identifier."
                (member (car entry) names :test #'string=))
              env))
 
+(defvar *sml-tupled-workers* t
+  "Compile a top-level `fun' whose parameter is a tuple pattern as a
+function of the tuple's fields plus a wrapper, and its calls with a tuple
+expression as direct calls (ROADMAP item 9).")
+
+(defvar *sml-tupled-worker-max-clauses* 16
+  "The most clauses a tuple-taking function compiled with a worker may
+have (TUPLED-FUN-ARITY).")
+
+(defvar *sml-local-constructor-arities* nil
+  "Alist from the tags of the datatype constructors declared by the `let' and
+`local' declarations being compiled to their representation (always 0: the
+values of local constructors are (tag . argument)).  Their tags are the
+package's symbols of their names, which a top-level constructor may share.")
+
+(defun datatype-constructor-flat-arity (ctor)
+  "N > 1 when the values of constructor CTOR, a (:ctor-def name ...) node of
+a top-level or structure-level datatype, have the flat representation of an
+N-tuple argument (`C of t1 * ... * tN'), else 0.  See SML-CONSTRUCTED-TAG."
+  (let ((type (getf (cddr ctor) :arg-type)))
+    (if (and (fourth ctor) (consp type) (eq (car type) :ty-tuple)
+             (>= (length (rest type)) 2))
+        (length (rest type))
+        0)))
+
+(defun constructor-arity-at-compile-time (symbol)
+  "How the values of the constructor with tag SYMBOL are represented, when
+the compiler knows it (SML-CONSTRUCTOR-ARITY), else NIL."
+  (when (and symbol (symbolp symbol) (symbol-package symbol))
+    (let ((local (assoc symbol *sml-local-constructor-arities*)))
+      (if local
+          (cdr local)
+          (sml-constructor-arity symbol)))))
+
+(defun pattern-tuple-subpatterns (pat arity)
+  "The ARITY subpatterns of PAT when it is a tuple pattern of that many."
+  (loop while (and (consp pat) (eq (car pat) :pat-typed))
+        do (setf pat (second pat)))
+  (when (and (consp pat) (eq (car pat) :pat-record))
+    (multiple-value-bind (fields tuplep) (tuple-record-fields (cdr pat))
+      (when tuplep
+        (setf pat `(:pat-tuple ,@(mapcar #'second fields))))))
+  (and (consp pat) (eq (car pat) :pat-tuple)
+       (= (length (cdr pat)) arity)
+       (cdr pat)))
+
+(defun compile-flat-constructor-pattern (tag arity payload local-exceptions lexical-env)
+  "A pattern on the flat values of the constructor with tag TAG and ARITY
+fields, whose argument must match PAYLOAD, a pattern AST."
+  ;; The tag is tested as a subpattern, after the type, so that trivia can
+  ;; infer the types of the tests when it reorders clauses.
+  (let* ((it (gensym "CTOR-VALUE"))
+         (tag-pattern (let ((tag-var (gensym "TAG")))
+                        `(guard1 ,tag-var (eq ,tag-var ',tag))))
+         (subpatterns (pattern-tuple-subpatterns payload arity)))
+    (if subpatterns
+        `(guard1 ,it ,(vector-width-test it (1+ arity))
+                 (svref ,it 0) ,tag-pattern
+                 ,@(loop for subpattern in subpatterns
+                         for i from 1
+                         for compiled = (compile-pat subpattern local-exceptions lexical-env)
+                         unless (eq compiled '_)
+                           append `((svref ,it ,i) ,compiled)))
+        `(guard1 ,it ,(vector-width-test it (1+ arity))
+                 (svref ,it 0) ,tag-pattern
+                 (sml-flat-constructed-argument ,it)
+                 ,(compile-pat payload local-exceptions lexical-env)))))
+
+(defun compile-constructor-application (symbol arg local-exceptions lexical-env)
+  "The value of constructor SYMBOL (a tag) applied to the expression ARG,
+or NIL when the representation of its values is not known."
+  (let ((arity (constructor-arity-at-compile-time symbol)))
+    (cond
+      ((null arity) nil)
+      ((eql arity 0)
+       `(cons ',symbol ,(compile-expr arg local-exceptions lexical-env)))
+      ((and (consp arg) (eq (car arg) :tuple) (= (length (cdr arg)) arity))
+       `(vector ',symbol ,@(mapcar (lambda (item)
+                                     (compile-expr item local-exceptions lexical-env))
+                                   (cdr arg))))
+      (t
+       `(sml-construct-flat ',symbol
+                            ,(compile-expr arg local-exceptions lexical-env))))))
+
 (defun known-constructor-symbol-for-name (name)
   (cdr (assoc name *sml-constructor-symbol-env* :test #'string=)))
 
@@ -705,9 +789,46 @@ their own (see BIND-SML-FUNCTOR-INSTANCE)."
        ,@(compile-binding-publication symbol (exception-alias-type target)))))
 
 (defun record-fields-sorted-by-label (fields)
+  "FIELDS without :RECORD-REST, in canonical label order (the order of a
+record's fields in its vector, SML-LABEL<)."
   (sort (remove :record-rest (copy-list fields))
-        #'string<
+        #'sml-label<
         :key #'first))
+
+(defun record-construction-form (labels forms)
+  "A form for the record with LABELS, in canonical order, and field values
+FORMS: a vector with the record's shape in slot 0."
+  (if (loop for label in labels
+            for i from 1
+            always (string= label (princ-to-string i)))
+      `(sml-tuple ,@forms)
+      `(vector (load-time-value (sml-record-shape ',labels) t) ,@forms)))
+
+(defun vector-width-test (variable width)
+  "A test that VARIABLE is a simple-vector of WIDTH slots.  Not written
+(typep v '(simple-vector n)): trivia infers that type and, for a match of
+many clauses (HaMLet's APPLY has 123 on a pair), then expands to code that
+overflows ECL's binding stack when compiled."
+  `(and (simple-vector-p ,variable) (= (length ,variable) ,width)))
+
+(defun indexed-record-pattern (index-patterns width)
+  "A trivia pattern matching a record of WIDTH fields whose field at each
+index of INDEX-PATTERNS, an alist from vector indices to compiled patterns,
+matches the pattern.  The record's width is tested although a well-typed
+value always has it: trivia may try a subpattern before the tests of the
+patterns around it (e.g. the argument of a constructor before its tag), so
+every access must be safe on any value."
+  (let ((record (gensym "RECORD")))
+    `(guard1 ,record ,(vector-width-test record (1+ width))
+             ,@(loop for (index . pattern) in index-patterns
+                     unless (eq pattern '_)
+                       append `((svref ,record ,index) ,pattern)))))
+
+(defun tuple-pattern-form (subpatterns)
+  (indexed-record-pattern (loop for pattern in subpatterns
+                                for i from 1
+                                collect (cons i pattern))
+                          (length subpatterns)))
 
 (defun tuple-record-fields (fields)
   "When the labels of record FIELDS are exactly 1, ..., n for an n other than
@@ -752,12 +873,7 @@ source order although the value is laid out in label order."
                            (compile-expr (second field)
                                          local-exceptions lexical-env)))
                      layout))
-           (form (if tuplep
-                     `(list :tuple ,@field-forms)
-                     `(make-sml-record
-                       (list ,@(mapcar (lambda (field form)
-                                         `(cons ,(first field) ,form))
-                                       layout field-forms))))))
+           (form (record-construction-form (mapcar #'first layout) field-forms)))
       (if temporaries
           `(let* ,temporaries ,form)
           form))))
@@ -1003,7 +1119,7 @@ that FORM refers to."
              (lambda ()
                ,(compile-expr (second default-branch)
                               local-exceptions lexical-env))))
-       (case (second ,value)
+       (case (svref ,value 1)
          ,@(mapcar
             (lambda (group)
               `((,(first group))
@@ -1044,9 +1160,11 @@ are not known here (`open`, structures) are assumed to."
             (otherwise t)))
         decs))
 
-(defun mark-sml-self-tail-calls (ast name arity target)
+(defun mark-sml-self-tail-calls (ast name arity target &optional tupled)
   "AST with each call of function NAME with ARITY arguments in tail position
-replaced by (:self-tail-call TARGET . arguments).  A second value is true
+replaced by (:self-tail-call TARGET . arguments); when TUPLED, the calls of
+NAME with one argument, a tuple expression of ARITY fields, whose fields
+are the arguments.  A second value is true
 when there was such a call.  Scopes that may rebind NAME are left alone, as
 are function bodies and case actions that are hoisted out of the function."
   (let ((found nil))
@@ -1062,13 +1180,20 @@ are function bodies and case actions that are hoisted out of the function."
                    (case (car ast)
                      (:app
                       (multiple-value-bind (head args) (sml-application-spine ast)
-                        (if (and (consp head)
-                                 (eq (car head) :var)
-                                 (equal (second head) name)
-                                 (= (length args) arity))
-                            (progn (setf found t)
-                                   `(:self-tail-call ,target ,@args))
-                            ast)))
+                        (cond
+                          ((not (and (consp head)
+                                     (eq (car head) :var)
+                                     (equal (second head) name)))
+                           ast)
+                          ((and (not tupled) (= (length args) arity))
+                           (setf found t)
+                           `(:self-tail-call ,target ,@args))
+                          ((and tupled (= (length args) 1)
+                                (consp (first args)) (eq (car (first args)) :tuple)
+                                (= (length (cdr (first args))) arity))
+                           (setf found t)
+                           `(:self-tail-call ,target ,@(cdr (first args))))
+                          (t ast))))
                      (:if `(:if ,(second ast) ,(tail (third ast)) ,(tail (fourth ast))))
                      ((:andalso :orelse)
                       `(,(car ast) ,(second ast) ,(tail (third ast))))
@@ -1120,17 +1245,25 @@ variable or an access to one, or :REFUTABLE when PATTERN may fail."
     ((eq pattern '_) nil)
     ((and (symbolp pattern) pattern (null (symbol-package pattern)))
      (list (list pattern form)))
-    ((and (consp pattern) (eq (first pattern) 'list) (eq (second pattern) :tuple))
-     (let ((tuple (gensym "TUPLE"))
+    ((and (consp pattern) (eq (first pattern) 'guard1)
+          (symbolp (second pattern))
+          (let ((test (third pattern)))
+            (and (consp test) (eq (first test) 'and)
+                 (consp (second test)) (eq (first (second test)) 'simple-vector-p)
+                 (eq (second (second test)) (second pattern))))
+          (loop for (generator) on (cdddr pattern) by #'cddr
+                always (and (consp generator) (eq (first generator) 'svref)
+                            (eq (second generator) (second pattern)))))
+     ;; A record or tuple pattern (INDEXED-RECORD-PATTERN).
+     (let ((record (second pattern))
            (bindings nil))
-       (loop for subpattern in (cddr pattern)
-             for index from 1
+       (loop for (generator subpattern) on (cdddr pattern) by #'cddr
              do (let ((inner (irrefutable-trivia-pattern-bindings
-                              subpattern `(nth ,index ,tuple))))
+                              subpattern generator)))
                   (when (eq inner :refutable)
                     (return-from irrefutable-trivia-pattern-bindings :refutable))
                   (setf bindings (append bindings inner))))
-       (and bindings (cons (list tuple form) bindings))))
+       (and bindings (cons (list record form) bindings))))
     (t :refutable)))
 
 (defun pattern-variable-nodes (tree)
@@ -1166,7 +1299,10 @@ variables ARGS, or NIL when a pattern is refutable."
        ,(compile-expr body local-exceptions branch-env))))
 
 (defun compile-fn-clauses-of-arity (clauses arity local-exceptions function-name
-                                    outer-lexical-env)
+                                    outer-lexical-env &optional tupled)
+  "The curried function of ARITY arguments that CLAUSES define, or, when
+TUPLED, a (lambda (a1 ... aARITY) ...) form taking the fields of the tuple
+that each clause's one pattern matches (see TUPLED-FUN-ARITY)."
   (let* ((tmp-args (loop repeat arity collect (gensym "ARG")))
          ;; Fresh variables for the loop: the curried parameters are closed
          ;; over by partial applications, so they must not be assigned.
@@ -1185,7 +1321,8 @@ variables ARGS, or NIL when a pattern is refutable."
                                       (first clause)))
                          (multiple-value-bind (body found)
                              (mark-sml-self-tail-calls (second clause) function-name
-                                                       arity (cons loop-tag loop-args))
+                                                       arity (cons loop-tag loop-args)
+                                                       tupled)
                            (when found (setf looping t))
                            body)
                          (second clause)))
@@ -1215,18 +1352,20 @@ variables ARGS, or NIL when a pattern is refutable."
               (,(if (= arity 1) '_ (make-list arity :initial-element '_))
                ,(compile-match-failure "Match" (or function-name "fn")
                                        (first (first clauses))))))))
-    (reduce (lambda (arg body) (sml-lambda-form function-name arg body))
-            tmp-args
-            :from-end t
-            :initial-value
-            (if looping
-                (let ((block (gensym "SELF")))
-                  `(let ,(mapcar #'list loop-args tmp-args)
-                     (block ,block
-                       (tagbody
-                          ,loop-tag
-                          (return-from ,block ,match)))))
-                match))))
+    (let ((body (if looping
+                    (let ((block (gensym "SELF")))
+                      `(let ,(mapcar #'list loop-args tmp-args)
+                         (block ,block
+                           (tagbody
+                              ,loop-tag
+                              (return-from ,block ,match)))))
+                    match)))
+      (if tupled
+          `(lambda ,tmp-args ,@(portable-tail-call-declarations) ,body)
+          (reduce (lambda (arg body) (sml-lambda-form function-name arg body))
+                  tmp-args
+                  :from-end t
+                  :initial-value body)))))
 
 (defun first-positioned-sml-node (tree)
   "The source offset of the first node of AST TREE whose position is known."
@@ -1263,6 +1402,17 @@ PAT to their symbols (see LOCAL-DECLARATION-LEXICAL-BINDINGS)."
                 (compile-pat pat local-exceptions binding-env))
              ,body)
             (_ ,(compile-match-failure "Bind" "val" pat))))))))
+
+(defun constructor-arity-forms (symbol arity)
+  "Record now, for the code compiled next, and when the compiled code is
+loaded, that the values of constructor SYMBOL have representation ARITY."
+  (setf (get symbol 'sml-constructor-arity) arity)
+  `((setf (get ',symbol 'sml-constructor-arity) ,arity)))
+
+(defun local-datatype-constructor-arities (dec)
+  (when (eq (car dec) :datatype)
+    (mapcar (lambda (ctor) (cons (local-datatype-constructor-tag ctor) 0))
+            (third dec))))
 
 (defun local-datatype-constructor-tag (ctor)
   "The symbol that tags the values of local datatype constructor CTOR."
@@ -1399,7 +1549,10 @@ names LEXICAL-ENV binds, which they shadow."
                      (*sml-constructor-symbol-env*
                        (append (local-datatype-constructor-bindings dec)
                                open-constructor-bindings
-                               *sml-constructor-symbol-env*)))
+                               *sml-constructor-symbol-env*))
+                     (*sml-local-constructor-arities*
+                       (append (local-datatype-constructor-arities dec)
+                               *sml-local-constructor-arities*)))
                  (compile-local-decls-into-body
                   (rest decs)
                   body
@@ -1426,7 +1579,10 @@ names LEXICAL-ENV binds, which they shadow."
               (let ((*sml-binding-symbol-env*
                       (append open-symbol-bindings *sml-binding-symbol-env*))
                     (*sml-constructor-symbol-env*
-                      (append open-constructor-bindings *sml-constructor-symbol-env*)))
+                      (append open-constructor-bindings *sml-constructor-symbol-env*))
+                    (*sml-local-constructor-arities*
+                      (append (mapcan #'local-datatype-constructor-arities decs)
+                              *sml-local-constructor-arities*)))
                 `(progn ,@(mapcar (lambda (expr)
                                     (compile-expr expr body-exceptions body-env))
                                   body-asts)))))
@@ -1453,10 +1609,10 @@ names LEXICAL-ENV binds, which they shadow."
            (recs (remove :val (cdr dec) :key #'car)))
        (compile-local-val-binding
         `(:pat-tuple ,@(mapcar #'second vals))
-        `(list :tuple ,@(mapcar (lambda (val-dec)
-                                  (compile-expr (third val-dec)
-                                                local-exceptions lexical-env))
-                                vals))
+        `(sml-tuple ,@(mapcar (lambda (val-dec)
+                                (compile-expr (third val-dec)
+                                              local-exceptions lexical-env))
+                              vals))
         (if recs
             (compile-local-decls-into-body recs body local-exceptions lexical-env)
             body)
@@ -1644,20 +1800,32 @@ names LEXICAL-ENV binds, which they shadow."
                   (eq (aref ,it 0) :ref))
              (aref ,it 1) ,(compile-pat payload local-exceptions lexical-env))))
 
-(defun compile-record-pattern (fields local-exceptions lexical-env)
-  "A pattern on the record FIELDS.  A flexible pattern (`{1 = x, ...}`) may
-also be matched against a tuple."
-  (let ((record (gensym "RECORD")))
-    `(guard1 ,record
-             ,(if (member :record-rest fields)
-                  `(sml-record-or-tuple-p ,record)
-                  `(sml-record-p ,record))
-             ,@(mapcan (lambda (field)
-                         `((sml-record-select ,record ,(first field))
-                           ,(compile-pat (second field)
-                                         local-exceptions
-                                         lexical-env)))
-                       (record-fields-sorted-by-label fields)))))
+(defun compile-record-pattern (fields local-exceptions lexical-env &optional node)
+  "A pattern on the record FIELDS.  The fields are at fixed indices when
+the record's labels are known: always for a pattern without `...', and for
+a flexible pattern NODE when the static checker gives its record type.
+Otherwise the fields are found by label (SML-RECORD-REF)."
+  (let* ((sorted (record-fields-sorted-by-label fields))
+         (labels (if (member :record-rest fields)
+                     (sml-node-record-labels node)
+                     (mapcar #'first sorted))))
+    (if labels
+        (indexed-record-pattern
+         (mapcar (lambda (field)
+                   (cons (1+ (position (first field) labels :test #'string=))
+                         (compile-pat (second field) local-exceptions lexical-env)))
+                 sorted)
+         (length labels))
+        (let ((record (gensym "RECORD")))
+          ;; SML-RECORD-FIELD is NIL, not an error, on a value without the
+          ;; field (see INDEXED-RECORD-PATTERN).
+          `(guard1 ,record t
+                   ,@(mapcan (lambda (field)
+                               `((sml-record-field ,record ,(first field))
+                                 ,(compile-pat (second field)
+                                               local-exceptions
+                                               lexical-env)))
+                             sorted))))))
 
 (defun compile-pat (pat &optional local-exceptions lexical-env)
   (cond
@@ -1740,17 +1908,31 @@ also be matched against a tuple."
                         `(guard1 ,it
                                  (and (consp ,it) (eq (car ,it) ,tag))
                                  (cdr ,it) ,payload)))
+                     ((and (or (known-constructor-symbol-for-name name)
+                               (sml-constructor-symbol-p ctor))
+                           (eql (constructor-arity-at-compile-time ctor) 0))
+	              `(cons ',ctor ,payload))
+                     ((and (or (known-constructor-symbol-for-name name)
+                               (sml-constructor-symbol-p ctor))
+                           (constructor-arity-at-compile-time ctor))
+                      (compile-flat-constructor-pattern
+                       ctor (constructor-arity-at-compile-time ctor)
+                       (third pat) local-exceptions lexical-env))
                      ((or (known-constructor-symbol-for-name name)
                           (sml-constructor-symbol-p ctor))
-	              `(cons ',ctor ,payload))
+                      ;; Its representation is not known here.
+                      (let ((it (gensym "CTOR-VALUE")))
+                        `(guard1 ,it
+                                 (eq (sml-constructed-tag ,it) ',ctor)
+                                 (sml-constructed-argument ,it) ,payload)))
                      ((null (symbol-package ctor))
                       ;; A variable holding the constructor, e.g. a member
                       ;; of a functor's argument.
                       (let ((it (gensym "CTOR-VALUE")))
                         `(guard1 ,it
-                                 (and (consp ,it)
-                                      (eq (car ,it) (sml-constructor-value-tag ,ctor)))
-                                 (cdr ,it) ,payload)))
+                                 (eq (sml-constructed-tag ,it)
+                                     (sml-constructor-value-tag ,ctor))
+                                 (sml-constructed-argument ,it) ,payload)))
                      (t
                        ;; Not resolvable now (e.g. a member of a functor
                        ;; instance bound at run time): compare against the
@@ -1760,21 +1942,22 @@ also be matched against a tuple."
                        ;; than assert one.
                        (let ((it (gensym "CTOR-VALUE")))
                          `(guard1 ,it
-                                  (and (consp ,it)
-                                       (sml-constructor-tag-p (car ,it) ',ctor))
-                                  (cdr ,it) ,payload))))))))
+                                  (let ((tag (sml-constructed-tag ,it)))
+                                    (and tag (sml-constructor-tag-p tag ',ctor)))
+                                  (sml-constructed-argument ,it) ,payload))))))))
 
     ((and (listp pat) (member (car pat) '(:pat-var :var)))
      (or (lexical-symbol-for-name (second pat) lexical-env)
          (target-sml-symbol (second pat))))
 
     ((and (listp pat) (eq (car pat) :pat-unit))
-     `(list :tuple))
+     ;; The unit is the only value of its type.
+     '_)
 
     ((and (listp pat) (eq (car pat) :pat-tuple))
-     `(list :tuple ,@(mapcar (lambda (subpat)
-                               (compile-pat subpat local-exceptions lexical-env))
-                             (cdr pat))))
+     (tuple-pattern-form (mapcar (lambda (subpat)
+                                   (compile-pat subpat local-exceptions lexical-env))
+                                 (cdr pat))))
 
     ((and (listp pat) (eq (car pat) :pat-record))
      (multiple-value-bind (tuple-fields tuplep) (tuple-record-fields (cdr pat))
@@ -1784,7 +1967,7 @@ also be matched against a tuple."
                             `(:pat-tuple ,@(mapcar #'second tuple-fields))
                             '(:pat-unit))
                         local-exceptions lexical-env)
-           (compile-record-pattern (cdr pat) local-exceptions lexical-env))))
+           (compile-record-pattern (cdr pat) local-exceptions lexical-env pat))))
 
     ((and (listp pat) (eq (car pat) :pat-nil)) 'nil)
     ((and (listp pat) (eq (car pat) :pat-cons))
@@ -1986,6 +2169,17 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
               `(ldb (byte +sml-word-size+ 0) (,word-operation ,@args))
               `(,primitive ,@args)))))))
 
+(defun compile-selection (form selector)
+  "A form selecting the field of SELECTOR, a (:selector label) node, from the
+record FORM evaluates to: SVREF at the field's index when the static checker
+gives the record's labels, else a lookup by label."
+  (let* ((label (second selector))
+         (labels (sml-node-record-labels selector))
+         (index (and labels (position label labels :test #'string=))))
+    (if index
+        `(svref ,form ,(1+ index))
+        `(sml-record-ref ,form ,label))))
+
 (defun compile-expr (ast &optional local-exceptions lexical-env)
   "Compiles an SML expression AST into a Common Lisp form."
   (cond
@@ -2015,15 +2209,14 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
      (compile-expr (second ast) local-exceptions lexical-env))
 
     ((and (listp ast) (eq (car ast) :selector))
-     `(lambda (record)
-        (sml-record-select record ,(second ast))))
+     `(lambda (record) ,(compile-selection 'record ast)))
 
     ((and (listp ast) (eq (car ast) :deref))
      `(funcall #'sml-deref ,(compile-expr (second ast) local-exceptions lexical-env)))
 
     ((and (listp ast) (eq (car ast) :infix-app))
      `(funcall ,(compile-expr `(:var ,(second ast)) local-exceptions lexical-env)
-               (list :tuple
+               (sml-tuple
                      ,(compile-expr (third ast) local-exceptions lexical-env)
                      ,(compile-expr (fourth ast) local-exceptions lexical-env))))
 
@@ -2038,6 +2231,12 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
     ((compile-equality-application ast local-exceptions lexical-env))
     ((compile-binary-primitive-application ast local-exceptions lexical-env))
 
+    ;; `#lab e'
+    ((and (listp ast) (eq (car ast) :app)
+          (consp (second ast)) (eq (car (second ast)) :selector))
+     (compile-selection (compile-expr (third ast) local-exceptions lexical-env)
+                        (second ast)))
+
     ;; Replace the :app block in compile-expr
     ((and (listp ast) (eq (car ast) :app))
      (let ((head (second ast))
@@ -2047,18 +2246,24 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
 	                (not (exception-constructor-info (second head) local-exceptions))
 	                (or (lexical-constructor-tag-form (second head) lexical-env)
                             (known-data-constructor-application-p (second head) lexical-env)))
-	           `(cons ,(let ((tag (lexical-constructor-tag-form (second head) lexical-env)))
-                             (if tag
-                                 tag
-                                 `',(constructor-symbol-for-name (second head) lexical-env)))
-	                  ,(compile-expr arg local-exceptions lexical-env))
-           (let ((compiled-head
-                   (compile-expr head local-exceptions lexical-env))
-                 (compiled-arg
-                   (compile-expr arg local-exceptions lexical-env)))
-             (if *sml-debug-applications*
-                 `(sml-debug-funcall ,compiled-head ,compiled-arg ',head)
-                 `(funcall ,compiled-head ,compiled-arg))))))
+           (let ((tag (lexical-constructor-tag-form (second head) lexical-env)))
+             (if tag
+                 ;; A constructor of the functor body being compiled.
+                 `(cons ,tag ,(compile-expr arg local-exceptions lexical-env))
+                 (or (compile-constructor-application
+                      (constructor-symbol-for-name (second head) lexical-env)
+                      arg local-exceptions lexical-env)
+                     `(funcall ,(compile-expr head local-exceptions lexical-env)
+                               ,(compile-expr arg local-exceptions lexical-env)))))
+           (or (and (not *sml-debug-applications*)
+                    (compile-tupled-call head arg local-exceptions lexical-env))
+               (let ((compiled-head
+                       (compile-expr head local-exceptions lexical-env))
+                     (compiled-arg
+                       (compile-expr arg local-exceptions lexical-env)))
+                 (if *sml-debug-applications*
+                     `(sml-debug-funcall ,compiled-head ,compiled-arg ',head)
+                     `(funcall ,compiled-head ,compiled-arg)))))))
 
     ((and (listp ast) (eq (car ast) :case))
      (let ((branches (cddr ast)))
@@ -2102,7 +2307,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
      `(progn
         (loop while ,(compile-expr (second ast) local-exceptions lexical-env)
               do ,(compile-expr (third ast) local-exceptions lexical-env))
-        (list :tuple)))
+        (sml-unit)))
 
     ((and (listp ast) (eq (car ast) :raise))
      `(sml-raise ,(compile-expr (second ast) local-exceptions lexical-env)))
@@ -2133,12 +2338,12 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
      (compile-record-expression (cdr ast) local-exceptions lexical-env))
 
     ((and (listp ast) (eq (car ast) :unit))
-     `(list :tuple))
+     `(sml-unit))
 
     ((and (listp ast) (eq (car ast) :tuple))
-     `(list :tuple ,@(mapcar (lambda (expr)
-                               (compile-expr expr local-exceptions lexical-env))
-                             (cdr ast))))
+     `(sml-tuple ,@(mapcar (lambda (expr)
+                             (compile-expr expr local-exceptions lexical-env))
+                           (cdr ast))))
 
     ((and (listp ast) (eq (car ast) :self-tail-call))
      (compile-self-tail-call (second ast) (cddr ast) local-exceptions lexical-env))
@@ -2170,7 +2375,97 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
     ,@(compile-binding-publication
        cell (infer-sml-ast-type (third ast) :package *sml-package*))))
 
+(defun tuple-pattern-subpatterns (pat)
+  "The subpatterns of PAT when it is a tuple pattern (of at least two
+fields), else NIL."
+  (loop while (and (consp pat) (eq (car pat) :pat-typed))
+        do (setf pat (second pat)))
+  (let ((n (cond ((and (consp pat) (eq (car pat) :pat-tuple)) (length (cdr pat)))
+                 ((and (consp pat) (eq (car pat) :pat-record))
+                  (multiple-value-bind (fields tuplep) (tuple-record-fields (cdr pat))
+                    (and tuplep (length fields)))))))
+    (and n (>= n 2) (pattern-tuple-subpatterns pat n))))
+
+(defun tupled-fun-arity (clauses)
+  "N when every clause of a `fun' has one parameter, a tuple pattern of the
+same N >= 2 fields: such a function is compiled as a function of N
+arguments, its worker (ROADMAP item 9).  Not for functions of more than
+*SML-TUPLED-WORKER-MAX-CLAUSES* clauses: a large dispatch such as
+HaMLet's APPLY (123 clauses) gains little, and keeping its one-column
+match keeps the code that ECL compiles small."
+  (let ((arities (mapcar (lambda (clause)
+                           (and (= (length (first clause)) 1)
+                                (length (tuple-pattern-subpatterns
+                                         (first (first clause))))))
+                         clauses)))
+    (and (first arities)
+         (<= (length clauses) *sml-tupled-worker-max-clauses*)
+         (>= (first arities) 2)
+         (every (lambda (n) (eql n (first arities))) arities)
+         (first arities))))
+
+(defun note-tupled-fun-worker (ast cell)
+  "When `fun' AST, bound to CELL, takes a tuple, record now (for the calls
+compiled next) that CELL's function has a worker taking the tuple's fields,
+and return the worker's name and arity."
+  (let ((arity (and *sml-tupled-workers* (tupled-fun-arity (third ast)))))
+    (if arity
+        (let ((worker (intern (format nil "~A/~D" (symbol-name cell) arity)
+                              (symbol-package cell))))
+          (setf (get cell 'sml-tupled-worker) (cons worker arity))
+          (values worker arity))
+        (progn (remprop cell 'sml-tupled-worker)
+               nil))))
+
+(defun compile-tupled-call (head arg local-exceptions lexical-env)
+  "A direct call of the worker of the function HEAD names, for the call
+`f (e1, ..., en)', or NIL."
+  (when (and (consp head) (eq (car head) :var)
+             (consp arg) (eq (car arg) :tuple))
+    (let* ((symbol (resolved-sml-symbol (second head) lexical-env))
+           (worker (and (symbolp symbol) (symbol-package symbol)
+                        (get symbol 'sml-tupled-worker))))
+      (when (and worker (= (cdr worker) (length (cdr arg))))
+        `(,(car worker) ,@(mapcar (lambda (item)
+                                    (compile-expr item local-exceptions lexical-env))
+                                  (cdr arg)))))))
+
 (defun compile-top-level-fun (ast cell local-exceptions lexical-env)
+  "Bind CELL to the function `fun' AST declares."
+  (multiple-value-bind (worker arity)
+      (if (get cell 'sml-tupled-worker)
+          (values (car (get cell 'sml-tupled-worker)) (cdr (get cell 'sml-tupled-worker)))
+          (note-tupled-fun-worker ast cell))
+    (if worker
+        (compile-tupled-top-level-fun ast cell worker arity local-exceptions lexical-env)
+        (compile-curried-top-level-fun ast cell local-exceptions lexical-env))))
+
+(defun compile-tupled-top-level-fun (ast cell worker arity local-exceptions lexical-env)
+  "Bind CELL to the function `fun' AST declares, which takes a tuple of
+ARITY fields: WORKER is a global function of the fields, and CELL's value
+calls it with the fields of its argument."
+  (let* ((clauses (mapcar (lambda (clause)
+                            (cons (tuple-pattern-subpatterns (first (first clause)))
+                                  (rest clause)))
+                          (third ast)))
+         (lambda-form (let ((*sml-binding-symbol-env*
+                              (acons (second ast) cell *sml-binding-symbol-env*)))
+                        (compile-fn-clauses-of-arity clauses arity local-exceptions
+                                                     (second ast)
+                                                     (acons (second ast) cell lexical-env)
+                                                     t)))
+         (tuple (gensym "TUPLE")))
+    `(progn
+       (declaim (special ,cell))
+       (setf (get ',cell 'sml-tupled-worker) '(,worker . ,arity))
+       (defun ,worker ,@(rest lambda-form))
+       (defparameter ,cell
+         ,(sml-lambda-form (second ast) tuple
+                           `(,worker ,@(loop for i from 1 to arity
+                                             collect `(svref ,tuple ,i)))))
+       ,@(compile-binding-publication cell :unknown))))
+
+(defun compile-curried-top-level-fun (ast cell local-exceptions lexical-env)
   "Bind CELL to the function `fun' AST declares."
   (let ((fun-type (loop repeat (length (first (first (third ast))))
                         for result = :unknown then `(:fn :unknown ,result)
@@ -2234,8 +2529,9 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
                                                  local-exceptions lexical-env))
                     (cdr ast) cells))))
     ((eq (car ast) :fun)
-     (compile-top-level-fun ast (new-sml-binding-cell (second ast))
-                            local-exceptions lexical-env))
+     (let ((cell (new-sml-binding-cell (second ast))))
+       (note-tupled-fun-worker ast cell)
+       (compile-top-level-fun ast cell local-exceptions lexical-env)))
     ((eq (car ast) :funs)
      ;; `fun f ... and g ...': every name is bound in every body.
      (let* ((cells (mapcar (lambda (fun-dec) (new-sml-binding-cell (second fun-dec)))
@@ -2244,6 +2540,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
               (append (mapcar (lambda (fun-dec cell) (cons (second fun-dec) cell))
                               (cdr ast) cells)
                       *sml-binding-symbol-env*)))
+       (mapc #'note-tupled-fun-worker (cdr ast) cells)
        `(progn ,@(mapcar (lambda (fun-dec cell)
                            (compile-top-level-fun fun-dec cell
                                                   local-exceptions lexical-env))
@@ -2262,7 +2559,11 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
                         (if has-args
                             ;; If it has args, the name refers to a constructor function
 	                            `(progn
-	                               (defun ,cname (payload) (cons ',keyword payload))
+                                       ,@(constructor-arity-forms cname (datatype-constructor-flat-arity c))
+	                               (defun ,cname (payload)
+                                         ,(if (> (datatype-constructor-flat-arity c) 0)
+                                              `(sml-construct-flat ',keyword payload)
+                                              `(cons ',keyword payload)))
 	                               (defparameter ,cname #',cname)
 	                               (register-sml-constructor ',cname)
 	                               ,(compile-type-registration-form
@@ -2274,6 +2575,7 @@ unshadowed built-in operator: no pair is allocated.  NIL otherwise."
 	                               ,(compile-export-form (list cname)))
 	                            ;; If no args, it's just the keyword constant
 	                            `(progn
+                                       ,@(constructor-arity-forms cname 0)
 	                               (defparameter ,cname ',keyword)
 	                               (register-sml-constructor ',cname)
 	                               ,(compile-type-registration-form cname (second ast))
