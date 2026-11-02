@@ -67,6 +67,10 @@ every multi-argument call, boxed doubles inside them, and Basis functions
 such as `Word.xorb` and `String.sub` called through a tuple. Items 9 and
 10 address that, not more arithmetic specialization.
 
+Checks after these changes: SBCL suite 1026 checks, ECL 1025 (one REPL
+check is SBCL-only), Core corpus native 63/63, modules corpus native
+57/57, real world native 95/119 (unchanged; t/realworld/REPORT.md).
+
 ## Easy: local rewrites in the compiler, no types needed
 
 ### 1. Call binary primitives directly (S)
