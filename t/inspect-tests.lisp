@@ -223,7 +223,7 @@ val six = AddThree.addY 3;"
                      (show-sml-ir "k" :package package :stream stream :lowered t))))
       (is (search ";;; fun k -- inspect.sml:2" simplified))
       ;; sq is inlined and 2 * 3 folded.
-      (is (search "(:const 6)" simplified))
+      (is (search "(:const 6 :type \"int\")" simplified))
       (is (not (search "|sq;" simplified)))
       (is (search "|sq;" lowered)))
     (signals error

@@ -49,6 +49,7 @@
                              (:file "initial-basis")
                              (:file "annotations")
                              (:file "typecheck")))
+               (:file "ir-types")
                (:file "type-checker")
                (:file "repl")
                (:cl-sml-basis-file "basis"))

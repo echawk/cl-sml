@@ -423,6 +423,10 @@ from the AST by COMPILE-EXPR-DIRECT, as before the IR.")
   "When true, the IR is simplified (inlining, beta reduction, constant
 folding, dead-binding elimination, known cases) before CL is emitted.")
 
+(defvar *ir-fun-type-node* nil
+  "The AST node whose type is that of the `fun' whose clauses are being
+lowered to the IR, when it is not the clauses themselves.")
+
 (defvar *sml-ir-log* nil
   "When a cons, compiling pushes (LOWERED . SIMPLIFIED) for each IR term
 onto its car (see SHOW-SML-IR).")
@@ -1196,6 +1200,16 @@ are function bodies and case actions that are hoisted out of the function."
                    branch
                    `(,(first branch) ,(tail (second branch)) ,@(cddr branch))))
              (tail (ast)
+               (let ((new (tail-1 ast)))
+                 ;; A rebuilt node keeps what the native checker recorded
+                 ;; about the node it replaces (its type, for the IR).
+                 (when (and (not (eq new ast)) (consp ast)
+                            (native-sml-static-facts-p)
+                            (nth-value 1 (gethash ast *sml-static-facts*)))
+                   (setf (gethash new *sml-static-facts*)
+                         (gethash ast *sml-static-facts*)))
+                 new))
+             (tail-1 (ast)
                (if (atom ast)
                    ast
                    (case (car ast)
@@ -1323,7 +1337,16 @@ variables ARGS, or NIL when a pattern is refutable."
                                     outer-lexical-env &optional tupled)
   "The curried function of ARITY arguments that CLAUSES define, or, when
 TUPLED, a (lambda (a1 ... aARITY) ...) form taking the fields of the tuple
-that each clause's one pattern matches (see TUPLED-FUN-ARITY)."
+that each clause's one pattern matches (see TUPLED-FUN-ARITY).  Through the
+IR (IR-COMPILE-FN-CLAUSES) unless *SML-IR* is false."
+  (if (and *sml-ir* (not *sml-debug-applications*))
+      (ir-compile-fn-clauses clauses local-exceptions function-name outer-lexical-env
+                             tupled)
+      (compile-fn-clauses-of-arity-direct clauses arity local-exceptions function-name
+                                          outer-lexical-env tupled)))
+
+(defun compile-fn-clauses-of-arity-direct (clauses arity local-exceptions function-name
+                                           outer-lexical-env &optional tupled)
   (let* ((tmp-args (loop repeat arity collect (gensym "ARG")))
          ;; Fresh variables for the loop: the curried parameters are closed
          ;; over by partial applications, so they must not be assigned.
@@ -2479,7 +2502,8 @@ calls it with the fields of its argument."
                                   (rest clause)))
                           (third ast)))
          (lambda-form (let ((*sml-binding-symbol-env*
-                              (acons (second ast) cell *sml-binding-symbol-env*)))
+                              (acons (second ast) cell *sml-binding-symbol-env*))
+                            (*ir-fun-type-node* (third ast)))
                         (compile-fn-clauses-of-arity clauses arity local-exceptions
                                                      (second ast)
                                                      (acons (second ast) cell lexical-env)

@@ -1,20 +1,17 @@
 (in-package #:cl-sml)
 
 ;;; A typed intermediate language between the checked AST and Common Lisp
-;;; (docs/IR.md, ROADMAP items 19 and 12).
+;;; (docs/IR.md, ROADMAP items 19, 12 and 11).
 ;;;
 ;;; COMPILE-EXPR lowers an SML expression to an IR term (IR-LOWER),
-;;; simplifies it (IR-SIMPLIFY) and emits CL (IR-EMIT).  Constructs the IR
-;;; does not cover yet are lowered to (:lisp TYPE FORM) nodes holding what
-;;; the direct code generator, COMPILE-EXPR-DIRECT, makes of them; their
-;;; subexpressions go through COMPILE-EXPR again, so each is its own term.
+;;; simplifies it (IR-SIMPLIFY) and emits CL (IR-EMIT); the clauses of a
+;;; `fun' go the same way (IR-COMPILE-FN-CLAUSES).  The direct code
+;;; generator, COMPILE-EXPR-DIRECT, is used only when *SML-IR* is false.
 ;;;
-;;; A term is a list (KIND TYPE . FIELDS).  TYPE is the SML type the
-;;; checker gave the node (identifier occurrences and constants), or NIL
-;;; when unknown (other nodes, and plain mode).  Variables are the
-;;; uninterned symbols the direct generator uses for lexical bindings, so
-;;; that a (:lisp ...) node may refer to them; every binder binds a symbol
-;;; of its own.  The kinds and their fields:
+;;; A term is a list (KIND TYPE . FIELDS).  TYPE is the node's SML type as
+;;; an IR type (below), or NIL when unknown (plain mode, which has no
+;;; checker).  Variables are uninterned symbols; every binder binds a
+;;; symbol of its own.  The kinds and their fields:
 ;;;
 ;;;   (:const ty value)          a literal: integer, word, char, string,
 ;;;                              real, or T / NIL (true, false, nil)
@@ -37,7 +34,9 @@
 ;;;   (:app ty f arg)            unknown call of a one-argument function
 ;;;   (:call ty worker args cell)  known call of the global function
 ;;;                              WORKER (the tupled worker of CELL)
-;;;   (:fn ty params body name)  a function of (length PARAMS) arguments
+;;;   (:fn ty params body name)  a function of (length PARAMS) arguments;
+;;;                              TY is its SML type (a tuple argument for
+;;;                              several PARAMS)
 ;;;   (:let ty symbol value body)
 ;;;   (:letrec ty ((symbol value) ...) body)
 ;;;   (:seq ty items)
@@ -45,11 +44,36 @@
 ;;;   (:while ty test body)
 ;;;   (:raise ty exn)
 ;;;   (:handle ty body ((pattern body) ...))
-;;;   (:match ty scrutinee ((pattern body) ...) failure)  PATTERN is the
-;;;                              compiled trivia pattern, FAILURE a CL form
-;;;   (:tail-call ty target args)  a self tail call (see
-;;;                              MARK-SML-SELF-TAIL-CALLS)
-;;;   (:lisp ty form)            CL from the direct code generator
+;;;   (:match ty scrutinees ((patterns body) ...) failure)  each rule has
+;;;                              one pattern per scrutinee; FAILURE is
+;;;                              (exception-name where offset), raised
+;;;                              when no rule matches
+;;;   (:loop ty tag variables inits body)  binds VARIABLES to INITS around
+;;;                              BODY, which a :tail-call may restart
+;;;   (:tail-call ty (tag . variables) args)  a self tail call (ROADMAP 8)
+;;;   (:decl ty declaration body)  a local datatype or exception (see
+;;;                              IR-EMIT-DECLARATION), or (:module form),
+;;;                              a structure or functor declared in a
+;;;                              `let', compiled as a declaration
+;;;
+;;; Patterns are IR data too, (KIND TYPE . FIELDS):
+;;;
+;;;   (:p-wild ty)  (:p-var ty symbol repr)  (:p-const ty value)
+;;;   (:p-tuple ty patterns)  (:p-record ty width ((index label pattern) ...))
+;;;   (:p-record-lookup ty ((label pattern) ...))   layout unknown
+;;;   (:p-as ty symbol pattern)  (:p-cons ty head tail)  (:p-ref ty pattern)
+;;;   (:p-exn ty name form pattern-or-nil)    FORM evaluates to the exception
+;;;   (:p-con ty name how data pattern-or-nil)  a datatype constructor;
+;;;                              HOW and DATA say how its values are
+;;;                              recognized (IR-EMIT-CONSTRUCTOR-PATTERN)
+;;;
+;;; IR types:
+;;;
+;;;   (:con tycon arg ...)       TYCON an IR-TYCON
+;;;   (:tyvar id name equality)  a type variable
+;;;   (:arrow domain range)
+;;;   (:record ((label . type) ...) open)  labels in canonical order;
+;;;                              tuples have labels 1..n, unit none
 
 (defvar *sml-ir-inline-size* 40
   "The largest IR term (in nodes) of a function inlined at its calls.")
@@ -57,37 +81,178 @@
 (defvar *sml-ir-simplify-rounds* 3
   "How many times the simplifier runs over a term at most.")
 
+(defvar *sml-ir-lint*
+  (let ((setting (uiop:getenv "CL_SML_IR_LINT")))
+    (cond ((member setting '(nil "" "0") :test #'equal) nil)
+          ((string-equal setting "error") :error)
+          (t :collect)))
+  "When true, each term is checked by IR-LINT after lowering and after
+simplification: :ERROR signals the problems found, any other true value
+collects them in *SML-IR-LINT-PROBLEMS*.  The environment variable
+CL_SML_IR_LINT (\"error\" or \"collect\") sets it when cl-sml is loaded.")
+
+(defvar *sml-ir-lint-problems* nil)
+
 (defun ir (kind type &rest fields) (list* kind type fields))
 (declaim (inline ir-kind ir-type))
 (defun ir-kind (node) (first node))
 (defun ir-type (node) (second node))
 
-(defun ir-node-type (ast)
-  "The SML type the native checker gives AST, or NIL."
-  (and (consp ast)
-       (native-sml-static-facts-p)
-       (funcall 'cl-sml.types:native-node-type ast *sml-static-facts*)))
-
 (defun ir-variable-p (form)
   (and form (symbolp form) (null (symbol-package form))))
+
+;;; Types
+
+(defstruct ir-tycon
+  "A type constructor: NAME, ARITY, EQUALITY (T, NIL or :REF, which admits
+equality whatever its arguments), the CONSTRUCTORS of a datatype as
+(name . takes-argument-p), and the checker's STAMP (unique in a session)."
+  name (arity 0) (equality t) constructors (stamp 0))
+
+(defmethod make-load-form ((tycon ir-tycon) &optional environment)
+  (make-load-form-saving-slots tycon :environment environment))
+
+(defun ir-node-type (ast)
+  "The IR type the native checker gives expression or pattern AST, or NIL."
+  (and (consp ast)
+       (native-sml-static-facts-p)
+       (funcall 'ir-checker-node-type ast)))
+
+(defun ir-base-type (name)
+  (and (native-sml-static-facts-p)
+       (funcall 'ir-checker-base-type name)))
+
+(defun ir-constant-type (value)
+  (cond ((integerp value) (ir-base-type "int"))
+        ((stringp value) (ir-base-type "string"))
+        ((characterp value) (ir-base-type "char"))
+        ((floatp value) (ir-base-type "real"))))
+
+(defun ir-arrow-type (domain range)
+  (and domain range (list :arrow domain range)))
+
+(defun ir-tuple-type (types)
+  (and (every #'identity types)
+       (list :record (loop for type in types
+                           for i from 1
+                           collect (cons (princ-to-string i) type))
+             nil)))
+
+(defun ir-record-type (labels types)
+  (and (every #'identity types)
+       (list :record (mapcar #'cons labels types) nil)))
+
+(defun ir-unit-type-p (type)
+  (and (consp type) (eq (first type) :record) (null (second type))))
+
+(defun ir-arrow-domain (type)
+  (and (consp type) (eq (first type) :arrow) (second type)))
+
+(defun ir-arrow-range (type)
+  (and (consp type) (eq (first type) :arrow) (third type)))
+
+(defun ir-field-type (type label)
+  (and (consp type) (eq (first type) :record)
+       (cdr (assoc label (second type) :test #'string=))))
+
+(defun ir-tuple-field-types (type n)
+  (loop for i from 1 to n collect (ir-field-type type (princ-to-string i))))
+
+(defun ir-type-named-p (type name)
+  (and (consp type) (eq (first type) :con)
+       (string= (ir-tycon-name (second type)) name)))
+
+(defun ir-list-element-type (type)
+  (and (ir-type-named-p type "list") (third type)))
+
+(defvar *ir-abstraction-tolerant* nil
+  "True when an abstract type may meet its representation (in simplified
+terms, see IR-LINT-TERM).")
+
+(defun ir-type-compatible-p (a b)
+  "Can types A and B be the same type?  Unknown types (NIL) and type
+variables are compatible with any type: the terms of inlined polymorphic
+functions keep their own type variables."
+  (cond ((or (null a) (null b)) t)
+        ((or (eq (first a) :tyvar) (eq (first b) :tyvar)) t)
+        ((and *ir-abstraction-tolerant*
+              (or (eq (first a) :con) (eq (first b) :con))
+              (not (and (eq (first a) :con) (eq (first b) :con)
+                        (string= (ir-tycon-name (second a)) (ir-tycon-name (second b))))))
+         t)
+        ((not (eq (first a) (first b))) nil)
+        (t (ecase (first a)
+             (:con (and (string= (ir-tycon-name (second a)) (ir-tycon-name (second b)))
+                        (= (length a) (length b))
+                        (every #'ir-type-compatible-p (cddr a) (cddr b))))
+             (:arrow (and (ir-type-compatible-p (second a) (second b))
+                          (ir-type-compatible-p (third a) (third b))))
+             (:record
+              (or (third a) (third b)
+                  (and (= (length (second a)) (length (second b)))
+                       (every (lambda (fa fb)
+                                (and (string= (car fa) (car fb))
+                                     (ir-type-compatible-p (cdr fa) (cdr fb))))
+                              (second a) (second b)))))))))
+
+(defun ir-type-string (type)
+  "TYPE in SML syntax."
+  (labels ((tuple-p (type)
+             (and (eq (first type) :record) (second type) (null (third type))
+                  (loop for (label) in (second type)
+                        for i from 1
+                        always (string= label (princ-to-string i)))
+                  (/= (length (second type)) 1)))
+           (atomic (type)
+             (let ((string (show type)))
+               (if (or (eq (first type) :arrow) (tuple-p type))
+                   (format nil "(~A)" string)
+                   string)))
+           (show (type)
+             (cond
+               ((null type) "?")
+               (t (ecase (first type)
+                    (:con (let ((name (ir-tycon-name (second type)))
+                                (args (cddr type)))
+                            (cond ((null args) name)
+                                  ((null (rest args)) (format nil "~A ~A" (atomic (first args)) name))
+                                  (t (format nil "(~{~A~^, ~}) ~A" (mapcar #'show args) name)))))
+                    (:tyvar (format nil "~:[~;'~]'~A" (fourth type)
+                                    (or (and (third type) (string-left-trim "'" (third type)))
+                                        (format nil "t~D" (second type)))))
+                    (:arrow (format nil "~A -> ~A" (atomic (second type)) (show (third type))))
+                    (:record
+                     (cond ((null (second type)) (if (third type) "{...}" "unit"))
+                           ((tuple-p type)
+                            (format nil "~{~A~^ * ~}"
+                                    (mapcar (lambda (field) (atomic (cdr field))) (second type))))
+                           (t (format nil "{~{~A~^, ~}~:[~;, ...~]}"
+                                      (mapcar (lambda (field)
+                                                (format nil "~A: ~A" (car field) (show (cdr field))))
+                                              (second type))
+                                      (third type))))))))))
+    (show type)))
 
 ;;; Lowering
 
 (defvar *ir-template-mode* nil
-  "True while a function is lowered for inlining: a construct the IR does
-not cover throws to IR-NO-TEMPLATE instead of compiling it directly.")
+  "True while a function is lowered for inlining: a construct an inline
+template cannot hold throws to IR-NO-TEMPLATE.")
 
-(defun ir-fallback (ast local-exceptions lexical-env)
-  (when *ir-template-mode*
-    (throw 'ir-no-template nil))
-  (ir :lisp nil (compile-expr-direct ast local-exceptions lexical-env)))
+(defvar *ir-tail-call-type* nil
+  "The result type of the function whose self tail calls are being
+lowered.")
+
+(defun ir-failure (exception-name where ast)
+  "The failure of a match (see COMPILE-MATCH-FAILURE), as data."
+  (list exception-name where (first-positioned-sml-node ast)))
 
 (defun ir-lower-tuple-binary-args (arg)
   "The two operand ASTs of an infix application's argument ARG, or NIL."
   (and (consp arg) (eq (car arg) :tuple) (= (length arg) 3)
        (list (second arg) (third arg))))
 
-(defun ir-lower-overloaded (ast local-exceptions lexical-env)
+(defun ir-lower-overloaded (ast local-exceptions lexical-env type)
   "Like COMPILE-OVERLOADED-APPLICATION, as a (:prim ...) node, or NIL."
   (destructuring-bind (head arg) (cdr ast)
     (multiple-value-bind (name tyname) (overloaded-identifier-instance head)
@@ -100,10 +265,10 @@ not cover throws to IR-NO-TEMPLATE instead of compiling it directly.")
                      (compile-overloaded-operation
                       name tyname (mapcar (lambda (a) (declare (ignore a)) (gensym))
                                           args)))
-            (ir :prim nil (list :overloaded name tyname)
+            (ir :prim type (list :overloaded name tyname)
                 (mapcar (lambda (a) (ir-lower a local-exceptions lexical-env)) args))))))))
 
-(defun ir-lower-equality (ast local-exceptions lexical-env)
+(defun ir-lower-equality (ast local-exceptions lexical-env type)
   "Like COMPILE-EQUALITY-APPLICATION, or NIL."
   (when (and (consp (second ast)) (eq (car (second ast)) :var)
              (member (second (second ast)) '("=" "<>") :test #'equal)
@@ -112,11 +277,11 @@ not cover throws to IR-NO-TEMPLATE instead of compiling it directly.")
     (let ((test (case (sml-equality-kind (second ast))
                   (:eql 'eql) (:eq 'eq) (:string 'string=))))
       (when test
-        (ir :prim nil (list :equality test (string= (second (second ast)) "<>"))
+        (ir :prim type (list :equality test (string= (second (second ast)) "<>"))
             (mapcar (lambda (a) (ir-lower a local-exceptions lexical-env))
                     (ir-lower-tuple-binary-args (third ast))))))))
 
-(defun ir-lower-binary-primitive (ast local-exceptions lexical-env)
+(defun ir-lower-binary-primitive (ast local-exceptions lexical-env type)
   "Like COMPILE-BINARY-PRIMITIVE-APPLICATION, or NIL."
   (let ((operands (ir-lower-tuple-binary-args (third ast))))
     (when operands
@@ -128,30 +293,30 @@ not cover throws to IR-NO-TEMPLATE instead of compiling it directly.")
                                                         (sml-* . *))))))
             (if (and word-operation
                      (some (lambda (x) (and (consp x) (eq (car x) :word))) operands))
-                (ir :prim nil (list :word-binary word-operation) args)
-                (ir :prim nil (list :binary primitive) args))))))))
+                (ir :prim type (list :word-binary word-operation) args)
+                (ir :prim type (list :binary primitive) args))))))))
 
-(defun ir-lower-constructor-application (head arg local-exceptions lexical-env)
+(defun ir-lower-constructor-application (head arg local-exceptions lexical-env type)
   "The application of constructor HEAD to ARG, as in COMPILE-EXPR-DIRECT."
   (let ((tag (lexical-constructor-tag-form (second head) lexical-env)))
     (if tag
-        (ir :con nil :cons tag (list (ir-lower arg local-exceptions lexical-env)))
+        (ir :con type :cons tag (list (ir-lower arg local-exceptions lexical-env)))
         (let* ((symbol (constructor-symbol-for-name (second head) lexical-env))
                (arity (constructor-arity-at-compile-time symbol)))
           (cond
             ((null arity)
-             (ir :app nil (ir-lower head local-exceptions lexical-env)
+             (ir :app type (ir-lower head local-exceptions lexical-env)
                  (ir-lower arg local-exceptions lexical-env)))
             ((eql arity 0)
-             (ir :con nil :boxed symbol (list (ir-lower arg local-exceptions lexical-env))))
+             (ir :con type :boxed symbol (list (ir-lower arg local-exceptions lexical-env))))
             ((and (consp arg) (eq (car arg) :tuple) (= (length (cdr arg)) arity))
-             (ir :con nil :flat symbol
+             (ir :con type :flat symbol
                  (mapcar (lambda (item) (ir-lower item local-exceptions lexical-env))
                          (cdr arg))))
-            (t (ir :con nil :flat-construct symbol
+            (t (ir :con type :flat-construct symbol
                    (list (ir-lower arg local-exceptions lexical-env)))))))))
 
-(defun ir-lower-tupled-call (head arg local-exceptions lexical-env)
+(defun ir-lower-tupled-call (head arg local-exceptions lexical-env type)
   "Like COMPILE-TUPLED-CALL, or NIL."
   (when (and (consp head) (eq (car head) :var)
              (consp arg) (eq (car arg) :tuple))
@@ -159,22 +324,204 @@ not cover throws to IR-NO-TEMPLATE instead of compiling it directly.")
            (worker (and (symbolp symbol) (symbol-package symbol)
                         (get symbol 'sml-tupled-worker))))
       (when (and worker (= (cdr worker) (length (cdr arg))))
-        (ir :call nil (car worker)
+        (ir :call type (car worker)
             (mapcar (lambda (item) (ir-lower item local-exceptions lexical-env))
                     (cdr arg))
             symbol)))))
 
-(defun ir-lower-match-branches (branches local-exceptions lexical-env)
-  "The (pattern body) branches of a match, as COMPILE-TRIVIA-CASE-CLAUSE
-compiles them."
-  (mapcar (lambda (branch)
-            (let* ((var-map (pattern-variable-map (first branch) local-exceptions))
-                   (branch-env (append var-map lexical-env)))
-              (list (compile-pat (first branch) local-exceptions branch-env)
-                    (ir-lower (second branch) local-exceptions branch-env))))
-          branches))
+;;; Patterns, lowered as COMPILE-PAT compiles them: every decision
+;;; COMPILE-PAT takes is taken here and recorded in the pattern, which
+;;; IR-EMIT-PATTERN turns into the same trivia pattern.
 
-(defun ir-lower-record (fields local-exceptions lexical-env)
+(defun ir-lower-pattern (pat local-exceptions lexical-env &optional expected)
+  "The IR pattern of pattern AST PAT, whose value has type EXPECTED (when
+the checker gave PAT no type of its own)."
+  (let ((type (if (and (consp pat) (eq (car pat) :pat-cons))
+                  ;; The checker records the type of `::' on the node.
+                  (or (ir-arrow-range (ir-node-type pat)) expected)
+                  (or (ir-node-type pat) expected))))
+    (flet ((sub (pat &optional expected)
+             (ir-lower-pattern pat local-exceptions lexical-env expected)))
+      (cond
+        ((or (numberp pat) (stringp pat) (characterp pat))
+         (ir :p-const (or type (ir-constant-type pat)) pat))
+        ((eq pat :wild) (ir :p-wild type))
+        ((not (consp pat)) (error "Unknown pattern ~A" pat))
+        (t
+         (case (car pat)
+           (:word (ir :p-const type (second pat)))
+           ((:pat-ctor :ctor)
+            (ir-lower-constructor-pattern pat local-exceptions lexical-env type))
+           (:pat-typed (sub (second pat) type))
+           (:pat-as
+            (let ((alias (sub (second pat) type)))
+              (unless (eq (ir-kind alias) :p-var)
+                (error "Unknown layered pattern ~A" pat))
+              (ir :p-as type (third alias) (sub (third pat) type))))
+           (:pat-app
+            (let* ((ctor-node (second pat))
+                   (arg-type (ir-arrow-domain (ir-node-type ctor-node))))
+              (cond
+                ((string= (second ctor-node) "ref")
+                 (ir :p-ref type (sub (third pat) (and (ir-type-named-p type "ref")
+                                                       (third type)))))
+                ((pattern-node-exception-p ctor-node local-exceptions)
+                 (ir :p-exn type (second ctor-node)
+                     (resolved-sml-symbol (second ctor-node) lexical-env)
+                     (sub (third pat) arg-type)))
+                (t (ir-lower-constructor-app-pattern pat local-exceptions lexical-env
+                                                     type arg-type)))))
+           ((:pat-var :var)
+            (ir :p-var type
+                (or (lexical-symbol-for-name (second pat) lexical-env)
+                    (target-sml-symbol (second pat)))
+                (sml-node-representation pat)))
+           (:pat-unit (ir :p-wild type))
+           (:pat-tuple
+            (let ((types (ir-tuple-field-types type (length (cdr pat)))))
+              (ir :p-tuple type (mapcar #'sub (cdr pat) types))))
+           (:pat-record
+            (multiple-value-bind (tuple-fields tuplep) (tuple-record-fields (cdr pat))
+              (if tuplep
+                  (if tuple-fields
+                      (ir :p-tuple type
+                          (mapcar (lambda (field)
+                                    (sub (second field) (ir-field-type type (first field))))
+                                  tuple-fields))
+                      (ir :p-wild type))
+                  (ir-lower-record-pattern pat local-exceptions lexical-env type))))
+           (:pat-nil (ir :p-const type nil))
+           (:pat-cons
+            (ir :p-cons type (sub (second pat) (ir-list-element-type type))
+                (sub (third pat) type)))
+           (otherwise (error "Unknown pattern ~A" pat))))))))
+
+(defun ir-lower-record-pattern (pat local-exceptions lexical-env type)
+  "Like COMPILE-RECORD-PATTERN."
+  (let* ((fields (cdr pat))
+         (sorted (record-fields-sorted-by-label fields))
+         (labels (if (member :record-rest fields)
+                     (sml-node-record-labels pat)
+                     (mapcar #'first sorted))))
+    (flet ((sub (field)
+             (ir-lower-pattern (second field) local-exceptions lexical-env
+                               (ir-field-type type (first field)))))
+      (if labels
+          (ir :p-record type (length labels)
+              (mapcar (lambda (field)
+                        (list (1+ (position (first field) labels :test #'string=))
+                              (first field)
+                              (sub field)))
+                      sorted))
+          (ir :p-record-lookup type
+              (mapcar (lambda (field) (list (first field) (sub field))) sorted))))))
+
+(defun ir-lower-constructor-pattern (pat local-exceptions lexical-env type)
+  "A nullary constructor (or a variable) PAT, as COMPILE-PAT decides."
+  (let ((name (second pat)))
+    (cond
+      ((string= name "true") (ir :p-const type t))
+      ((member name '("false" "nil") :test #'string=) (ir :p-const type nil))
+      ((pattern-node-exception-p pat local-exceptions)
+       (ir :p-exn type name (resolved-sml-symbol name lexical-env) nil))
+      (t
+       (let* ((static-ctor-p (sml-status-constructor-p (pattern-node-status pat)))
+              (lexical-ctor (or (lexical-symbol-for-name name lexical-env)
+                                (functor-scope-long-name-variable name)))
+              (known-ctor (known-constructor-symbol-for-name name))
+              (global-ctor (or known-ctor (resolved-sml-symbol name lexical-env))))
+         (flet ((con (how data) (ir :p-con type name how data nil)))
+           (cond
+             ((and lexical-ctor
+                   (not static-ctor-p)
+                   (not known-ctor)
+                   (not (functor-scope-constructor-tag lexical-ctor))
+                   (not (sml-constructor-symbol-p global-ctor)))
+              ;; Not a constructor: a variable.
+              (ir :p-var type lexical-ctor nil))
+             (lexical-ctor (con :eql-form lexical-ctor))
+             ((and known-ctor
+                   (eq global-ctor known-ctor)
+                   (or (not (boundp known-ctor))
+                       (eq (symbol-value known-ctor) known-ctor)))
+              ;; A nullary constructor's value is its tag.
+              (con :eq-tag known-ctor))
+             (known-ctor (con :bound-eql global-ctor))
+             ((sml-constructor-symbol-p global-ctor) (con :value-eql global-ctor))
+             (static-ctor-p
+              ;; Not registered yet, e.g. a constructor of a structure
+              ;; declared earlier in the same program.
+              (con :tag-p global-ctor))
+             (t (ir :p-var type global-ctor nil)))))))))
+
+(defun ir-lower-constructor-app-pattern (pat local-exceptions lexical-env type arg-type)
+  "Constructor application pattern PAT, as COMPILE-PAT decides."
+  (let* ((name (second (second pat)))
+         (tag (lexical-constructor-tag-form name lexical-env))
+         (ctor (constructor-symbol-for-name name lexical-env))
+         (payload (ir-lower-pattern (third pat) local-exceptions lexical-env arg-type))
+         (known (or (known-constructor-symbol-for-name name)
+                    (sml-constructor-symbol-p ctor)))
+         (arity (and known (constructor-arity-at-compile-time ctor))))
+    (flet ((con (how data) (ir :p-con type name how data payload)))
+      (cond
+        ;; A constructor of the functor body being compiled.
+        (tag (con :functor-tag tag))
+        ((eql arity 0) (con :boxed ctor))
+        (arity (con :flat (cons ctor arity)))
+        ;; Its representation is not known here.
+        (known (con :unknown-repr ctor))
+        ;; A variable holding the constructor, e.g. a member of a
+        ;; functor's argument.
+        ((null (symbol-package ctor)) (con :variable ctor))
+        ;; Resolved at run time (a member of a functor instance).
+        (t (con :runtime ctor))))))
+
+(defun ir-pattern-binders (pattern)
+  "The variables PATTERN binds (uninterned symbols)."
+  (let ((binders nil))
+    (labels ((walk (p)
+               (case (ir-kind p)
+                 (:p-var (when (ir-variable-p (third p)) (push (third p) binders)))
+                 (:p-as (when (ir-variable-p (third p)) (push (third p) binders))
+                  (walk (fourth p)))
+                 (:p-tuple (mapc #'walk (third p)))
+                 (:p-record (dolist (field (fourth p)) (walk (third field))))
+                 (:p-record-lookup (dolist (field (third p)) (walk (second field))))
+                 (:p-cons (walk (third p)) (walk (fourth p)))
+                 (:p-ref (walk (third p)))
+                 (:p-exn (when (fifth p) (walk (fifth p))))
+                 (:p-con (when (sixth p) (walk (sixth p)))))))
+      (walk pattern))
+    (nreverse binders)))
+
+(defun ir-pattern-references (pattern)
+  "The CL forms PATTERN evaluates (exception and constructor values)."
+  (let ((forms nil))
+    (labels ((walk (p)
+               (case (ir-kind p)
+                 (:p-as (walk (fourth p)))
+                 (:p-tuple (mapc #'walk (third p)))
+                 (:p-record (dolist (field (fourth p)) (walk (third field))))
+                 (:p-record-lookup (dolist (field (third p)) (walk (second field))))
+                 (:p-cons (walk (third p)) (walk (fourth p)))
+                 (:p-ref (walk (third p)))
+                 (:p-exn (push (fourth p) forms) (when (fifth p) (walk (fifth p))))
+                 (:p-con (push (fifth p) forms) (when (sixth p) (walk (sixth p)))))))
+      (walk pattern))
+    forms))
+
+(defun ir-lower-match-rules (rules local-exceptions lexical-env &optional scrutinee-type)
+  "The ((pattern) body) rules of a one-scrutinee match."
+  (mapcar (lambda (rule)
+            (let* ((var-map (pattern-variable-map (first rule) local-exceptions))
+                   (branch-env (append var-map lexical-env)))
+              (list (list (ir-lower-pattern (first rule) local-exceptions branch-env
+                                            scrutinee-type))
+                    (ir-lower (second rule) local-exceptions branch-env))))
+          rules))
+
+(defun ir-lower-record (fields local-exceptions lexical-env type)
   "Like COMPILE-RECORD-EXPRESSION: fields are evaluated in source order."
   (multiple-value-bind (tuple-fields tuplep) (tuple-record-fields fields)
     (let* ((layout (if tuplep tuple-fields (record-fields-sorted-by-label fields)))
@@ -185,95 +532,294 @@ compiles them."
                                            fields :key #'second)
                              1))
                (mapcar (lambda (field) (gensym (first field))) fields)))
+           (lowered (mapcar (lambda (field)
+                              (ir-lower (second field) local-exceptions lexical-env))
+                            fields))
            (field-nodes
              (mapcar (lambda (field)
-                       (if temporaries
-                           (ir :var nil (nth (position field fields) temporaries))
-                           (ir-lower (second field) local-exceptions lexical-env)))
+                       (let ((node (nth (position field fields) lowered)))
+                         (if temporaries
+                             (ir :var (ir-type node) (nth (position field fields) temporaries))
+                             node)))
                      layout))
+           (type (or type (ir-record-type labels (mapcar #'ir-type field-nodes))))
            (node (if (loop for label in labels
                            for i from 1
                            always (string= label (princ-to-string i)))
-                     (ir :tuple nil field-nodes)
-                     (ir :record nil labels field-nodes))))
+                     (ir :tuple type field-nodes)
+                     (ir :record type labels field-nodes))))
       (if temporaries
-          (reduce (lambda (pair body)
-                    (ir :let nil (car pair)
-                        (ir-lower (second (cdr pair)) local-exceptions lexical-env)
-                        body))
-                  (mapcar #'cons temporaries fields)
+          (reduce (lambda (pair body) (ir :let type (car pair) (cdr pair) body))
+                  (mapcar #'cons temporaries lowered)
                   :from-end t :initial-value node)
           node))))
 
-(defun ir-simple-let-declaration-p (dec)
-  "Can the IR lower DEC, a declaration of a `let', itself?"
-  (member (car dec) '(:val :fun :funs :val-rec :val-recs :type :infix :signature)))
+;;; `let'
 
-(defun ir-lower-let (ast local-exceptions lexical-env)
-  (let ((decs (second ast))
-        (body-asts (third ast)))
-    (if (or (notevery #'ir-simple-let-declaration-p decs)
-            (declarations-local-module-member-bindings decs))
-        (ir-fallback ast local-exceptions lexical-env)
-        (labels ((body (lexical-env)
-                   (let ((items (mapcar (lambda (e) (ir-lower e local-exceptions lexical-env))
-                                        body-asts)))
-                     (if (rest items) (ir :seq nil items) (first items))))
-                 (decs (decs lexical-env)
-                   (if (null decs)
-                       (body lexical-env)
-                       (let* ((dec (first decs))
-                              (bindings (local-declaration-lexical-bindings dec))
-                              (inner-env (append bindings lexical-env)))
-                         (ir-lower-let-declaration
-                          dec bindings local-exceptions lexical-env
-                          (lambda () (decs (rest decs) inner-env)))))))
-          (decs decs lexical-env)))))
+(defun ir-lower-let (ast local-exceptions lexical-env type)
+  "Like COMPILE-LOCAL-DECLS."
+  (let* ((decs (second ast))
+         (body-asts (third ast))
+         (module-bindings (declarations-local-module-member-bindings decs))
+         (structure-prefixes (module-local-structure-prefixes
+                              decs (or *sml-module-prefix* ""))))
+    (let ((*sml-local-structure-members* (append module-bindings
+                                                 *sml-local-structure-members*))
+          (*sml-local-structure-prefixes* (append structure-prefixes
+                                                  *sml-local-structure-prefixes*)))
+      (ir-lower-declarations
+       decs local-exceptions lexical-env
+       (lambda (local-exceptions lexical-env)
+         (let ((items (mapcar (lambda (e) (ir-lower e local-exceptions lexical-env))
+                              body-asts)))
+           (if (rest items) (ir :seq type items) (first items))))))))
 
-(defun ir-lower-let-declaration (dec bindings local-exceptions lexical-env body-thunk)
-  "DEC, a declaration of a `let' (IR-SIMPLE-LET-DECLARATION-P), around the
-term BODY-THUNK returns, as COMPILE-LOCAL-DECL compiles it."
-  (ecase (car dec)
-    ((:type :infix :signature) (funcall body-thunk))
-    (:val
-     (let ((pat (second dec))
-           (value (ir-lower (third dec) local-exceptions lexical-env)))
-       (cond
-         ((and (listp pat) (member (car pat) '(:pat-var :var)))
-          (ir :let nil (local-binding-symbol (second pat) bindings) value
-              (funcall body-thunk)))
-         ((eq pat :wild)
-          (ir :let nil (gensym "IGNORED") value (funcall body-thunk)))
-         (t
-          (let ((tmp (gensym "MATCHED")))
-            (ir :let nil tmp value
-                (ir :match nil (ir :var nil tmp)
-                    (list (list (let ((*sml-module-prefix* nil))
-                                  (compile-pat pat local-exceptions
-                                               (append bindings lexical-env)))
-                                (funcall body-thunk)))
-                    (compile-match-failure "Bind" "val" pat))))))))
-    ((:fun :funs)
-     (when *ir-template-mode*
-       (throw 'ir-no-template nil))
-     (let* ((funs (if (eq (car dec) :fun) (list dec) (cdr dec)))
-            (env (append bindings lexical-env)))
-       (ir :letrec nil
-           (mapcar (lambda (fun-dec)
-                     (list (local-binding-symbol (second fun-dec) bindings)
-                           (ir :lisp nil (compile-fn-clauses (third fun-dec) local-exceptions
-                                                             (second fun-dec) env))))
-                   funs)
-           (funcall body-thunk))))
-    ((:val-rec :val-recs)
-     (let* ((recs (if (eq (car dec) :val-rec) (list dec) (cdr dec)))
-            (env (append bindings lexical-env)))
-       (ir :letrec nil
-           (mapcar (lambda (rec)
-                     (list (local-binding-symbol (second rec) bindings)
-                           (ir-lower (third rec) local-exceptions env)))
-                   recs)
-           (funcall body-thunk))))))
+(defun ir-lower-declarations (decs local-exceptions lexical-env body-function)
+  "The local declarations DECS around the term BODY-FUNCTION returns, given
+the exceptions and lexical environment after DECS (like
+COMPILE-LOCAL-DECLS-INTO-BODY)."
+  (if (null decs)
+      (funcall body-function local-exceptions lexical-env)
+      (let* ((dec (first decs))
+             (extended-exceptions (extend-local-exceptions local-exceptions dec))
+             (dec-bindings (if (eq (car dec) :open)
+                               (open-shadowing-lexical-bindings dec lexical-env)
+                               (local-declaration-lexical-bindings dec)))
+             (open-symbol-bindings (local-open-symbol-bindings dec))
+             (open-constructor-bindings (local-open-constructor-bindings dec)))
+        (ir-lower-declaration
+         dec local-exceptions lexical-env
+         (lambda ()
+           (let ((*sml-binding-symbol-env*
+                   (append open-symbol-bindings *sml-binding-symbol-env*))
+                 (*sml-constructor-symbol-env*
+                   (append (local-datatype-constructor-bindings dec)
+                           open-constructor-bindings
+                           *sml-constructor-symbol-env*))
+                 (*sml-local-constructor-arities*
+                   (append (local-datatype-constructor-arities dec)
+                           *sml-local-constructor-arities*)))
+             (ir-lower-declarations (rest decs) extended-exceptions
+                                    (append dec-bindings lexical-env)
+                                    body-function)))))))
+
+(defun ir-lower-val-binding (pat value bindings local-exceptions lexical-env body)
+  "PAT bound to the term VALUE around the term BODY (like
+COMPILE-LOCAL-VAL-BINDING)."
+  (let ((type (ir-type body)))
+    (cond
+      ((and (listp pat) (member (car pat) '(:pat-var :var)))
+       (ir :let type (local-binding-symbol (second pat) bindings) value body))
+      ((eq pat :wild)
+       (ir :let type (gensym "IGNORED") value body))
+      (t
+       (let ((tmp (gensym "MATCHED")))
+         (ir :let type tmp value
+             (ir :match type (list (ir :var (ir-type value) tmp))
+                 (list (list (list (let ((*sml-module-prefix* nil))
+                                     (ir-lower-pattern pat local-exceptions
+                                                       (append bindings lexical-env)
+                                                       (ir-type value))))
+                             body))
+                 (ir-failure "Bind" "val" pat))))))))
+
+(defun ir-lower-declaration (dec local-exceptions lexical-env body-thunk)
+  "DEC, a declaration of a `let' or `local', around the term BODY-THUNK
+returns, as COMPILE-LOCAL-DECL compiles it."
+  (let ((bindings (local-declaration-lexical-bindings dec)))
+    (ecase (car dec)
+      ((:type :infix :datatype-replication :expr :signature :open)
+       (funcall body-thunk))
+      (:val
+       (let ((value (ir-lower (third dec) local-exceptions lexical-env)))
+         (ir-lower-val-binding (second dec) value bindings local-exceptions lexical-env
+                               (funcall body-thunk))))
+      (:vals
+       ;; `val p1 = e1 and p2 = e2' evaluates every expression before
+       ;; binding anything, like `val (p1, p2) = (e1, e2)'; `val rec'
+       ;; bindings joined to them come last.
+       (let* ((vals (remove-if-not (lambda (val) (eq (car val) :val)) (cdr dec)))
+              (recs (remove :val (cdr dec) :key #'car))
+              (values (mapcar (lambda (val) (ir-lower (third val) local-exceptions lexical-env))
+                              vals))
+              (body (if recs
+                        (ir-lower-declarations recs local-exceptions lexical-env
+                                               (lambda (local-exceptions lexical-env)
+                                                 (declare (ignore local-exceptions lexical-env))
+                                                 (funcall body-thunk)))
+                        (funcall body-thunk))))
+         (ir-lower-val-binding `(:pat-tuple ,@(mapcar #'second vals))
+                               (ir :tuple (ir-tuple-type (mapcar #'ir-type values)) values)
+                               bindings local-exceptions lexical-env body)))
+      ((:fun :funs)
+       (let* ((funs (if (eq (car dec) :fun) (list dec) (cdr dec)))
+              (env (append bindings lexical-env))
+              (functions
+                (mapcar (lambda (fun-dec)
+                          (list (local-binding-symbol (second fun-dec) bindings)
+                                (ir-lower-fn-clauses (third fun-dec) local-exceptions
+                                                     (second fun-dec) env)))
+                        funs))
+              (body (funcall body-thunk)))
+         (ir :letrec (ir-type body) functions body)))
+      ((:val-rec :val-recs)
+       (let* ((recs (if (eq (car dec) :val-rec) (list dec) (cdr dec)))
+              (env (append bindings lexical-env))
+              (values (mapcar (lambda (rec)
+                                (list (local-binding-symbol (second rec) bindings)
+                                      (ir-lower (third rec) local-exceptions env)))
+                              recs))
+              (body (funcall body-thunk)))
+         (ir :letrec (ir-type body) values body)))
+      (:datatype
+       (let ((body (funcall body-thunk)))
+         (ir :decl (ir-type body)
+             (list :datatype
+                   (mapcar (lambda (ctor)
+                             (list (local-binding-symbol (second ctor) bindings)
+                                   (local-datatype-constructor-tag ctor)
+                                   (and (fourth ctor) t)
+                                   (second ctor)))
+                           (third dec)))
+             body)))
+      (:exception
+       (let ((body (funcall body-thunk)))
+         (ir :decl (ir-type body)
+             (list :exception (local-binding-symbol (second dec) bindings) (second dec)
+                   (and (getf (cddr dec) :arg-type) t))
+             body)))
+      (:exception-alias
+       (let ((target (resolved-sml-symbol (third dec) lexical-env))
+             (lexicalp (and (lexical-symbol-for-name (third dec) lexical-env) t))
+             (body (funcall body-thunk)))
+         (ir :decl (ir-type body)
+             (list :exception-alias (local-binding-symbol (second dec) bindings)
+                   (second dec) target lexicalp)
+             body)))
+      ((:structure :structure-alias :structure-app :functor)
+       ;; A structure declared by `let' or `local' is a module like any
+       ;; other, compiled as a declaration; the scope of its name is the
+       ;; compiler's business.
+       (when *ir-template-mode*
+         (throw 'ir-no-template nil))
+       (let ((form (compile-decl dec local-exceptions lexical-env))
+             (body (funcall body-thunk)))
+         (ir :decl (ir-type body) (list :module form) body)))
+      (:local
+       (let* ((outer (list *sml-binding-symbol-env* *sml-constructor-symbol-env*
+                           *sml-local-constructor-arities* *sml-local-structure-members*
+                           *sml-local-structure-prefixes*))
+              (local-decs (second dec))
+              (body-decs (third dec))
+              (module-bindings (declarations-local-module-member-bindings local-decs))
+              (structure-prefixes (module-local-structure-prefixes
+                                   local-decs (or *sml-module-prefix* "")))
+              (open-symbol-bindings (declarations-local-open-symbol-bindings local-decs))
+              (open-constructor-bindings
+                (declarations-local-open-constructor-bindings local-decs)))
+         (let ((*sml-local-structure-members* (append module-bindings
+                                                      *sml-local-structure-members*))
+               (*sml-local-structure-prefixes* (append structure-prefixes
+                                                       *sml-local-structure-prefixes*)))
+           (ir-lower-declarations
+            local-decs local-exceptions lexical-env
+            (lambda (inner-exceptions inner-env)
+              (let ((*sml-binding-symbol-env*
+                      (append open-symbol-bindings *sml-binding-symbol-env*))
+                    (*sml-constructor-symbol-env*
+                      (append open-constructor-bindings *sml-constructor-symbol-env*)))
+                (ir-lower-declarations
+                 body-decs inner-exceptions inner-env
+                 (lambda (local-exceptions lexical-env)
+                   (declare (ignore local-exceptions lexical-env))
+                   ;; What follows `local ... in ... end' is lowered in
+                   ;; the environment around it.
+                   (destructuring-bind (*sml-binding-symbol-env*
+                                        *sml-constructor-symbol-env*
+                                        *sml-local-constructor-arities*
+                                        *sml-local-structure-members*
+                                        *sml-local-structure-prefixes*)
+                       outer
+                     (funcall body-thunk)))))))))))))
+
+;;; Functions of clauses (`fun', and `fn' through IR-LOWER)
+
+(defun ir-lower-fn-clauses (clauses local-exceptions function-name outer-lexical-env
+                            &optional tupled)
+  "The term of the curried function CLAUSES define, or, when TUPLED, of
+the function of N arguments taking the fields of the tuple each clause's
+one pattern matched (CLAUSES then have N patterns, the tuple's; see
+TUPLED-FUN-ARITY); as
+COMPILE-FN-CLAUSES-OF-ARITY compiles it."
+  (let* ((arity (length (first (first clauses))))
+         (fun-type (or (ir-node-type *ir-fun-type-node*)
+                       (ir-node-type clauses)))
+         (*ir-fun-type-node* nil)
+         (param-types (if tupled
+                          (ir-tuple-field-types (ir-arrow-domain fun-type) arity)
+                          (loop repeat arity
+                                for type = fun-type then (ir-arrow-range type)
+                                collect (ir-arrow-domain type))))
+         (result-type (if tupled
+                          (ir-arrow-range fun-type)
+                          (loop repeat arity
+                                for type = fun-type then (ir-arrow-range type)
+                                finally (return (ir-arrow-range type)))))
+         (tmp-args (loop repeat arity collect (gensym "ARG")))
+         ;; Fresh variables for the loop: the curried parameters are closed
+         ;; over by partial applications, so they must not be assigned.
+         (loop-args (loop repeat arity collect (gensym "LOOP-ARG")))
+         ;; Not a gensym: ABCL's pretty printer loses the identity of an
+         ;; uninterned TAGBODY tag in emitted artifacts.  An inner
+         ;; function's loop shadows the tag, and only its own body jumps to
+         ;; it.
+         (loop-tag '%self-tail-call)
+         (looping nil)
+         (bodies
+           (mapcar (lambda (clause)
+                     (if (and (stringp function-name)
+                              (notany (lambda (pat)
+                                        (member function-name (pattern-bound-names pat)
+                                                :test #'equal))
+                                      (first clause)))
+                         (multiple-value-bind (body found)
+                             (mark-sml-self-tail-calls (second clause) function-name
+                                                       arity (cons loop-tag loop-args)
+                                                       tupled)
+                           (when found (setf looping t))
+                           body)
+                         (second clause)))
+                   clauses))
+         (args (if looping loop-args tmp-args))
+         (*ir-tail-call-type* result-type)
+         (match
+           (ir :match result-type
+               (mapcar (lambda (arg type) (ir :var type arg)) args param-types)
+               (mapcar (lambda (clause body)
+                         (let* ((pat (compile-clause-pattern (first clause)))
+                                (var-map (pattern-variable-map pat local-exceptions))
+                                (branch-env (append var-map outer-lexical-env)))
+                           (list (mapcar (lambda (param type)
+                                           (ir-lower-pattern param local-exceptions
+                                                             branch-env type))
+                                         (first clause) param-types)
+                                 (ir-lower body local-exceptions branch-env))))
+                       clauses bodies)
+               (ir-failure "Match" (or function-name "fn") (first (first clauses)))))
+         (body (if looping
+                   (ir :loop result-type loop-tag loop-args
+                       (mapcar (lambda (arg type) (ir :var type arg)) tmp-args param-types)
+                       match)
+                   match)))
+    (if tupled
+        (ir :fn fun-type tmp-args body function-name)
+        (let ((types (loop repeat arity
+                           for type = fun-type then (ir-arrow-range type)
+                           collect type)))
+          (reduce (lambda (pair body)
+                    (ir :fn (cdr pair) (list (car pair)) body function-name))
+                  (mapcar #'cons tmp-args types)
+                  :from-end t :initial-value body)))))
 
 (defun ir-lower-name (ast name lexical-env)
   "A variable or constructor occurrence NAME."
@@ -282,115 +828,494 @@ term BODY-THUNK returns, as COMPILE-LOCAL-DECL compiles it."
         (ir :var (ir-node-type ast) form)
         (ir :ref (ir-node-type ast) form))))
 
+(defun ir-lower-selector-function (ast type)
+  "`#lab' as a function value."
+  (let ((record (gensym "RECORD")))
+    (ir :fn type (list record)
+        (ir-select-node ast (ir :var (ir-arrow-domain type) record) (ir-arrow-range type))
+        nil)))
+
+(defun ir-select-node (selector record type)
+  "`#lab' (SELECTOR) of the term RECORD, like COMPILE-SELECTION."
+  (let* ((label (second selector))
+         (labels (sml-node-record-labels selector))
+         (index (and labels (position label labels :test #'string=))))
+    (if index
+        (ir :select type (1+ index) record)
+        (ir :select-label type label record))))
+
+(defun ir-lower-overloaded-value (name tyname type)
+  "Overloaded identifier NAME at TYNAME as a function value (see
+COMPILE-OVERLOADED-IDENTIFIER-VALUE), or NIL."
+  (if (member name '("~" "abs") :test #'string=)
+      (let ((x (gensym "X")))
+        (and (compile-overloaded-operation name tyname (list x))
+             (ir :fn type (list x)
+                 (ir :prim (ir-arrow-range type) (list :overloaded name tyname)
+                     (list (ir :var (ir-arrow-domain type) x)))
+                 nil)))
+      (let ((pair (gensym "PAIR"))
+            (domain (ir-arrow-domain type)))
+        (and (compile-overloaded-operation name tyname (list (gensym) (gensym)))
+             (ir :fn type (list pair)
+                 (ir :prim (ir-arrow-range type) (list :overloaded name tyname)
+                     (list (ir :select (ir-field-type domain "1") 1 (ir :var domain pair))
+                           (ir :select (ir-field-type domain "2") 2 (ir :var domain pair))))
+                 nil)))))
+
+(defun ir-fill-type (node)
+  "NODE, given the type of its body or rules when it has none (a node the
+checker did not see, e.g. one rebuilt by the compiler)."
+  (unless (ir-type node)
+    (let ((type (case (ir-kind node)
+                  (:match (some (lambda (rule) (ir-type (second rule))) (fourth node)))
+                  (:handle (ir-type (third node)))
+                  (:seq (ir-type (car (last (third node)))))
+                  (:if (or (ir-type (fourth node)) (ir-type (fifth node))))
+                  (:let (ir-type (fifth node)))
+                  ((:letrec :decl) (ir-type (fourth node))))))
+      (when type
+        (setf (second node) type))))
+  node)
+
 (defun ir-lower (ast local-exceptions lexical-env)
   "The IR term of expression AST (see COMPILE-EXPR-DIRECT, which this
 follows case by case)."
-  (cond
-    ((or (numberp ast) (stringp ast) (characterp ast)) (ir :const nil ast))
-    ((atom ast) (ir-fallback ast local-exceptions lexical-env))
-    (t
-     (case (car ast)
-       (:var
-        ;; `op +' and the like as values.
-        (multiple-value-bind (name tyname) (overloaded-identifier-instance ast)
-          (let ((value (and name (compile-overloaded-identifier-value name tyname))))
-            (if value
-                (ir :lisp nil value)
-                (ir-lower-name ast (second ast) lexical-env)))))
-       (:op-var (ir-lower `(:var ,(second ast)) local-exceptions lexical-env))
-       (:word (ir :const (ir-node-type ast) (second ast)))
-       (:ctor
-        (cond ((string= (second ast) "true") (ir :const nil t))
-              ((member (second ast) '("false" "nil") :test #'string=) (ir :const nil nil))
-              (t (ir-lower-name ast (second ast) lexical-env))))
-       (:typed (ir-lower (second ast) local-exceptions lexical-env))
-       (:deref (ir :prim nil '(:deref)
-                   (list (ir-lower (second ast) local-exceptions lexical-env))))
-       (:infix-app
-        (ir :app nil (ir-lower `(:var ,(second ast)) local-exceptions lexical-env)
-            (ir :tuple nil (list (ir-lower (third ast) local-exceptions lexical-env)
-                                 (ir-lower (fourth ast) local-exceptions lexical-env)))))
-       (:app (ir-lower-application ast local-exceptions lexical-env))
-       (:case
-        (let ((branches (cddr ast)))
-          (if (or (literal-case-branches-p branches)
-                  (tuple-dispatch-case-branches-p branches))
-              (ir-fallback ast local-exceptions lexical-env)
-              (ir :match nil (ir-lower (second ast) local-exceptions lexical-env)
-                  (ir-lower-match-branches branches local-exceptions lexical-env)
-                  (compile-match-failure "Match" "case" (first (first branches)))))))
-       (:handle
-        (ir :handle nil (ir-lower (second ast) local-exceptions lexical-env)
-            (ir-lower-match-branches (third ast) local-exceptions lexical-env)))
-       (:if (ir :if nil (ir-lower (second ast) local-exceptions lexical-env)
-                (ir-lower (third ast) local-exceptions lexical-env)
-                (ir-lower (fourth ast) local-exceptions lexical-env)))
-       (:while (ir :while nil (ir-lower (second ast) local-exceptions lexical-env)
-                   (ir-lower (third ast) local-exceptions lexical-env)))
-       (:raise (ir :raise nil (ir-lower (second ast) local-exceptions lexical-env)))
-       (:let (ir-lower-let ast local-exceptions lexical-env))
-       (:andalso (ir :if nil (ir-lower (second ast) local-exceptions lexical-env)
-                     (ir-lower (third ast) local-exceptions lexical-env)
-                     (ir :const nil nil)))
-       (:orelse (ir :if nil (ir-lower (second ast) local-exceptions lexical-env)
-                    (ir :const nil t)
-                    (ir-lower (third ast) local-exceptions lexical-env)))
-       (:seq (ir :seq nil (mapcar (lambda (e) (ir-lower e local-exceptions lexical-env))
-                                  (cdr ast))))
-       (:list (ir :prim nil '(:list)
-                  (mapcar (lambda (e) (ir-lower e local-exceptions lexical-env))
-                          (cdr ast))))
-       (:record (ir-lower-record (cdr ast) local-exceptions lexical-env))
-       (:unit (ir :unit nil))
-       (:tuple (ir :tuple nil (mapcar (lambda (e) (ir-lower e local-exceptions lexical-env))
-                                      (cdr ast))))
-       (:self-tail-call
-        (when *ir-template-mode*
-          (throw 'ir-no-template nil))
-        (ir :tail-call nil (second ast)
-            (mapcar (lambda (e) (ir-lower e local-exceptions lexical-env)) (cddr ast))))
-       (:fn
-        (let ((clauses (second ast))
-              (arg (gensym "ARG")))
-          (ir :fn nil (list arg)
-              (ir :match nil (ir :var nil arg)
-                  (ir-lower-match-branches clauses local-exceptions lexical-env)
-                  (compile-match-failure "Match" "fn" (first (first clauses))))
-              nil)))
-       (otherwise (ir-fallback ast local-exceptions lexical-env))))))
+  (ir-fill-type (ir-lower-1 ast local-exceptions lexical-env)))
 
-(defun ir-lower-application (ast local-exceptions lexical-env)
+(defun ir-lower-1 (ast local-exceptions lexical-env)
+  (let ((type (ir-node-type ast)))
+    (flet ((sub (ast) (ir-lower ast local-exceptions lexical-env)))
+      (cond
+        ((or (numberp ast) (stringp ast) (characterp ast))
+         (ir :const (or type (ir-constant-type ast)) ast))
+        ((atom ast) (error "Unknown AST: ~A" ast))
+        (t
+         (case (car ast)
+           (:var
+            ;; `op +' and the like as values.
+            (multiple-value-bind (name tyname) (overloaded-identifier-instance ast)
+              (or (and name (ir-lower-overloaded-value name tyname type))
+                  (ir-lower-name ast (second ast) lexical-env))))
+           (:op-var
+            (let ((var `(:var ,(second ast))))
+              (multiple-value-bind (name tyname) (overloaded-identifier-instance ast)
+                (or (and name (ir-lower-overloaded-value name tyname type))
+                    (let ((node (ir-lower var local-exceptions lexical-env)))
+                      (setf (second node) (or (second node) type))
+                      node)))))
+           (:word (ir :const (or type (ir-base-type "word")) (second ast)))
+           (:ctor
+            (cond ((string= (second ast) "true") (ir :const type t))
+                  ((member (second ast) '("false" "nil") :test #'string=) (ir :const type nil))
+                  (t (ir-lower-name ast (second ast) lexical-env))))
+           (:typed (let ((node (sub (second ast))))
+                     (if (and type (null (ir-type node)))
+                         (list* (ir-kind node) type (cddr node))
+                         node)))
+           (:selector (ir-lower-selector-function ast type))
+           (:deref (ir :prim type '(:deref) (list (sub (second ast)))))
+           (:infix-app
+            (let ((left (sub (third ast)))
+                  (right (sub (fourth ast))))
+              (ir :app type (ir-lower `(:var ,(second ast)) local-exceptions lexical-env)
+                  (ir :tuple (ir-tuple-type (list (ir-type left) (ir-type right)))
+                      (list left right)))))
+           (:app (ir-lower-application ast local-exceptions lexical-env type))
+           (:case
+            (let ((scrutinee (sub (second ast))))
+              (ir :match type (list scrutinee)
+                  (ir-lower-match-rules (cddr ast) local-exceptions lexical-env
+                                        (ir-type scrutinee))
+                  (ir-failure "Match" "case" (first (first (cddr ast)))))))
+           (:handle
+            (ir :handle type (sub (second ast))
+                (mapcar (lambda (rule) (list (first (first rule)) (second rule)))
+                        (ir-lower-match-rules (third ast) local-exceptions lexical-env
+                                              (ir-base-type "exn")))))
+           (:if (ir :if type (sub (second ast)) (sub (third ast)) (sub (fourth ast))))
+           (:while (ir :while type (sub (second ast)) (sub (third ast))))
+           (:raise (ir :raise type (sub (second ast))))
+           (:let (ir-lower-let ast local-exceptions lexical-env type))
+           (:andalso (ir :if type (sub (second ast)) (sub (third ast)) (ir :const type nil)))
+           (:orelse (ir :if type (sub (second ast)) (ir :const type t) (sub (third ast))))
+           (:seq (ir :seq type (mapcar #'sub (cdr ast))))
+           (:list (ir :prim type '(:list) (mapcar #'sub (cdr ast))))
+           (:record (ir-lower-record (cdr ast) local-exceptions lexical-env type))
+           (:unit (ir :unit (or type (ir-tuple-type nil))))
+           (:tuple (let ((items (mapcar #'sub (cdr ast))))
+                     (ir :tuple (or type (ir-tuple-type (mapcar #'ir-type items))) items)))
+           (:self-tail-call
+            (when *ir-template-mode*
+              (throw 'ir-no-template nil))
+            (ir :tail-call (or type *ir-tail-call-type*) (second ast)
+                (mapcar #'sub (cddr ast))))
+           (:fn
+            (let ((clauses (second ast))
+                  (arg (gensym "ARG"))
+                  (domain (ir-arrow-domain type)))
+              (ir :fn type (list arg)
+                  (ir :match (ir-arrow-range type) (list (ir :var domain arg))
+                      (ir-lower-match-rules clauses local-exceptions lexical-env domain)
+                      (ir-failure "Match" "fn" (first (first clauses))))
+                  nil)))
+           (otherwise (error "Unknown AST: ~A" ast))))))))
+
+(defun ir-lower-application (ast local-exceptions lexical-env type)
   (destructuring-bind (head arg) (cdr ast)
     (cond
       ;; `~' applied to a word literal is modular negation.
       ((and (equal head '(:var "~")) (consp arg) (eq (car arg) :word))
-       (ir :const nil (logand +sml-word-mask+ (- (second arg)))))
-      ((ir-lower-overloaded ast local-exceptions lexical-env))
-      ((ir-lower-equality ast local-exceptions lexical-env))
-      ((ir-lower-binary-primitive ast local-exceptions lexical-env))
+       (ir :const (or type (ir-base-type "word")) (logand +sml-word-mask+ (- (second arg)))))
+      ((ir-lower-overloaded ast local-exceptions lexical-env type))
+      ((ir-lower-equality ast local-exceptions lexical-env type))
+      ((ir-lower-binary-primitive ast local-exceptions lexical-env type))
       ((and (consp head) (eq (car head) :selector))
-       (let* ((label (second head))
-              (labels (sml-node-record-labels head))
-              (index (and labels (position label labels :test #'string=)))
-              (record (ir-lower arg local-exceptions lexical-env)))
-         (if index
-             (ir :select nil (1+ index) record)
-             (ir :select-label nil label record))))
+       (ir-select-node head (ir-lower arg local-exceptions lexical-env) type))
       ((and (consp head) (eq (car head) :ctor)
             (not (exception-constructor-info (second head) local-exceptions))
             (or (lexical-constructor-tag-form (second head) lexical-env)
                 (known-data-constructor-application-p (second head) lexical-env)))
-       (ir-lower-constructor-application head arg local-exceptions lexical-env))
-      ((ir-lower-tupled-call head arg local-exceptions lexical-env))
-      (t (ir :app nil (ir-lower head local-exceptions lexical-env)
+       (ir-lower-constructor-application head arg local-exceptions lexical-env type))
+      ((ir-lower-tupled-call head arg local-exceptions lexical-env type))
+      (t (ir :app type (ir-lower head local-exceptions lexical-env)
              (ir-lower arg local-exceptions lexical-env))))))
 
 ;;; Emission
 
+(defvar *ir-emit-scope* nil
+  "The variables in scope where the node being emitted will be: those of
+the lexical environment the term was compiled in, and those its binders
+bind around the node.  A hoisted case action takes the ones it uses.")
+
+(defmacro with-ir-scope ((symbols) &body body)
+  `(let ((*ir-emit-scope* (append ,symbols *ir-emit-scope*)))
+     ,@body))
+
 (defun ir-emit-list (nodes) (mapcar #'ir-emit nodes))
 
-(defun ir-emit-match-branches (branches)
-  (mapcar (lambda (branch) (list (first branch) (ir-emit (second branch)))) branches))
+(defun ir-emit-pattern (pattern)
+  "The trivia pattern of IR PATTERN (as COMPILE-PAT compiles its AST)."
+  (ecase (ir-kind pattern)
+    (:p-wild '_)
+    (:p-var (third pattern))
+    (:p-const (third pattern))
+    (:p-as (let ((alias (third pattern)))
+             `(guard1 ,alias t ,alias ,(ir-emit-pattern (fourth pattern)))))
+    (:p-tuple (tuple-pattern-form (mapcar #'ir-emit-pattern (third pattern))))
+    (:p-record
+     (indexed-record-pattern (mapcar (lambda (field)
+                                       (cons (first field) (ir-emit-pattern (third field))))
+                                     (fourth pattern))
+                             (third pattern)))
+    (:p-record-lookup
+     (let ((record (gensym "RECORD")))
+       ;; SML-RECORD-FIELD is NIL, not an error, on a value without the
+       ;; field (see INDEXED-RECORD-PATTERN).
+       `(guard1 ,record t
+                ,@(mapcan (lambda (field)
+                            `((sml-record-field ,record ,(first field))
+                              ,(ir-emit-pattern (second field))))
+                          (third pattern)))))
+    (:p-cons `(cons ,(ir-emit-pattern (third pattern)) ,(ir-emit-pattern (fourth pattern))))
+    (:p-ref (let ((it (gensym "REF")))
+              `(guard1 ,it
+                       (and (vectorp ,it)
+                            (= (length ,it) 2)
+                            (eq (aref ,it 0) :ref))
+                       (aref ,it 1) ,(ir-emit-pattern (third pattern)))))
+    (:p-exn (destructuring-bind (name form payload) (cddr pattern)
+              (declare (ignore name))
+              (let ((it (gensym "EXN")))
+                (if payload
+                    `(guard1 ,it
+                             (and (consp ,it)
+                                  (sml-exception-tag-p (car ,it))
+                                  (eq (sml-exception-constructor-tag ,it)
+                                      (sml-exception-constructor-tag ,form)))
+                             (cdr ,it) ,(ir-emit-pattern payload))
+                    `(guard1 ,it
+                             (and (sml-exception-tag-p ,it)
+                                  (eq (sml-exception-constructor-tag ,it)
+                                      (sml-exception-constructor-tag ,form))))))))
+    (:p-con (ir-emit-constructor-pattern pattern))))
+
+(defun ir-emit-constructor-pattern (pattern)
+  (destructuring-bind (name how data payload) (cddr pattern)
+    (declare (ignore name))
+    (let ((it (gensym (if payload "CTOR-VALUE" "CTOR"))))
+      (ecase how
+        ;; Nullary constructors.
+        (:eql-form `(guard1 ,it (eql ,it ,data)))
+        (:eq-tag `(guard1 ,it (eq ,it ',data)))
+        (:bound-eql `(guard1 ,it (and (boundp ',data) (eql ,it (symbol-value ',data)))))
+        (:value-eql `(guard1 ,it (eql ,it (symbol-value ',data))))
+        (:tag-p `(guard1 ,it (sml-constructor-tag-p ,it ',data)))
+        ;; Constructors applied to PAYLOAD.
+        (:functor-tag `(guard1 ,it (and (consp ,it) (eq (car ,it) ,data))
+                               (cdr ,it) ,(ir-emit-pattern payload)))
+        (:boxed `(cons ',data ,(ir-emit-pattern payload)))
+        (:flat
+         (destructuring-bind (tag . arity) data
+           ;; The tag is tested as a subpattern, after the type, so that
+           ;; trivia can infer the types of the tests when it reorders
+           ;; clauses.
+           (let ((tag-pattern (let ((tag-var (gensym "TAG")))
+                                `(guard1 ,tag-var (eq ,tag-var ',tag)))))
+             (if (and (eq (ir-kind payload) :p-tuple) (= (length (third payload)) arity))
+                 `(guard1 ,it ,(vector-width-test it (1+ arity))
+                          (svref ,it 0) ,tag-pattern
+                          ,@(loop for subpattern in (third payload)
+                                  for i from 1
+                                  for compiled = (ir-emit-pattern subpattern)
+                                  unless (eq compiled '_)
+                                    append `((svref ,it ,i) ,compiled)))
+                 `(guard1 ,it ,(vector-width-test it (1+ arity))
+                          (svref ,it 0) ,tag-pattern
+                          (sml-flat-constructed-argument ,it)
+                          ,(ir-emit-pattern payload))))))
+        (:unknown-repr `(guard1 ,it (eq (sml-constructed-tag ,it) ',data)
+                                (sml-constructed-argument ,it) ,(ir-emit-pattern payload)))
+        (:variable `(guard1 ,it (eq (sml-constructed-tag ,it)
+                                    (sml-constructor-value-tag ,data))
+                            (sml-constructed-argument ,it) ,(ir-emit-pattern payload)))
+        ;; The value may be a nullary constructor (a symbol) of the same
+        ;; datatype, so test for a cons rather than assert one.
+        (:runtime `(guard1 ,it (let ((tag (sml-constructed-tag ,it)))
+                                 (and tag (sml-constructor-tag-p tag ',data)))
+                           (sml-constructed-argument ,it) ,(ir-emit-pattern payload)))))))
+
+(defun ir-irrefutable-bindings (pattern form)
+  "The LET* bindings that match PATTERN against FORM (a variable or an
+access to one), or :REFUTABLE when PATTERN may fail (ROADMAP item 4).
+Variables of real type are bound as double-floats, which SBCL can keep
+unboxed."
+  (case (ir-kind pattern)
+    (:p-wild nil)
+    (:p-var (if (ir-variable-p (third pattern))
+                (list (list (third pattern)
+                            (if (eq (fourth pattern) :real) `(sml-double ,form) form)))
+                :refutable))
+    ((:p-tuple :p-record)
+     (let ((record (gensym "RECORD"))
+           (bindings nil))
+       (loop for (index . subpattern)
+               in (if (eq (ir-kind pattern) :p-tuple)
+                      (loop for subpattern in (third pattern)
+                            for i from 1
+                            collect (cons i subpattern))
+                      (mapcar (lambda (field) (cons (first field) (third field)))
+                              (fourth pattern)))
+             do (let ((inner (ir-irrefutable-bindings subpattern `(svref ,record ,index))))
+                  (when (eq inner :refutable)
+                    (return-from ir-irrefutable-bindings :refutable))
+                  (setf bindings (append bindings inner))))
+       (and bindings (cons (list record form) bindings))))
+    (t :refutable)))
+
+(defun ir-literal-key-p (pattern)
+  (and (eq (ir-kind pattern) :p-const)
+       (not (stringp (third pattern)))))
+
+(defun ir-literal-match-p (scrutinees rules)
+  "Is the match a `case' on literals (LITERAL-CASE-BRANCHES-P)?"
+  (and (= (length scrutinees) 1)
+       rules
+       (loop for (patterns) in rules
+             for pattern = (first patterns)
+             do (cond ((eq (ir-kind pattern) :p-wild) (return t))
+                      ((not (ir-literal-key-p pattern)) (return nil)))
+             finally (return t))))
+
+(defun ir-dispatch-key (pattern)
+  "The integer that the first field of tuple PATTERN must be, or NIL."
+  (and (eq (ir-kind pattern) :p-tuple)
+       (let ((first (first (third pattern))))
+         (and (eq (ir-kind first) :p-const) (integerp (third first))
+              (third first)))))
+
+(defun ir-dispatch-match-p (scrutinees rules)
+  "Is the match a large dispatch on the first field of a tuple
+(TUPLE-DISPATCH-CASE-BRANCHES-P)?"
+  (and (= (length scrutinees) 1)
+       (>= (length rules) 12)
+       (eq (ir-kind (first (first (car (last rules))))) :p-wild)
+       (every (lambda (rule) (ir-dispatch-key (first (first rule)))) (butlast rules))))
+
+(defun ir-emit-rule-body (patterns body)
+  (with-ir-scope ((mapcan #'ir-pattern-binders patterns))
+    (ir-emit body)))
+
+(defun ir-emit-failure (failure)
+  `(sml-raise-match-failure ,@failure))
+
+(defun ir-emit-match (node)
+  (destructuring-bind (scrutinees rules failure) (cddr node)
+    (cond
+      ;; One rule whose patterns cannot fail: bind without a match.
+      ((and (= (length rules) 1)
+            (let ((patterns (first (first rules))))
+              (notany (lambda (pattern)
+                        (eq (ir-irrefutable-bindings pattern 'x) :refutable))
+                      patterns)))
+       (destructuring-bind (patterns body) (first rules)
+         (let* ((temporaries nil)
+                (bindings
+                  (loop for scrutinee in scrutinees
+                        for pattern in patterns
+                        append (let ((form (if (eq (ir-kind scrutinee) :var)
+                                               (third scrutinee)
+                                               (let ((temporary (gensym "VALUE")))
+                                                 (push (list temporary (ir-emit scrutinee))
+                                                       temporaries)
+                                                 temporary))))
+                                 (ir-irrefutable-bindings pattern form))))
+                (bindings (append (nreverse temporaries) bindings)))
+           `(let* ,bindings
+              (declare (ignorable ,@(mapcar #'first bindings)))
+              ,(ir-emit-rule-body patterns body)))))
+      ((ir-literal-match-p scrutinees rules) (ir-emit-literal-match node))
+      ((and (ir-dispatch-match-p scrutinees rules)) (ir-emit-dispatch-match node))
+      ((= (length scrutinees) 1)
+       `(trivia:match ,(ir-emit (first scrutinees))
+          ,@(mapcar (lambda (rule)
+                      (destructuring-bind (patterns body) rule
+                        (list (ir-emit-pattern (first patterns))
+                              (ir-emit-rule-body patterns body))))
+                    rules)
+          (_ ,(ir-emit-failure failure))))
+      (t
+       ;; Curried arguments are matched as multiple values, without
+       ;; allocating a tuple of them.
+       `(trivia:match* ,(ir-emit-list scrutinees)
+          ,@(mapcar (lambda (rule)
+                      (destructuring-bind (patterns body) rule
+                        (list (mapcar #'ir-emit-pattern patterns)
+                              (ir-emit-rule-body patterns body))))
+                    rules)
+          (,(make-list (length scrutinees) :initial-element '_)
+           ,(ir-emit-failure failure)))))))
+
+(defun ir-emit-literal-match (node)
+  "A `case' on literals as a CL CASE (COMPILE-LITERAL-CASE)."
+  (destructuring-bind (scrutinees rules failure) (cddr node)
+    (let ((clauses nil)
+          (has-default nil))
+      (dolist (rule rules)
+        (destructuring-bind ((pattern) body) rule
+          (if (eq (ir-kind pattern) :p-wild)
+              (progn
+                (push `(otherwise ,(compile-case-action-thunk (ir-emit body))) clauses)
+                (setf has-default t)
+                (return))
+              (push `((,(third pattern)) ,(compile-case-action-thunk (ir-emit body)))
+                    clauses))))
+      `(case ,(ir-emit (first scrutinees))
+         ,@(nreverse clauses)
+         ,@(unless has-default
+             `((otherwise ,(ir-emit-failure failure))))))))
+
+(defun ir-hoisted-parameters (form)
+  "The parameters of a function hoisted out of the term being emitted,
+whose body is FORM (see HOISTED-FUNCTION-PARAMETERS)."
+  (hoisted-function-parameters (mapcar (lambda (symbol) (cons nil symbol)) *ir-emit-scope*)
+                               form))
+
+(defun ir-emit-dispatch-match (node)
+  "A large match on the first field of a tuple, as a CL CASE on that field
+whose groups of rules are hoisted functions (COMPILE-TUPLE-DISPATCH-CASE)."
+  (destructuring-bind (scrutinees rules failure) (cddr node)
+    (declare (ignore failure))
+    (let* ((value (gensym "CASE-VALUE"))
+           (fallback (gensym "CASE-FALLBACK"))
+           (default-rule (car (last rules)))
+           (groups nil))
+      (dolist (rule (butlast rules))
+        (let* ((key (ir-dispatch-key (first (first rule))))
+               (group (assoc key groups)))
+          (if group
+              (setf (cdr group) (append (cdr group) (list rule)))
+              (setf groups (append groups (list (list key rule)))))))
+      `(let ((,value ,(ir-emit (first scrutinees)))
+             (,fallback (lambda () ,(ir-emit (second default-rule)))))
+         (case (svref ,value 1)
+           ,@(mapcar (lambda (group)
+                       `((,(first group))
+                         ,(with-ir-scope ((list value fallback))
+                            (ir-emit-dispatch-group (rest group) value fallback))))
+                     groups)
+           (otherwise (funcall ,fallback)))))))
+
+(defun ir-emit-dispatch-group (rules value fallback)
+  (let ((clauses
+          (mapcar (lambda (rule)
+                    (destructuring-bind ((pattern) body) rule
+                      (list (ir-emit-pattern pattern)
+                            (with-ir-scope ((ir-pattern-binders pattern))
+                              (let ((form (ir-emit body)))
+                                (if *sml-hoisting-enabled*
+                                    (let ((name (next-hoisted-sml-function-name))
+                                          (parameters (ir-hoisted-parameters form)))
+                                      (push `(defun ,name ,parameters
+                                               ,@(portable-tail-call-declarations)
+                                               ,form)
+                                            *sml-hoisted-forms*)
+                                      `(,name ,@parameters))
+                                    form))))))
+                  rules)))
+    (if *sml-hoisting-enabled*
+        (let* ((name (next-hoisted-sml-function-name))
+               (dispatch-argument (gensym "DISPATCH-VALUE"))
+               (fallback-argument (gensym "DISPATCH-FALLBACK"))
+               (parameters (remove-if (lambda (symbol) (member symbol (list value fallback)))
+                                      (ir-hoisted-parameters clauses))))
+          (push `(defun ,name (,dispatch-argument ,fallback-argument ,@parameters)
+                   (trivia:match ,dispatch-argument
+                     ,@clauses
+                     (_ (funcall ,fallback-argument))))
+                *sml-hoisted-forms*)
+          `(,name ,value ,fallback ,@parameters))
+        `(trivia:match ,value
+           ,@clauses
+           (_ (funcall ,fallback))))))
+
+(defun ir-emit-declaration (declaration body)
+  "A local declaration around the CL form BODY (COMPILE-LOCAL-DECL)."
+  (ecase (first declaration)
+    (:datatype
+     ;; ((symbol tag takes-argument-p name) ...)
+     (let ((bindings (mapcar (lambda (ctor)
+                               (destructuring-bind (symbol tag argumentp name) ctor
+                                 (declare (ignore name))
+                                 (list symbol (if argumentp
+                                                  `(lambda (payload) (cons ',tag payload))
+                                                  `',tag))))
+                             (second declaration))))
+       `(let ,bindings
+          (declare (ignorable ,@(mapcar #'first bindings)))
+          ,body)))
+    (:exception
+     (destructuring-bind (symbol name argumentp) (rest declaration)
+       `(let ((,symbol ,(if argumentp
+                            `(make-sml-exception-function ,name)
+                            `(make-sml-exception-constructor ,name))))
+          (declare (ignorable ,symbol))
+          ,body)))
+    (:exception-alias
+     (destructuring-bind (symbol name target lexicalp) (rest declaration)
+       `(let ((,symbol ,(if lexicalp
+                            target
+                            `(if (boundp ',target)
+                                 (symbol-value ',target)
+                                 (make-sml-exception-constructor ,name)))))
+          (declare (ignorable ,symbol))
+          ,body)))
+    (:module `(progn ,(second declaration) ,body))))
+
+(defun ir-declaration-binders (declaration)
+  (case (first declaration)
+    (:datatype (mapcar #'first (second declaration)))
+    ((:exception :exception-alias) (list (second declaration)))))
 
 (defun ir-emit (node)
   "The CL form of IR term NODE."
@@ -399,7 +1324,6 @@ follows case by case)."
     (:unit '(sml-unit))
     (:var (third node))
     (:ref (third node))
-    (:lisp (third node))
     (:prim (ir-emit-primitive (third node) (ir-emit-list (fourth node))))
     (:tuple `(sml-tuple ,@(ir-emit-list (third node))))
     (:record (record-construction-form (third node) (ir-emit-list (fourth node))))
@@ -415,19 +1339,21 @@ follows case by case)."
     (:app `(funcall ,(ir-emit (third node)) ,(ir-emit (fourth node))))
     (:call `(,(third node) ,@(ir-emit-list (fourth node))))
     (:fn (destructuring-bind (params body name) (cddr node)
-           (if (= (length params) 1)
-               (sml-lambda-form name (first params) (ir-emit body))
-               `(lambda ,params ,@(portable-tail-call-declarations) ,(ir-emit body)))))
+           (let ((body (with-ir-scope (params) (ir-emit body))))
+             (if (= (length params) 1)
+                 (sml-lambda-form name (first params) body)
+                 `(lambda ,params ,@(portable-tail-call-declarations) ,body)))))
     (:let (destructuring-bind (symbol value body) (cddr node)
             `(let ((,symbol ,(ir-emit value)))
                (declare (ignorable ,symbol))
-               ,(ir-emit body))))
+               ,(with-ir-scope ((list symbol)) (ir-emit body)))))
     (:letrec (destructuring-bind (bindings body) (cddr node)
-               `(let ,(mapcar (lambda (binding) `(,(first binding) nil)) bindings)
-                  ,@(mapcar (lambda (binding)
-                              `(setf ,(first binding) ,(ir-emit (second binding))))
-                            bindings)
-                  ,(ir-emit body))))
+               (with-ir-scope ((mapcar #'first bindings))
+                 `(let ,(mapcar (lambda (binding) `(,(first binding) nil)) bindings)
+                    ,@(mapcar (lambda (binding)
+                                `(setf ,(first binding) ,(ir-emit (second binding))))
+                              bindings)
+                    ,(ir-emit body)))))
     (:seq `(progn ,@(ir-emit-list (third node))))
     (:if `(if ,(ir-emit (third node)) ,(ir-emit (fourth node)) ,(ir-emit (fifth node))))
     (:while `(progn (loop while ,(ir-emit (third node)) do ,(ir-emit (fourth node)))
@@ -439,18 +1365,29 @@ follows case by case)."
           (sml-raised-exception (,condition-var)
             (let ((value (sml-exception-value ,condition-var)))
               (trivia:match value
-                ,@(ir-emit-match-branches (fourth node))
+                ,@(mapcar (lambda (rule)
+                            (list (ir-emit-pattern (first rule))
+                                  (ir-emit-rule-body (list (first rule)) (second rule))))
+                          (fourth node))
                 (_ (sml-raise value))))))))
-    (:match
-     (destructuring-bind (scrutinee branches failure) (cddr node)
-       `(trivia:match ,(ir-emit scrutinee)
-          ,@(ir-emit-match-branches branches)
-          (_ ,failure))))
+    (:match (ir-emit-match node))
+    (:loop (destructuring-bind (tag variables inits body) (cddr node)
+             (let ((block (gensym "SELF")))
+               `(let ,(mapcar #'list variables (ir-emit-list inits))
+                  (block ,block
+                    (tagbody
+                       ,tag
+                       (return-from ,block
+                         ,(with-ir-scope (variables) (ir-emit body)))))))))
     (:tail-call
      (destructuring-bind (tag &rest variables) (third node)
        `(progn
           (psetq ,@(mapcan #'list variables (ir-emit-list (fourth node))))
-          (go ,tag))))))
+          (go ,tag))))
+    (:decl (destructuring-bind (declaration body) (cddr node)
+             (ir-emit-declaration declaration
+                                  (with-ir-scope ((ir-declaration-binders declaration))
+                                    (ir-emit body)))))))
 
 ;;; Basis primitives: the Basis binds them with `use{b = "Word.xorb"}' (see
 ;;; SML-BASIS-PRIMITIVE), which compiles to a closure taking a tuple.  A
@@ -559,21 +1496,18 @@ primitive the IR opens (and recording it now, for the code compiled next)."
       (t (remprop cell 'sml-ir-primitive)
          nil))))
 
-;;; Inline templates of top-level functions.  A `fun' of one clause whose
-;;; parameters are variables (or one tuple of variables, for a function
-;;; with a tupled worker), that is not recursive and whose body the IR
-;;; covers entirely, records its IR on its cell, which is bound once and
-;;; never assigned; the simplifier then inlines its calls.
+
+;;; Walking terms
 
 ;; IR-MAP rebuilds a node with each IR term directly inside it replaced.
 (defun ir-map (function node)
   (flet ((f (x) (funcall function x))
          (fs (xs) (mapcar function xs))
-         (branches (bs) (mapcar (lambda (b) (list (first b) (funcall function (second b)))) bs)))
+         (rules (rs) (mapcar (lambda (r) (list (first r) (funcall function (second r)))) rs)))
     (destructuring-bind (kind type &rest fields) node
       (list* kind type
              (ecase kind
-               ((:const :unit :var :ref :lisp) fields)
+               ((:const :unit :var :ref) fields)
                (:prim (list (first fields) (fs (second fields))))
                (:tuple (list (fs (first fields))))
                (:record (list (first fields) (fs (second fields))))
@@ -583,31 +1517,124 @@ primitive the IR opens (and recording it now, for the code compiled next)."
                (:call (list (first fields) (fs (second fields)) (third fields)))
                (:fn (list (first fields) (f (second fields)) (third fields)))
                (:let (list (first fields) (f (second fields)) (f (third fields))))
-               (:letrec (list (branches (first fields)) (f (second fields))))
+               (:letrec (list (rules (first fields)) (f (second fields))))
                (:seq (list (fs (first fields))))
-               (:if (fs fields))
-               (:while (fs fields))
-               (:raise (fs fields))
-               (:handle (list (f (first fields)) (branches (second fields))))
-               (:match (list (f (first fields)) (branches (second fields)) (third fields)))
-               (:tail-call (list (first fields) (fs (second fields)))))))))
+               ((:if :while :raise) (fs fields))
+               (:handle (list (f (first fields)) (rules (second fields))))
+               (:match (list (fs (first fields)) (rules (second fields)) (third fields)))
+               (:loop (list (first fields) (second fields) (fs (third fields))
+                            (f (fourth fields))))
+               (:tail-call (list (first fields) (fs (second fields))))
+               (:decl (list (first fields) (f (second fields)))))))))
 
-(defun ir-strip-types (node)
-  "NODE with its types removed, so that it can be written to a FASL."
-  (let ((node (ir-map #'ir-strip-types node)))
-    (setf (second node) nil)
-    node))
+(defun ir-walk-children (function node)
+  "Call FUNCTION on each IR term directly inside NODE."
+  (case (ir-kind node)
+    ((:const :unit :var :ref) nil)
+    (:prim (mapc function (fourth node)))
+    (:tuple (mapc function (third node)))
+    (:record (mapc function (fourth node)))
+    ((:select :select-label) (funcall function (fourth node)))
+    (:con (mapc function (fifth node)))
+    (:app (funcall function (third node)) (funcall function (fourth node)))
+    (:call (mapc function (fourth node)))
+    (:fn (funcall function (fourth node)))
+    (:let (funcall function (fourth node)) (funcall function (fifth node)))
+    (:letrec (dolist (b (third node)) (funcall function (second b)))
+     (funcall function (fourth node)))
+    (:seq (mapc function (third node)))
+    (:if (funcall function (third node)) (funcall function (fourth node))
+     (funcall function (fifth node)))
+    (:while (funcall function (third node)) (funcall function (fourth node)))
+    (:raise (funcall function (third node)))
+    (:handle (funcall function (third node))
+     (dolist (rule (fourth node)) (funcall function (second rule))))
+    (:match (mapc function (third node))
+     (dolist (rule (fourth node)) (funcall function (second rule))))
+    (:loop (mapc function (fifth node)) (funcall function (sixth node)))
+    (:tail-call (mapc function (fourth node)))
+    (:decl (funcall function (fourth node)))))
+
+(defun ir-rule-patterns (node rule)
+  "The patterns of RULE, a rule of match or handle NODE."
+  (if (eq (ir-kind node) :match) (first rule) (list (first rule))))
+
+(defun ir-declaration-references (declaration)
+  "The CL forms DECLARATION evaluates that may refer to variables."
+  (case (first declaration)
+    (:exception-alias (list (fourth declaration)))
+    (:module (list (second declaration)))))
+
+(defun ir-map-binders (function node)
+  "Call FUNCTION on each symbol a binder inside NODE binds: parameters, let,
+letrec and loop variables, local declarations and pattern variables."
+  (labels ((walk (node)
+             (case (ir-kind node)
+               (:fn (mapc function (third node)))
+               (:let (funcall function (third node)))
+               (:letrec (dolist (binding (third node)) (funcall function (first binding))))
+               (:loop (mapc function (fourth node)))
+               (:decl (mapc function (ir-declaration-binders (third node))))
+               ((:match :handle)
+                (dolist (rule (fourth node))
+                  (dolist (pattern (ir-rule-patterns node rule))
+                    (mapc function (ir-pattern-binders pattern))))))
+             (ir-walk-children #'walk node)))
+    (walk node)))
+
+(defun ir-size (node)
+  "The number of nodes of term NODE (patterns are not counted)."
+  (let ((size 1))
+    (ir-walk-children (lambda (child) (incf size (ir-size child))) node)
+    (when (and (eq (ir-kind node) :decl) (eq (first (third node)) :module))
+      (incf size 1000))
+    size))
+
+(defun ir-scan-variables (form function)
+  "Call FUNCTION on each variable (uninterned symbol) in CL FORM."
+  (cond ((ir-variable-p form) (funcall function form))
+        ((consp form)
+         (ir-scan-variables (car form) function)
+         (ir-scan-variables (cdr form) function))))
+
+(defun ir-free-variables (node)
+  "The uninterned symbols NODE uses without binding them."
+  (let ((bound (make-hash-table :test #'eq))
+        (free nil))
+    (labels ((use (symbol)
+               (unless (gethash symbol bound) (pushnew symbol free)))
+             (walk (node)
+               (case (ir-kind node)
+                 (:var (use (third node)))
+                 ((:match :handle)
+                  (dolist (rule (fourth node))
+                    (dolist (pattern (ir-rule-patterns node rule))
+                      (dolist (form (ir-pattern-references pattern))
+                        (ir-scan-variables form #'use)))))
+                 (:decl (dolist (form (ir-declaration-references (third node)))
+                          (ir-scan-variables form #'use)))
+                 (:tail-call (ir-scan-variables (third node) #'use)))
+               (ir-walk-children #'walk node)))
+      (ir-map-binders (lambda (symbol) (setf (gethash symbol bound) t)) node)
+      (walk node))
+    free))
+
+(defun ir-mentions-p (node symbol)
+  (cond ((eq node symbol) t)
+        ((consp node) (or (ir-mentions-p (car node) symbol)
+                          (ir-mentions-p (cdr node) symbol)))))
+
+;;; Inline templates of top-level functions.  A `fun' of one clause whose
+;;; parameters are variables (or one tuple of variables, for a function
+;;; with a tupled worker), that is not recursive and whose body the IR
+;;; covers entirely, records its IR on its cell, which is bound once and
+;;; never assigned; the simplifier then inlines its calls.
 
 (defun ir-variable-pattern-name (pat)
   (loop while (and (consp pat) (eq (car pat) :pat-typed))
         do (setf pat (second pat)))
   (cond ((and (consp pat) (member (car pat) '(:pat-var :var))) (second pat))
         ((eq pat :wild) :wild)))
-
-(defun ir-mentions-p (node symbol)
-  (cond ((eq node symbol) t)
-        ((consp node) (or (ir-mentions-p (car node) symbol)
-                          (ir-mentions-p (cdr node) symbol)))))
 
 (defun ir-note-inline-template (ast cell worker-arity local-exceptions lexical-env)
   "Forms recording the inline template of the function `fun' AST binds to
@@ -630,6 +1657,7 @@ CELL, if it has one (and recording it now)."
                  (env (loop for name in names
                             for symbol in symbols
                             unless (eq name :wild) collect (cons name symbol)))
+                 (fun-type (ir-node-type clauses))
                  (body (catch 'ir-no-template
                          (let ((*ir-template-mode* t)
                                (*sml-hoisting-enabled* nil)
@@ -638,96 +1666,47 @@ CELL, if it has one (and recording it now)."
                            (ir-lower (second (first clauses)) local-exceptions env)))))
             (when body
               (let* ((body (ir-simplify body))
-                     (template (if worker-arity
-                                   (ir :fn nil symbols body nil)
-                                   (reduce (lambda (symbol body) (ir :fn nil (list symbol) body nil))
-                                           symbols :from-end t :initial-value body))))
+                     (template
+                       (if worker-arity
+                           (ir :fn fun-type symbols body nil)
+                           (let ((types (loop repeat (length symbols)
+                                              for type = fun-type then (ir-arrow-range type)
+                                              collect type)))
+                             (reduce (lambda (pair body)
+                                       (ir :fn (cdr pair) (list (car pair)) body nil))
+                                     (mapcar #'cons symbols types)
+                                     :from-end t :initial-value body)))))
                 (when (and (<= (ir-size template) *sml-ir-inline-size*)
                            (not (ir-mentions-p template cell))
                            (null (ir-free-variables template)))
-                  (let ((template (ir-strip-types template)))
-                    (setf (get cell 'sml-ir-inline) template)
-                    `((setf (get ',cell 'sml-ir-inline) ',template))))))))))))
+                  (setf template (ir-portable-types template))
+                  (setf (get cell 'sml-ir-inline) template)
+                  `((setf (get ',cell 'sml-ir-inline) ',template)))))))))))
 
-(defun ir-size (node)
-  (if (and (consp node) (keywordp (first node)))
-      (1+ (loop for field in (cddr node)
-                sum (ir-field-size field)))
-      0))
-
-(defun ir-field-size (field)
-  (cond ((atom field) 0)
-        ((keywordp (first field)) (if (eq (first field) :lisp) 1000 (ir-size field)))
-        (t (loop for x in field sum (ir-field-size x)))))
-
-(defun ir-free-variables (node)
-  "The uninterned symbols NODE uses without binding them."
-  (let ((bound (make-hash-table :test #'eq))
-        (free nil))
-    (labels ((bind (symbol) (setf (gethash symbol bound) t))
-             (bind-pattern (pattern)
-               (cond ((ir-variable-p pattern) (bind pattern))
-                     ((consp pattern) (bind-pattern (car pattern))
-                      (bind-pattern (cdr pattern)))))
-             (use (symbol)
-               (unless (gethash symbol bound) (pushnew symbol free)))
-             (walk (node)
-               (case (ir-kind node)
-                 (:var (use (third node)))
-                 ((:const :unit :ref :lisp) nil)
-                 (:fn (mapc #'bind (third node)) (walk (fourth node)))
-                 (:let (bind (third node)) (walk (fourth node)) (walk (fifth node)))
-                 (:letrec (dolist (b (third node)) (bind (first b)))
-                  (dolist (b (third node)) (walk (second b)))
-                  (walk (fourth node)))
-                 ((:match :handle)
-                  (dolist (branch (if (eq (ir-kind node) :match) (fourth node) (fourth node)))
-                    (bind-pattern (first branch)))
-                  (walk (third node))
-                  (dolist (branch (fourth node)) (walk (second branch))))
-                 (otherwise (ir-walk-children #'walk node)))))
-      (walk node))
-    free))
-
-(defun ir-walk-children (function node)
-  "Call FUNCTION on each IR term directly inside NODE."
-  (case (ir-kind node)
-    ((:const :unit :var :ref :lisp) nil)
-    ((:prim :tuple) (mapc function (if (eq (ir-kind node) :prim) (fourth node) (third node))))
-    (:record (mapc function (fourth node)))
-    ((:select :select-label) (funcall function (fourth node)))
-    (:con (mapc function (fifth node)))
-    (:app (funcall function (third node)) (funcall function (fourth node)))
-    (:call (mapc function (fourth node)))
-    (:fn (funcall function (fourth node)))
-    (:let (funcall function (fourth node)) (funcall function (fifth node)))
-    (:letrec (dolist (b (third node)) (funcall function (second b)))
-     (funcall function (fourth node)))
-    (:seq (mapc function (third node)))
-    (:if (funcall function (third node)) (funcall function (fourth node))
-     (funcall function (fifth node)))
-    (:while (funcall function (third node)) (funcall function (fourth node)))
-    (:raise (funcall function (third node)))
-    ((:handle :match) (funcall function (third node))
-     (dolist (branch (fourth node)) (funcall function (second branch))))
-    (:tail-call (mapc function (fourth node)))))
+(defun ir-portable-types (term)
+  "TERM with its types made independent of the session, so that it can be
+written to a file the same way each time: type variables are numbered in
+order of appearance and type constructors lose their stamps."
+  (let ((tyvars (make-hash-table))
+        (tycons (make-hash-table :test #'eq)))
+    (labels ((copy (x)
+               (cond ((ir-tycon-p x)
+                      (or (gethash x tycons)
+                          (setf (gethash x tycons)
+                                (let ((copy (copy-ir-tycon x)))
+                                  (setf (ir-tycon-stamp copy) 0)
+                                  copy))))
+                     ((and (consp x) (eq (first x) :tyvar) (integerp (second x)))
+                      (list* :tyvar
+                             (or (gethash (second x) tyvars)
+                                 (setf (gethash (second x) tyvars)
+                                       (hash-table-count tyvars)))
+                             (copy (cddr x))))
+                     ((consp x) (cons (copy (car x)) (copy (cdr x))))
+                     (t x))))
+      (copy term))))
 
 ;;; Copying with fresh variables, for inlining.
-
-(defun ir-map-binders (function node)
-  "Call FUNCTION on each symbol a binder inside NODE binds: parameters, let
-and letrec variables, and the uninterned symbols of patterns."
-  (labels ((pattern (form)
-             (cond ((ir-variable-p form) (funcall function form))
-                   ((consp form) (pattern (car form)) (pattern (cdr form)))))
-           (walk (node)
-             (case (ir-kind node)
-               (:fn (mapc function (third node)))
-               (:let (funcall function (third node)))
-               (:letrec (dolist (binding (third node)) (funcall function (first binding))))
-               ((:match :handle) (dolist (branch (fourth node)) (pattern (first branch)))))
-             (ir-walk-children #'walk node)))
-    (walk node)))
 
 (defun ir-instantiate (template)
   "A copy of TEMPLATE in which every variable it binds is replaced by a
@@ -749,39 +1728,33 @@ fresh one; its free variables stay."
   "Uninterned symbol -> number of uses in the term being simplified.")
 
 (defvar *ir-opaque* nil
-  "Uninterned symbols used in CL forms (:lisp nodes, patterns) or assigned
-(self tail calls): they are neither substituted nor dropped.")
+  "Uninterned symbols used in CL forms (pattern and declaration forms) or
+assigned (self tail calls): they are neither substituted nor dropped.")
 
 (defun ir-take-census (node)
   (let ((census (make-hash-table :test #'eq))
         (opaque (make-hash-table :test #'eq)))
-    (labels ((scan (form)
-               (cond ((ir-variable-p form)
-                      (incf (gethash form census 0))
-                      (setf (gethash form opaque) t))
-                     ((consp form) (scan (car form)) (scan (cdr form)))))
-             (walk (node)
-               (case (ir-kind node)
-                 (:var (incf (gethash (third node) census 0)))
-                 (:lisp (scan (third node)))
-                 (:tail-call (scan (third node)) (mapc #'walk (fourth node)))
-                 ((:match :handle)
-                  (walk (third node))
-                  (dolist (branch (fourth node))
-                    ;; A variable pattern binds; others may refer to
-                    ;; variables (local exception constructors).
-                    (unless (ir-variable-p (first branch))
-                      (scan (first branch)))
-                    (walk (second branch)))
-                  (when (eq (ir-kind node) :match) (scan (fifth node))))
-                 (otherwise (ir-walk-children #'walk node)))))
-      ;; Every variable bound in NODE has an entry, so that one missing is
-      ;; one made since (see IR-USES).
-      (ir-map-binders (lambda (symbol)
-                        (unless (nth-value 1 (gethash symbol census))
-                          (setf (gethash symbol census) 0)))
-                      node)
-      (walk node))
+    (flet ((scan (form)
+             (ir-scan-variables form (lambda (symbol)
+                                       (incf (gethash symbol census 0))
+                                       (setf (gethash symbol opaque) t)))))
+      (labels ((walk (node)
+                 (case (ir-kind node)
+                   (:var (incf (gethash (third node) census 0)))
+                   (:tail-call (scan (third node)))
+                   ((:match :handle)
+                    (dolist (rule (fourth node))
+                      (dolist (pattern (ir-rule-patterns node rule))
+                        (mapc #'scan (ir-pattern-references pattern)))))
+                   (:decl (mapc #'scan (ir-declaration-references (third node)))))
+                 (ir-walk-children #'walk node)))
+        ;; Every variable bound in NODE has an entry, so that one missing
+        ;; is one made since (see IR-USES).
+        (ir-map-binders (lambda (symbol)
+                          (unless (nth-value 1 (gethash symbol census))
+                            (setf (gethash symbol census) 0)))
+                        node)
+        (walk node)))
     (values census opaque)))
 
 (defun ir-uses (symbol)
@@ -828,14 +1801,14 @@ since the census (by inlining), whose uses are not counted."
       (values (third node) t)
       (values nil nil)))
 
-(defun ir-fold-primitive (op args)
+(defun ir-fold-primitive (op args type)
   "The constant term OP gives on constant ARGS, or NIL.  Never folds an
 operation that raises (Overflow, Div, ...) on these arguments."
   (let ((values (mapcar (lambda (arg) (multiple-value-list (ir-constant-value arg))) args)))
     (unless (every #'second values)
       (return-from ir-fold-primitive nil))
     (let ((values (mapcar #'first values)))
-      (flet ((const (value) (ir :const nil value)))
+      (flet ((const (value) (ir :const type value)))
         (case (first op)
           (:not (const (not (first values))))
           (:equality
@@ -901,16 +1874,17 @@ it was a variable bound to it (to be copied)."
 
 (defun ir-beta (fn args)
   "The application of function term FN to the terms ARGS, as lets."
-  (reduce (lambda (pair body) (ir :let nil (car pair) (cdr pair) body))
-          (mapcar #'cons (third fn) args)
-          :from-end t :initial-value (fourth fn)))
+  (let ((body (fourth fn)))
+    (reduce (lambda (pair body) (ir :let (ir-type body) (car pair) (cdr pair) body))
+            (mapcar #'cons (third fn) args)
+            :from-end t :initial-value body)))
 
 (defun ir-simplify-node (node env)
   "One simplification of NODE.  ENV maps let-bound variables to known
 values (tuples, constructors, functions) or to a term to substitute."
   (macrolet ((simp (x) `(ir-simplify-node ,x env)))
     (case (ir-kind node)
-      ((:const :unit :ref :lisp) node)
+      ((:const :unit :ref) node)
       (:var
        (let ((known (gethash (third node) env)))
          (if (and known (eq (car known) :substitute))
@@ -919,7 +1893,7 @@ values (tuples, constructors, functions) or to a term to substitute."
       (:prim
        (let* ((op (third node))
               (args (mapcar (lambda (a) (simp a)) (fourth node))))
-         (or (ir-fold-primitive op args)
+         (or (ir-fold-primitive op args (ir-type node))
              (ir :prim (ir-type node) op args))))
       (:tuple (ir :tuple (ir-type node) (mapcar (lambda (a) (simp a)) (third node))))
       (:record (ir :record (ir-type node) (third node)
@@ -954,15 +1928,7 @@ values (tuples, constructors, functions) or to a term to substitute."
          (let ((bindings (remove-if (lambda (binding)
                                       (and (zerop (ir-uses (first binding)))
                                            (not (ir-opaque-p (first binding)))
-                                           (member (ir-kind (second binding)) '(:fn :lisp))
-                                           (or (eq (ir-kind (second binding)) :fn)
-                                               ;; A function the direct
-                                               ;; generator compiled.
-                                               (let ((form (third (second binding))))
-                                                 (and (consp form)
-                                                      (member (first form)
-                                                              '(lambda named-lambda
-                                                                #+sbcl sb-int:named-lambda)))))))
+                                           (eq (ir-kind (second binding)) :fn)))
                                     bindings)))
            (if bindings
                (ir :letrec (ir-type node)
@@ -991,11 +1957,15 @@ values (tuples, constructors, functions) or to a term to substitute."
       (:while (ir :while (ir-type node) (simp (third node)) (simp (fourth node))))
       (:raise (ir :raise (ir-type node) (simp (third node))))
       (:handle (ir :handle (ir-type node) (simp (third node))
-                   (mapcar (lambda (branch) (list (first branch) (simp (second branch))))
+                   (mapcar (lambda (rule) (list (first rule) (simp (second rule))))
                            (fourth node))))
       (:match (ir-simplify-match node env))
+      (:loop (destructuring-bind (tag variables inits body) (cddr node)
+               (ir :loop (ir-type node) tag variables
+                   (mapcar (lambda (a) (simp a)) inits) (simp body))))
       (:tail-call (ir :tail-call (ir-type node) (third node)
-                      (mapcar (lambda (a) (simp a)) (fourth node)))))))
+                      (mapcar (lambda (a) (simp a)) (fourth node))))
+      (:decl (ir :decl (ir-type node) (third node) (simp (fourth node)))))))
 
 (defun ir-simplify-let (node env)
   (destructuring-bind (symbol value body) (cddr node)
@@ -1004,7 +1974,7 @@ values (tuples, constructors, functions) or to a term to substitute."
         ;; let x = (let y = a in b) in c  =>  let y = a in let x = b in c
         ((eq (ir-kind value) :let)
          (destructuring-bind (inner-symbol inner-value inner-body) (cddr value)
-           (ir :let (ir-type value) inner-symbol inner-value
+           (ir :let (ir-type node) inner-symbol inner-value
                (ir-simplify-let (ir :let (ir-type node) symbol inner-body body) env))))
         ((ir-opaque-p symbol)
          (ir :let (ir-type node) symbol value (ir-simplify-node body env)))
@@ -1013,7 +1983,9 @@ values (tuples, constructors, functions) or to a term to substitute."
         ((and (eq (ir-kind value) :tuple)
               (notevery #'ir-trivial-p (third value)))
          (let* ((temporaries (mapcar (lambda (arg)
-                                       (if (ir-trivial-p arg) arg (ir :var nil (gensym "F"))))
+                                       (if (ir-trivial-p arg)
+                                           arg
+                                           (ir :var (ir-type arg) (gensym "F"))))
                                      (third value)))
                 (inner (ir :let (ir-type node) symbol (ir :tuple (ir-type value) temporaries)
                            body)))
@@ -1021,7 +1993,7 @@ values (tuples, constructors, functions) or to a term to substitute."
             (reduce (lambda (pair body)
                       (if (eq (car pair) (cdr pair))
                           body
-                          (ir :let nil (third (car pair)) (cdr pair) body)))
+                          (ir :let (ir-type body) (third (car pair)) (cdr pair) body)))
                     (mapcar #'cons temporaries (third value))
                     :from-end t :initial-value inner)
             env)))
@@ -1054,11 +2026,11 @@ values (tuples, constructors, functions) or to a term to substitute."
       ;; (let x = a in f) b  =>  let x = a in f b
       ((eq (ir-kind function) :let)
        (destructuring-bind (symbol value body) (cddr function)
-         (ir :let (ir-type function) symbol value
+         (ir :let (ir-type node) symbol value
              (ir-simplify-application (ir :app (ir-type node) body arg) env))))
       ;; not e
       ((and (eq (ir-kind function) :ref) (equal (third function) '(function sml-not)))
-       (or (ir-fold-primitive '(:not) (list arg))
+       (or (ir-fold-primitive '(:not) (list arg) (ir-type node))
            (ir :prim (ir-type node) '(:not) (list arg))))
       ;; (f o g) x  =>  f (g x), when f and g need not be evaluated first.
       ((and (eq (ir-kind function) :prim)
@@ -1066,7 +2038,7 @@ values (tuples, constructors, functions) or to a term to substitute."
             (every #'ir-trivial-p (fourth function)))
        (destructuring-bind (f g) (fourth function)
          (ir-simplify-application
-          (ir :app (ir-type node) f (ir :app nil g arg)) env)))
+          (ir :app (ir-type node) f (ir :app (ir-arrow-range (ir-type g)) g arg)) env)))
       ;; A Basis primitive the IR opens.
       ((and (eq (ir-kind function) :ref)
             (symbolp (third function)) (symbol-package (third function))
@@ -1076,7 +2048,7 @@ values (tuples, constructors, functions) or to a term to substitute."
                   (and (eql arity 2) (eq (ir-kind arg) :tuple) (= (length (third arg)) 2)))))
        (let* ((name (get (third function) 'sml-ir-primitive))
               (args (if (eql (ir-basis-primitive-arity name) 1) (list arg) (third arg))))
-         (or (ir-fold-primitive (list :basis name) args)
+         (or (ir-fold-primitive (list :basis name) args (ir-type node))
              (ir :prim (ir-type node) (list :basis name) args))))
       (t
        (multiple-value-bind (known copy) (ir-known-function function env)
@@ -1094,79 +2066,165 @@ values (tuples, constructors, functions) or to a term to substitute."
           (ir-simplify-node (ir-beta (ir-instantiate template) args) env)
           (ir :call (ir-type node) worker args cell)))))
 
-(defun ir-known-tuple-fields (node env)
-  "The fields of the tuple NODE evaluates to, when they are trivial terms
-(see IR-TRIVIAL-P) the simplifier knows, else NIL."
-  (let ((tuple (if (eq (ir-kind node) :var) (gethash (third node) env) node)))
-    (and (consp tuple) (eq (ir-kind tuple) :tuple)
-         (every #'ir-trivial-p (third tuple))
-         (third tuple))))
+;;; Matches whose outcome is known (case-of-known-constructor)
 
-(defun ir-tuple-pattern-fields (pattern width)
-  "When the compiled PATTERN matches a WIDTH-tuple and binds its fields to
-variables or ignores them (TUPLE-PATTERN-FORM), an alist from field index
-to variable, else NIL."
-  (when (and (consp pattern) (eq (first pattern) 'guard1)
-             (ir-variable-p (second pattern))
-             (equal (third pattern) (vector-width-test (second pattern) (1+ width))))
-    (let ((record (second pattern))
-          (fields nil))
-      (loop for (generator subpattern) on (cdddr pattern) by #'cddr
-            do (unless (and (consp generator) (eq (first generator) 'svref)
-                            (eq (second generator) record)
-                            (integerp (third generator))
-                            (<= 1 (third generator) width)
-                            (ir-variable-p subpattern))
-                 (return-from ir-tuple-pattern-fields nil))
-               (push (cons (third generator) subpattern) fields))
-      ;; An empty alist would read as false: a pattern of wildcards binds a
-      ;; dummy.
-      (or (nreverse fields) (list (cons 1 (gensym "IGNORED")))))))
+(defun ir-known-value (node env)
+  "NODE, or the tuple or constructed value the variable NODE is bound to,
+when the simplifier knows it."
+  (if (eq (ir-kind node) :var)
+      (let ((known (gethash (third node) env)))
+        (if (and known (consp known) (member (ir-kind known) '(:tuple :con)))
+            known
+            node))
+      node))
+
+(defun ir-static-match (pattern value env)
+  "Whether PATTERN matches the term VALUE (trivial, or a known tuple or
+constructed value): :YES, with the bindings ((symbol . term) ...) it makes,
+:NO, or :UNKNOWN."
+  (let ((value (ir-known-value value env)))
+    (flet ((all (patterns values)
+             (let ((bindings nil))
+               (loop for pattern in patterns
+                     for value in values
+                     do (multiple-value-bind (outcome more)
+                            (ir-static-match pattern value env)
+                          (case outcome
+                            (:no (return-from ir-static-match :no))
+                            (:unknown (return-from ir-static-match :unknown))
+                            (t (setf bindings (append bindings more))))))
+               (values :yes bindings))))
+      (case (ir-kind pattern)
+        (:p-wild (values :yes nil))
+        (:p-var (if (and (ir-variable-p (third pattern)) (ir-trivial-p value))
+                    (values :yes (list (cons (third pattern) value)))
+                    :unknown))
+        (:p-as (if (and (ir-variable-p (third pattern)) (ir-trivial-p value))
+                   (multiple-value-bind (outcome bindings)
+                       (ir-static-match (fourth pattern) value env)
+                     (if (eq outcome :yes)
+                         (values :yes (acons (third pattern) value bindings))
+                         outcome))
+                   :unknown))
+        (:p-const (multiple-value-bind (constant constantp) (ir-constant-value value)
+                    (cond ((not constantp) :unknown)
+                          ((if (stringp (third pattern))
+                               (and (stringp constant) (string= constant (third pattern)))
+                               (eql constant (third pattern)))
+                           (values :yes nil))
+                          (t :no))))
+        ((:p-tuple :p-record)
+         (if (eq (ir-kind value) :tuple)
+             (let ((fields (third value)))
+               (if (eq (ir-kind pattern) :p-tuple)
+                   (if (= (length fields) (length (third pattern)))
+                       (all (third pattern) fields)
+                       :unknown)
+                   (all (mapcar #'third (fourth pattern))
+                        (mapcar (lambda (field) (nth (1- (first field)) fields))
+                                (fourth pattern)))))
+             :unknown))
+        (:p-con
+         (destructuring-bind (name how data payload) (cddr pattern)
+           (declare (ignore name))
+           (cond
+             ((not (and (eq (ir-kind value) :con)
+                        (member (third value) '(:boxed :flat))))
+              :unknown)
+             ;; A constructed value never is a nullary constructor.
+             ((eq how :eq-tag) :no)
+             ((not (member how '(:boxed :flat))) :unknown)
+             ((not (eq (fourth value) (if (eq how :flat) (car data) data))) :no)
+             ((and (eq how :boxed) (eq (third value) :boxed))
+              (ir-static-match payload (first (fifth value)) env))
+             ((and (eq how :flat) (eq (third value) :flat)
+                   (eq (ir-kind payload) :p-tuple)
+                   (= (length (third payload)) (length (fifth value))))
+              (all (third payload) (fifth value)))
+             (t :unknown))))
+        (otherwise :unknown)))))
+
+(defun ir-static-scrutinee-p (node env)
+  (or (ir-trivial-p node)
+      (let ((known (ir-known-value node env)))
+        (and (not (eq known node))
+             (every #'ir-trivial-p (if (eq (ir-kind known) :tuple)
+                                       (third known)
+                                       (fifth known)))))
+      (and (member (ir-kind node) '(:tuple :con))
+           (every #'ir-trivial-p (if (eq (ir-kind node) :tuple) (third node) (fifth node))))))
+
+(defun ir-bind (bindings body)
+  (reduce (lambda (binding body) (ir :let (ir-type body) (car binding) (cdr binding) body))
+          bindings :from-end t :initial-value body))
 
 (defun ir-simplify-match (node env)
-  (destructuring-bind (scrutinee branches failure) (cddr node)
-    (let* ((scrutinee (ir-simplify-node scrutinee env))
-           (first-pattern (first (first branches))))
+  (destructuring-bind (scrutinees rules failure) (cddr node)
+    (let* ((type (ir-type node))
+           (scrutinees (mapcar (lambda (s) (ir-simplify-node s env)) scrutinees))
+           (first-patterns (first (first rules))))
       (cond
-        ;; The first rule's pattern is a variable or a wildcard.
-        ((ir-variable-p first-pattern)
-         (ir-simplify-node (ir :let (ir-type node) first-pattern scrutinee
-                               (second (first branches)))
-                           env))
-        ;; A tuple pattern of variables matching a known tuple.
-        ((let ((fields (ir-known-tuple-fields scrutinee env)))
-           (and fields (ir-tuple-pattern-fields first-pattern (length fields))))
-         (let ((fields (ir-known-tuple-fields scrutinee env)))
-           (ir-simplify-node
-            (reduce (lambda (entry body)
-                      (ir :let nil (cdr entry) (nth (1- (car entry)) fields) body))
-                    (ir-tuple-pattern-fields first-pattern (length fields))
-                    :from-end t :initial-value (second (first branches)))
-            env)))
-        ((eq first-pattern '_)
-         (let ((body (ir-simplify-node (second (first branches)) env)))
-           (if (ir-pure-p scrutinee)
-               body
-               (ir :seq (ir-type node) (list scrutinee body)))))
+        ;; The first rule's patterns are variables or wildcards.
+        ((and rules
+              (every (lambda (pattern)
+                       (or (eq (ir-kind pattern) :p-wild)
+                           (and (eq (ir-kind pattern) :p-var)
+                                (ir-variable-p (third pattern)))))
+                     first-patterns))
+         (ir-simplify-node
+          (reduce (lambda (pair body)
+                    (destructuring-bind (pattern . scrutinee) pair
+                      (if (eq (ir-kind pattern) :p-var)
+                          (ir :let type (third pattern) scrutinee body)
+                          (if (ir-pure-p scrutinee)
+                              body
+                              (ir :seq type (list scrutinee body))))))
+                  (mapcar #'cons first-patterns scrutinees)
+                  :from-end t :initial-value (second (first rules)))
+          env))
+        ;; Every scrutinee is known: the rules that cannot match are
+        ;; dropped, and the first that must match is taken.
+        ((every (lambda (s) (ir-static-scrutinee-p s env)) scrutinees)
+         (let ((remaining rules))
+           (loop
+             (when (null remaining) (return))
+             (let ((outcome :yes) (bindings nil))
+               (loop for pattern in (first (first remaining))
+                     for scrutinee in scrutinees
+                     do (multiple-value-bind (one more) (ir-static-match pattern scrutinee env)
+                          (case one
+                            (:no (setf outcome :no) (return))
+                            (:unknown (setf outcome :unknown))
+                            (t (setf bindings (append bindings more))))))
+               (case outcome
+                 (:no (pop remaining))
+                 (:yes (return-from ir-simplify-match
+                         (ir-simplify-node (ir-bind bindings (second (first remaining))) env)))
+                 (t (return)))))
+           (ir-simplify-rules node type scrutinees remaining failure env)))
         ;; A boolean match.
-        ((and (= (length branches) 2)
-              (member first-pattern '(t nil))
-              (let ((second-pattern (first (second branches))))
-                (or (eq second-pattern '_)
-                    (and (member second-pattern '(t nil))
-                         (not (eq second-pattern first-pattern))))))
-         (let ((then (second (first branches)))
-               (else (second (second branches))))
-           (ir-simplify-node (if first-pattern
-                                 (ir :if (ir-type node) scrutinee then else)
-                                 (ir :if (ir-type node) scrutinee else then))
+        ((and (= (length rules) 2) (= (length scrutinees) 1)
+              (eq (ir-kind (first first-patterns)) :p-const)
+              (member (third (first first-patterns)) '(t nil))
+              (let ((second-pattern (first (first (second rules)))))
+                (or (eq (ir-kind second-pattern) :p-wild)
+                    (and (eq (ir-kind second-pattern) :p-const)
+                         (member (third second-pattern) '(t nil))
+                         (not (eq (third second-pattern) (third (first first-patterns))))))))
+         (let ((then (second (first rules)))
+               (else (second (second rules))))
+           (ir-simplify-node (if (third (first first-patterns))
+                                 (ir :if type (first scrutinees) then else)
+                                 (ir :if type (first scrutinees) else then))
                              env)))
-        (t
-         (ir :match (ir-type node) scrutinee
-             (mapcar (lambda (branch)
-                       (list (first branch) (ir-simplify-node (second branch) env)))
-                     branches)
-             failure))))))
+        (t (ir-simplify-rules node type scrutinees rules failure env))))))
+
+(defun ir-simplify-rules (node type scrutinees rules failure env)
+  (declare (ignore node))
+  (ir :match type scrutinees
+      (mapcar (lambda (rule) (list (first rule) (ir-simplify-node (second rule) env)))
+              rules)
+      failure))
 
 (defun ir-simplify (node)
   "NODE simplified (see *SML-IR-SIMPLIFY*)."
@@ -1180,28 +2238,143 @@ to variable, else NIL."
 
 (defun ir-trivial-term-p (node)
   "Is NODE too small for simplification to change?"
-  (member (ir-kind node) '(:const :unit :var :ref :lisp)))
+  (member (ir-kind node) '(:const :unit :var :ref)))
+
+;;; The type lint (*SML-IR-LINT*)
+
+(defun ir-lint (node &optional (require-types t))
+  "Problems with the types of term NODE, as strings: a node without a type
+(in native mode, when REQUIRE-TYPES), or types that do not fit together
+(application, conditional, let, match and function bodies)."
+  (let ((problems nil)
+        ;; Plain mode has no checker, hence no types.
+        (typed (and require-types (native-sml-static-facts-p))))
+    (labels ((problem (node format &rest args)
+               (push (format nil "~S node: ~?" (ir-kind node) format args) problems))
+             (same (node what a b)
+               (unless (ir-type-compatible-p a b)
+                 (problem node "~A: ~A against ~A" what (ir-type-string a) (ir-type-string b))))
+             (pattern (p)
+               (unless (or (ir-type p) (not typed))
+                 (problem p "pattern without a type"))
+               (case (ir-kind p)
+                 (:p-as (same p "alias" (ir-type p) (ir-type (fourth p))) (pattern (fourth p)))
+                 (:p-tuple (same p "tuple pattern" (ir-type p)
+                                 (ir-tuple-type (mapcar #'ir-type (third p))))
+                  (mapc #'pattern (third p)))
+                 (:p-record (dolist (f (fourth p))
+                              (same p "record field" (ir-field-type (ir-type p) (second f))
+                                    (ir-type (third f)))
+                              (pattern (third f))))
+                 (:p-record-lookup (dolist (f (third p)) (pattern (second f))))
+                 (:p-cons (same p "list pattern" (ir-type p) (ir-type (fourth p)))
+                  (pattern (third p)) (pattern (fourth p)))
+                 (:p-ref (pattern (third p)))
+                 (:p-exn (when (fifth p) (pattern (fifth p))))
+                 (:p-con (when (sixth p) (pattern (sixth p))))))
+             (walk (node)
+               (let ((type (ir-type node)))
+                 (unless (or type (not typed))
+                   (problem node "no type: ~S"
+                            (let ((*print-length* 4) (*print-level* 3))
+                              (princ-to-string (ir-display node)))))
+                 (case (ir-kind node)
+                   (:app (let ((f (ir-type (third node))))
+                           (when f
+                             (if (eq (first f) :arrow)
+                                 (progn
+                                   (same node "argument" (second f) (ir-type (fourth node)))
+                                   (same node "result" (third f) type))
+                                 (unless (eq (first f) :tyvar)
+                                   (problem node "applies a ~A" (ir-type-string f)))))))
+                   (:if (same node "test" (ir-type (third node)) (ir-base-type "bool"))
+                    (same node "then" type (ir-type (fourth node)))
+                    (same node "else" type (ir-type (fifth node))))
+                   (:while (same node "test" (ir-type (third node)) (ir-base-type "bool")))
+                   ((:let :decl) (same node "body" type (ir-type (fifth* node))))
+                   (:letrec (same node "body" type (ir-type (fourth node))))
+                   (:seq (same node "last item" type (ir-type (car (last (third node))))))
+                   (:loop (same node "body" type (ir-type (sixth node))))
+                   (:tuple (same node "fields" type (ir-tuple-type (mapcar #'ir-type (third node)))))
+                   (:select (same node "field" type
+                                  (ir-field-type (ir-type (fourth node))
+                                                 (princ-to-string (third node)))))
+                   (:raise (same node "exception" (ir-type (third node)) (ir-base-type "exn")))
+                   ;; TYPE has a tuple argument for several parameters.
+                   (:fn (same node "body" (ir-arrow-range type) (ir-type (fourth node))))
+                   (:handle (same node "body" type (ir-type (third node)))
+                    (dolist (rule (fourth node))
+                      (same node "handler" type (ir-type (second rule)))
+                      (same node "handler pattern" (ir-type (first rule)) (ir-base-type "exn"))
+                      (pattern (first rule))))
+                   (:match
+                    (dolist (rule (fourth node))
+                      (same node "rule" type (ir-type (second rule)))
+                      (loop for p in (first rule)
+                            for scrutinee in (third node)
+                            do (same node "pattern" (ir-type p) (ir-type scrutinee))
+                               (pattern p))))))
+               (ir-walk-children #'walk node))
+             (fifth* (node) (if (eq (ir-kind node) :let) (fifth node) (fourth node))))
+      (walk node))
+    (nreverse problems)))
+
+(defun ir-lint-term (node what)
+  "Lint NODE (see *SML-IR-LINT*).  Only a lowered term must have a type on
+every node: the simplifier inlines templates of the Basis, which is
+compiled without the checker.  In a simplified term, a type constructor
+may meet another: a function inlined from a structure ascribed a
+signature opaquely sees the representation of an abstract type."
+  (let ((problems (let ((*ir-abstraction-tolerant* (not (equal what "lowered"))))
+                    (ir-lint node (equal what "lowered")))))
+    (when problems
+      (if (eq *sml-ir-lint* :error)
+          (error "IR type lint (~A term):~{~%  ~A~}~%in ~S" what problems (ir-display node))
+          (setf *sml-ir-lint-problems*
+                (append *sml-ir-lint-problems*
+                        (mapcar (lambda (problem) (format nil "~A: ~A" what problem))
+                                problems)))))))
+
+;;; Compiling
+
+(defun ir-compile-term (lowered lexical-env)
+  "The CL form of the term LOWERED, simplified, compiled where LEXICAL-ENV
+is in scope."
+  (let ((simplified (if (and *sml-ir-simplify* (not (ir-trivial-term-p lowered)))
+                        (ir-simplify lowered)
+                        lowered)))
+    (when *sml-ir-lint*
+      (ir-lint-term lowered "lowered")
+      (unless (eq simplified lowered)
+        (ir-lint-term simplified "simplified")))
+    (when (and *sml-ir-log* (not (ir-trivial-term-p lowered)))
+      (push (cons lowered simplified) (car *sml-ir-log*)))
+    (let ((*ir-emit-scope* (lexical-environment-symbols lexical-env)))
+      (ir-emit simplified))))
 
 (defun ir-compile-expression (ast local-exceptions lexical-env)
   "The CL form of expression AST, compiled through the IR."
-  (let* ((lowered (ir-lower ast local-exceptions lexical-env))
-         (simplified (if (and *sml-ir-simplify* (not (ir-trivial-term-p lowered)))
-                         (ir-simplify lowered)
-                         lowered)))
-    (when (and *sml-ir-log* (not (ir-trivial-term-p lowered)))
-      (push (cons lowered simplified) (car *sml-ir-log*)))
-    (ir-emit simplified)))
+  (ir-compile-term (ir-lower ast local-exceptions lexical-env) lexical-env))
+
+(defun ir-compile-fn-clauses (clauses local-exceptions function-name outer-lexical-env
+                              &optional tupled)
+  "The CL form of the function CLAUSES define (COMPILE-FN-CLAUSES-OF-ARITY),
+compiled through the IR."
+  (ir-compile-term (ir-lower-fn-clauses clauses local-exceptions function-name
+                                        outer-lexical-env tupled)
+                   outer-lexical-env))
 
 ;;; Showing the IR
 
-(defun ir-type-string (type)
-  (ignore-errors (funcall 'cl-sml.types::type->string type)))
-
 (defun ir-display (node)
   "NODE as a form to print: each type, when known, follows its node's
-fields as :type \"...\"."
-  (if (and (consp node) (keywordp (first node)) (consp (rest node)))
-      (let* ((mapped (ir-map #'ir-display node))
-             (type (and (second node) (ir-type-string (second node)))))
-        `(,(first mapped) ,@(cddr mapped) ,@(and type `(:type ,type))))
-      node))
+fields as :type \"...\"; patterns are shown the same way."
+  (cond
+    ((and (consp node) (keywordp (first node)) (consp (rest node))
+          (or (null (second node)) (and (consp (second node))
+                                        (member (first (second node))
+                                                '(:con :tyvar :arrow :record)))))
+     (let ((type (and (second node) (ir-type-string (second node)))))
+       `(,(first node) ,@(mapcar #'ir-display (cddr node)) ,@(and type `(:type ,type)))))
+    ((consp node) (cons (ir-display (car node)) (ir-display (cdr node))))
+    (t node)))

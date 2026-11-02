@@ -199,3 +199,32 @@
             val r = loop (1000000, 0);"
            :package package))
     (is (eql 1000000 (cl-sml:sml-value "r" package)))))
+
+(test ir-type-lint-accepts-the-benchmarks-and-corpora
+  ;; Every IR term lowered from the benchmark programs and from the Core
+  ;; and Modules conformance corpora has a type on every node, and its
+  ;; types fit together (docs/IR.md, "The type lint").  The programs are
+  ;; compiled, not run; a program that does not compile alone is skipped.
+  (let ((files (mapcan (lambda (directory)
+                         (directory (merge-pathnames
+                                     "*.sml" (asdf:system-relative-pathname "cl-sml" directory))))
+                       '("t/bench/" "t/conformance/core/tests/"
+                         "t/conformance/modules/tests/")))
+        (problems nil)
+        (compiled 0))
+    (dolist (file files)
+      (let ((cl-sml:*sml-type-checker* :native)
+            (cl-sml::*sml-ir-lint* :collect)
+            (cl-sml::*sml-ir-lint-problems* nil)
+            (*error-output* (make-broadcast-stream)))
+        (handler-case
+            (progn
+              (handler-bind ((warning #'muffle-warning))
+                (cl-sml:compile-sml-file
+                 file :package (format nil "SML.IR-LINT-TEST.~:@(~A~)" (pathname-name file))))
+              (incf compiled))
+          (error () nil))
+        (when cl-sml::*sml-ir-lint-problems*
+          (push (cons (pathname-name file) cl-sml::*sml-ir-lint-problems*) problems))))
+    (is (> compiled 200))
+    (is (null problems) "IR type lint problems:~{~%~S~}" problems)))
