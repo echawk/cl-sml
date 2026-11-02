@@ -57,10 +57,6 @@
 (defvar *sml-ir-simplify-rounds* 3
   "How many times the simplifier runs over a term at most.")
 
-(defvar *sml-ir-log* nil
-  "When a cons, compiling pushes (LOWERED . SIMPLIFIED) for each term onto
-its car (see SHOW-SML-IR).")
-
 (defun ir (kind type &rest fields) (list* kind type fields))
 (declaim (inline ir-kind ir-type))
 (defun ir-kind (node) (first node))
@@ -1139,3 +1135,17 @@ values (tuples, constructors, functions) or to a term to substitute."
     (when (and *sml-ir-log* (not (ir-trivial-term-p lowered)))
       (push (cons lowered simplified) (car *sml-ir-log*)))
     (ir-emit simplified)))
+
+;;; Showing the IR
+
+(defun ir-type-string (type)
+  (ignore-errors (funcall 'cl-sml.types::type->string type)))
+
+(defun ir-display (node)
+  "NODE as a form to print: each type, when known, follows its node's
+fields as :type \"...\"."
+  (if (and (consp node) (keywordp (first node)) (consp (rest node)))
+      (let* ((mapped (ir-map #'ir-display node))
+             (type (and (second node) (ir-type-string (second node)))))
+        `(,(first mapped) ,@(cddr mapped) ,@(and type `(:type ,type))))
+      node))

@@ -36,7 +36,9 @@ package's records do; bind this to NIL to compile without keeping them.")
   enclosing
   ;; For a structure that is a functor instance or a structure alias, the
   ;; qualified name of the functor or structure its members come from.
-  origin)
+  origin
+  ;; The IR terms compiled for the declaration, (LOWERED . SIMPLIFIED).
+  ir)
 
 (defvar *sml-lisp-definitions* (make-hash-table :test #'equal)
   "SML package name -> EQUAL hash table from qualified SML name to the
@@ -255,7 +257,8 @@ or through other hoisted functions, in the order they were hoisted."
                :helpers helpers
                :source source
                :line line
-               :origin (sml-declaration-origin dec))
+               :origin (sml-declaration-origin dec)
+               :ir *sml-declaration-ir*)
               (sml-lisp-recording-definitions recording))))))
 
 (defun commit-sml-lisp-recording (recording)
@@ -389,6 +392,28 @@ SML-LISP-SOURCE), with comments saying where each definition came from."
                     (length (sml-lisp-definition-helpers shown)))
             (dolist (helper (sml-lisp-definition-helpers shown))
               (print-sml-lisp helper :package package :stream stream))))))
+    (values)))
+
+(defun show-sml-ir (name &key (package *sml-package*) (stream *standard-output*)
+                              lowered)
+  "Print the IR (docs/IR.md) compiled for the SML binding NAME in PACKAGE:
+each term as simplified, or as lowered from the AST when LOWERED is true.
+A term is compiled for each expression the IR covers; the CL of a construct
+it does not cover appears as a (:lisp ...) node."
+  (let ((definitions (find-sml-lisp-definitions name package)))
+    (unless definitions
+      (error "No IR is recorded for ~A in ~A."
+             name (package-name (ensure-sml-package package))))
+    (dolist (definition definitions)
+      (format stream "~&;;; ~A ~A~@[ -- ~A~]~%"
+              (sml-lisp-definition-keyword definition)
+              (sml-lisp-definition-name definition)
+              (sml-lisp-definition-location definition))
+      (if (sml-lisp-definition-ir definition)
+          (dolist (term (sml-lisp-definition-ir definition))
+            (print-sml-lisp (ir-display (if lowered (car term) (cdr term)))
+                            :package package :stream stream))
+          (format stream ";;; No IR term (the declaration has no expression).~%")))
     (values)))
 
 ;;; Phrases

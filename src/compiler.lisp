@@ -423,6 +423,10 @@ from the AST by COMPILE-EXPR-DIRECT, as before the IR.")
   "When true, the IR is simplified (inlining, beta reduction, constant
 folding, dead-binding elimination, known cases) before CL is emitted.")
 
+(defvar *sml-ir-log* nil
+  "When a cons, compiling pushes (LOWERED . SIMPLIFIED) for each IR term
+onto its car (see SHOW-SML-IR).")
+
 (defvar *sml-tupled-workers* t
   "Compile a top-level `fun' whose parameter is a tuple pattern as a
 function of the tuple's fields plus a wrapper, and its calls with a tuple
@@ -3646,17 +3650,31 @@ bound to the package's symbols, and the members known only at run time."
 the CL form compiled for it, while the declaration's compile-time
 environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
 
-(defun note-compiled-sml-declaration (dec form)
+(defvar *sml-declaration-ir* nil
+  "While *SML-DECLARATION-COMPILED-HOOK* runs: the IR terms compiled for the
+declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
+
+(defun note-compiled-sml-declaration (dec form &optional ir)
   (when *sml-declaration-compiled-hook*
-    (funcall *sml-declaration-compiled-hook* dec form))
+    (let ((*sml-declaration-ir* ir))
+      (funcall *sml-declaration-compiled-hook* dec form)))
   form)
+
+(defun compile-recorded-decl (dec local-exceptions lexical-env)
+  "The form of declaration DEC, and the IR terms compiled for it when
+compiled declarations are being recorded."
+  (if *sml-declaration-compiled-hook*
+      (let* ((*sml-ir-log* (list nil))
+             (form (compile-decl dec local-exceptions lexical-env)))
+        (values form (reverse (car *sml-ir-log*))))
+      (compile-decl dec local-exceptions lexical-env)))
 
 (defun compile-program-decls (decs &optional (local-exceptions nil) lexical-env)
   (if (null decs)
       nil
       (let* ((dec (first decs))
-             (form (note-compiled-sml-declaration
-                    dec (compile-decl dec local-exceptions lexical-env)))
+             (form (multiple-value-call #'note-compiled-sml-declaration
+                     dec (compile-recorded-decl dec local-exceptions lexical-env)))
              (extended-exceptions (extend-local-exceptions local-exceptions dec))
              (module-bindings (declaration-local-module-member-bindings dec))
              (symbol-bindings (declaration-binding-symbol-bindings dec))
