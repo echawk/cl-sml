@@ -88,6 +88,15 @@
                           (useful-p (specialize rows (car con) arity)
                                     (append (anys arity) (rest vector)))))
                       (tyname-constructors (third (first heads)))))
+               ;; char is finite: its 256 constants (Char.maxOrd = 255)
+               ;; can make a match exhaustive (HaMLet test exhaustive).
+               ((and heads
+                     (every (lambda (head)
+                              (and (eq (car head) :const) (characterp (second head))))
+                            heads)
+                     (= (length (remove-duplicates heads :test #'equal)) 256))
+                (some (lambda (key) (useful-p (specialize rows key 0) (rest vector)))
+                      (remove-duplicates heads :test #'equal)))
                (t (useful-p (default-rows rows) (rest vector))))))
           ((eq (car head) :tuple)
            (let ((n (length (second head))))

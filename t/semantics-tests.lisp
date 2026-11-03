@@ -625,6 +625,14 @@ val _ = say (IntInf.toString (Word64.toLargeInt (Word64.fromInt ~1)))
 val _ = say (IntInf.toString (Real.toLargeInt IEEEReal.TO_NEAREST 4.611686018427387904E18))
 val _ = say (IntInf.toString (Time.toNanoseconds (Time.fromSeconds (IntInf.pow (10, 12)))))"))))
 
+(test val-rec-layered-pattern
+  ;; `rec' binds every variable of a layered pattern to the function
+  ;; (Definition rule 26; HaMLet test valrec).
+  (let ((program "val rec c : int -> int as d = fn 0 => 0 | n => d (n - 1) + 2
+val _ = print (Int.toString (c 3) ^ \" \" ^ Int.toString (d 4) ^ \"\\n\")"))
+    (is (string= (lines "6 8") (run-sml program)))
+    (is (string= (lines "6 8") (load-sml program)))))
+
 (test word-scan-prefix-without-digits
   ;; Basis WORD: "0wx" with no hex digit after it scans as 0 (it raised
   ;; Div), and "0wx" is a prefix only in hexadecimal.

@@ -136,8 +136,20 @@ restriction, match checks and annotations")
   (is (binds "fun len [] = 0 | len (_ :: t) = 1 + len t" "val len : 'a list -> int"))
   (is (binds "fun f x = x = x" "val f : ''a -> bool"))
   (is (binds "val rec f = fn 0 => 1 | n => n * f (n - 1)" "val f : int -> int"))
+  ;; An annotation of `val rec' scopes its type variables (section 4.6);
+  ;; `rec' may follow `and', and bind a layered pattern (HaMLet test valrec).
+  (is (binds "val rec f : 'a -> 'a = fn x => x" "val f : 'a -> 'a"))
+  (is (binds "val a = 1 and rec c : 'a -> 'a as d = fn x => d x and rec rec e as g = fn x => x"
+             "val a : int" "val c : 'a -> 'a" "val d : 'a -> 'a" "val g : 'a -> 'a"))
   (is (binds "fun even 0 = true | even n = odd (n - 1) and odd 0 = false | odd n = even (n - 1)"
              "val even : int -> bool" "val odd : int -> bool")))
+
+(test symbolic-type-constructors
+  ;; Any identifier but `*' is a type constructor (section 2.4; HaMLet test id).
+  (is (binds "type 'a & = 'a list val x : int & = [1] type ''`` = '' list val y : bool `` = []"
+             "val x : int list" "val y : bool list"))
+  (is (binds "signature S = sig type & end structure A : S = struct type & = int end"
+             "structure A :")))
 
 (test elab-derived-forms
   (is (binds "val x = if 1 < 2 andalso true orelse false then \"a\" else \"b\"" "val x : string"))
@@ -297,6 +309,12 @@ restriction, match checks and annotations")
   (is (null (warnings "val x = (raise Fail \"x\") handle Fail _ => 1")))
   (is (equal '("match rule 2 is redundant")
              (warnings "val x = 1 handle Div => 1 | Div => 2")))
+  ;; char has 256 values (HaMLet test exhaustive).
+  (flet ((char-match (n)
+           (format nil "fun f ~{~A~^ | f ~}"
+                   (loop for i below n collect (format nil "#\"\\~3,'0D\" = ~D" i i)))))
+    (is (null (warnings (char-match 256))))
+    (is (equal '("match is not exhaustive") (warnings (char-match 255)))))
   ;; Exceptions are generative per declaration and per functor application
   ;; (rules 31, 54), not per specification (rule 73).
   (is (null (warnings "functor F () = struct exception E of int end

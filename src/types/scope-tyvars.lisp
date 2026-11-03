@@ -71,12 +71,14 @@ variables of exception bindings (ScopeTyVars.unguardedTyVarsDec)."
 
 (defun valbind-unguarded-tyvars (plain recursive)
   "The unguarded type variables of a value declaration: PLAIN bindings
-(pat exp) and RECURSIVE bindings (name exp) or (name :clauses clauses)."
+(pat exp) and RECURSIVE bindings (name :exp exp ty) or (name :clauses clauses)."
   (let ((acc nil))
     (loop for (pat exp) in plain
           do (setf acc (exp-unguarded-tyvars exp (pat-unguarded-tyvars pat acc))))
-    (loop for (nil kind body) in recursive
-          do (if (eq kind :clauses)
+    (loop for (nil kind body ty) in recursive
+          do (when ty                   ; `val rec f : ty = ...'
+               (setf acc (ty-tyvars ty acc)))
+             (if (eq kind :clauses)
                  (loop for (params body-exp) in body
                        do (dolist (param params)
                             (setf acc (pat-unguarded-tyvars param acc)))
