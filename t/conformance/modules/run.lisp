@@ -12,6 +12,8 @@
 ;;;;   CONF_TIMEOUT  seconds per test (default 60)
 ;;;;   CONF_BACKEND  "coalton": compile through the Coalton backend (cl-sml/coalton,
 ;;;;                 native checker)
+;;;;   CONF_DEFUNCTORIZE  "1": specialise functor applications at compile time
+;;;;                 (cl-sml:*sml-defunctorize*; always on for coalton)
 ;;;;   CONF_ISOLATE  "fork" (default for plain mode on SBCL): one forked child per test;
 ;;;;                 "none": in-process (run.sh restarts the Lisp after a crash and
 ;;;;                 resumes with CONF_RESUME=1; default with --checker, because
@@ -37,6 +39,7 @@
 (defvar *checker* (string= (env "CONF_CHECKER" "0") "1"))
 (defvar *coalton* (string= (env "CONF_BACKEND" "") "coalton"))
 (defvar *native* (or *coalton* (string= (env "CONF_CHECKER" "0") "native")))
+(defvar *defunctorize* (string= (env "CONF_DEFUNCTORIZE" "0") "1"))
 (defvar *basis-mode* (env "CONF_BASIS" "auto"))
 (defvar *timeout* (parse-integer (env "CONF_TIMEOUT" "60")))
 (defvar *results*
@@ -252,7 +255,8 @@ CONF_RESUME=1), print one line per test and a summary."
         (note-crashed-test)
         (dolist (name names)
           (let ((f (result-path name "status"))) (when (probe-file f) (delete-file f)))))
-    (setf cl-sml:*sml-type-checker* (and *native* :native))
+    (setf cl-sml:*sml-type-checker* (and *native* :native)
+          cl-sml:*sml-defunctorize* *defunctorize*)
     ;; Elaborate the Basis once, before any fork.
     (when *native* (uiop:symbol-call '#:cl-sml.types '#:initial-env))
     (when *coalton*
