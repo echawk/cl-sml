@@ -711,7 +711,8 @@ returns, as COMPILE-LOCAL-DECL compiles it."
              body)))
       ((:structure :structure-alias :structure-app :functor)
        ;; A structure declared by `let' or `local' is a module like any
-       ;; other, compiled as a declaration; the scope of its name is the
+       ;; other, compiled as a declaration, whose members are then made
+       ;; lexical (LEXICAL-STRUCTURE-FORM); the scope of its name is the
        ;; compiler's business.
        (when *ir-template-mode*
          (throw 'ir-no-template nil))
@@ -1326,12 +1327,13 @@ whose groups of rules are hoisted functions (COMPILE-TUPLE-DISPATCH-CASE)."
                                  (make-sml-exception-constructor ,name)))))
           (declare (ignorable ,symbol))
           ,body)))
-    (:module `(progn ,(second declaration) ,body))))
+    (:module (emit-lexical-structure (second declaration) body))))
 
 (defun ir-declaration-binders (declaration)
   (case (first declaration)
     (:datatype (mapcar #'first (second declaration)))
-    ((:exception :exception-alias) (list (second declaration)))))
+    ((:exception :exception-alias) (list (second declaration)))
+    (:module (lexical-structure-cells (second declaration)))))
 
 (defun ir-emit (node)
   "The CL form of IR term NODE."
@@ -2517,15 +2519,121 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
 
 (defun ir-compile-nested-structure (dec thunk)
   "The form THUNK compiles for DEC, a structure (or functor) declared by
-`let' or `local'.  Its IR declarations are kept for DEC rather than added
-to the program's: they belong to the enclosing declaration, and the
-compiler compiles a `let' or `local' body before its declarations."
-  (if *sml-ir-program*
-      (let ((declarations (list nil)))
-        (prog1 (let ((*sml-ir-program* declarations))
-                 (funcall thunk))
-          (setf (gethash dec *ir-nested-structures*) (reverse (car declarations)))))
-      (funcall thunk)))
+`let' or `local' inside an expression, as a LEXICAL-STRUCTURE-FORM.  Its IR
+declarations are kept for DEC rather than added to the program's: they
+belong to the enclosing declaration, and the compiler compiles a `let' or
+`local' body before its declarations."
+  (flet ((compile-form ()
+           ;; Nothing is hoisted out of it: its members become lexical
+           ;; variables (LEXICAL-STRUCTURE-FORM), which a hoisted function
+           ;; would not see.
+           (let ((*sml-hoisting-enabled* nil))
+             (lexical-structure-form dec (funcall thunk)))))
+    (if *sml-ir-program*
+        (let ((declarations (list nil)))
+          (prog1 (let ((*sml-ir-program* declarations))
+                   (compile-form))
+            (setf (gethash dec *ir-nested-structures*) (reverse (car declarations)))))
+        (compile-form))))
+
+;;; A structure declared inside an expression (by `let', or by `local' in a
+;;; `let') is evaluated each time the expression is (Definition, rules 107
+;;; and 156 ff.), so its members must not be shared between evaluations.
+;;; The structure is compiled as at top level, binding each member in a
+;;; cell with DEFPARAMETER, and then those cells are made lexical variables
+;;; around the structure and the scope of its name: the form
+;;; (lexical-structure (cell ...) members form) that LEXICAL-STRUCTURE-FORM
+;;; returns stands for FORM until EMIT-LEXICAL-STRUCTURE puts the scope in
+;;; it.  Top-level structures are not affected.
+
+(defun lexical-structure-form (dec form)
+  "FORM, compiled for DEC, a structure declared inside an expression, marked
+with the cells it binds and the members it publishes ((qualified-name
+. cell) ...), for EMIT-LEXICAL-STRUCTURE."
+  (let ((cells nil)
+        (members nil))
+    (labels ((walk (x)
+               (when (consp x)
+                 (case (car x)
+                   (quote nil)
+                   (defparameter (pushnew (second x) cells))
+                   (publish-sml-binding
+                    (when (and (consp (second x)) (consp (third x)))
+                      (push (cons (symbol-name (second (second x))) (second (third x)))
+                            members))))
+                 (unless (eq (car x) 'quote)
+                   (loop for tail on x
+                         do (walk (car tail))
+                         while (consp (cdr tail)))))))
+      (walk form))
+    (if (and cells (member (car dec) '(:structure :structure-alias :structure-app)))
+        `(lexical-structure ,(nreverse cells) ,members ,form)
+        form)))
+
+(defun lexical-structure-cells (form)
+  "The cells FORM, a LEXICAL-STRUCTURE-FORM, makes lexical variables."
+  (and (consp form) (eq (car form) 'lexical-structure) (second form)))
+
+(defun emit-lexical-structure (form body)
+  "The CL form for FORM, a LEXICAL-STRUCTURE-FORM, followed by BODY, the
+form of the scope of the structure's name: each cell is renamed to a
+fresh lexical variable, bound around both."
+  (if (not (and (consp form) (eq (car form) 'lexical-structure)))
+      `(progn ,form ,body)
+      (destructuring-bind (cells members structure-form) (rest form)
+        (let* ((variables (mapcar (lambda (cell) (cons cell (make-symbol (symbol-name cell))))
+                                  cells))
+               (members (remove-if-not (lambda (member) (assoc (cdr member) variables))
+                                       members)))
+          (labels ((variable (symbol) (cdr (assoc symbol variables)))
+                   (quoted-cell (x)
+                     (and (consp x) (eq (car x) 'quote) (variable (second x))))
+                   (structure-value (package name)
+                     ;; The members bound lexically, then the rest of the
+                     ;; structure (constructors) as bound at top level.
+                     (let ((prefix (format nil "~A." name)))
+                       `(make-sml-structure
+                         (list ,@(loop for (qualified . cell) in members
+                                       when (string-prefix-p prefix qualified)
+                                         collect `(cons ,(subseq qualified (length prefix))
+                                                        ,(variable cell))))
+                         (list (cons "" (sml-global-structure ,package ,name))))))
+                   (rewrite (x)
+                     (cond ((symbolp x) (or (variable x) x))
+                           ((atom x) x)
+                           ((eq (car x) 'quote) x)
+                           ((and (eq (car x) 'defparameter) (variable (second x)))
+                            `(setq ,(variable (second x)) ,(rewrite (third x))))
+                           ((and (eq (car x) 'declaim) (consp (second x))
+                                 (eq (car (second x)) 'special))
+                            (let ((specials (remove-if #'variable (cdr (second x)))))
+                              (and specials `(declaim (special ,@specials)))))
+                           ((and (eq (car x) 'publish-sml-binding) (quoted-cell (third x)))
+                            nil)
+                           ;; An exception alias of a member (COMPILE-LOCAL-DECL).
+                           ((and (eq (car x) 'boundp) (quoted-cell (second x)))
+                            t)
+                           ((and (eq (car x) 'symbol-value) (quoted-cell (second x))))
+                           ((and (member (car x) '(register-sml-structure-members
+                                                   sml-global-structure))
+                                 (stringp (third x))
+                                 (some (lambda (member)
+                                         (string-prefix-p (format nil "~A." (third x))
+                                                          (car member)))
+                                       members))
+                            (if (eq (car x) 'sml-global-structure)
+                                (structure-value (second x) (third x))
+                                nil))
+                           (t (let ((result (loop for tail on x
+                                                  collect (rewrite (car tail))
+                                                  while (consp (cdr tail)))))
+                                (let ((end (cdr (last x))))
+                                  (when end (setf (cdr (last result)) (rewrite end))))
+                                result)))))
+            `(let ,(mapcar #'cdr variables)
+               (declare (ignorable ,@(mapcar #'cdr variables)))
+               ,(rewrite structure-form)
+               ,(rewrite body)))))))
 
 (defvar *ir-program-mark* :none
   "The declarations recorded before the declaration being compiled.")

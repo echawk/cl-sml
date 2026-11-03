@@ -1611,8 +1611,21 @@ names LEXICAL-ENV binds, which they shadow."
                   (append dec-bindings lexical-env)))))
         (compile-local-decl dec wrapped-body local-exceptions lexical-env))))
 
+(defun declarations-structure-p (decs)
+  "Do DECS declare a structure (LEXICAL-STRUCTURE-FORM)?"
+  (some (lambda (dec)
+          (case (car dec)
+            ((:structure :structure-alias :structure-app) t)
+            (:local (or (declarations-structure-p (second dec))
+                        (declarations-structure-p (third dec))))))
+        decs))
+
 (defun compile-local-decls (decs body-asts &optional (local-exceptions nil) lexical-env)
-  (let* ((module-bindings (declarations-local-module-member-bindings decs))
+  (let* ((*sml-hoisting-enabled*
+           ;; The body is compiled before a structure's members are known to
+           ;; be lexical; a function hoisted out of it would not see them.
+           (and *sml-hoisting-enabled* (not (declarations-structure-p decs))))
+         (module-bindings (declarations-local-module-member-bindings decs))
          (structure-prefixes (module-local-structure-prefixes
                               decs
                               (or *sml-module-prefix* "")))
@@ -1722,12 +1735,14 @@ names LEXICAL-ENV binds, which they shadow."
                                       (local-declaration-lexical-bindings dec)))
     ((member (car dec) '(:type :infix :datatype-replication :expr :signature :open))
      body)
-    ;; A structure declared by `local' or `let' is a module like any other;
-    ;; the scope of its name is the compiler's business.
+    ;; A structure declared by `local' or `let' is a module like any other,
+    ;; whose members are lexical (LEXICAL-STRUCTURE-FORM); the scope of its
+    ;; name is the compiler's business.
     ((member (car dec) '(:structure :structure-alias :structure-app :functor))
-     `(progn ,(ir-compile-nested-structure
-               dec (lambda () (compile-decl dec local-exceptions lexical-env)))
-             ,body))
+     (emit-lexical-structure
+      (ir-compile-nested-structure
+       dec (lambda () (compile-decl dec local-exceptions lexical-env)))
+      body))
     ((eq (car dec) :exception)
      (let* ((name (local-binding-symbol
                    (second dec) (local-declaration-lexical-bindings dec)))
