@@ -1611,8 +1611,21 @@ names LEXICAL-ENV binds, which they shadow."
                   (append dec-bindings lexical-env)))))
         (compile-local-decl dec wrapped-body local-exceptions lexical-env))))
 
+(defun declarations-structure-p (decs)
+  "Do DECS declare a structure (LEXICAL-STRUCTURE-FORM)?"
+  (some (lambda (dec)
+          (case (car dec)
+            ((:structure :structure-alias :structure-app) t)
+            (:local (or (declarations-structure-p (second dec))
+                        (declarations-structure-p (third dec))))))
+        decs))
+
 (defun compile-local-decls (decs body-asts &optional (local-exceptions nil) lexical-env)
-  (let* ((module-bindings (declarations-local-module-member-bindings decs))
+  (let* ((*sml-hoisting-enabled*
+           ;; The body is compiled before a structure's members are known to
+           ;; be lexical; a function hoisted out of it would not see them.
+           (and *sml-hoisting-enabled* (not (declarations-structure-p decs))))
+         (module-bindings (declarations-local-module-member-bindings decs))
          (structure-prefixes (module-local-structure-prefixes
                               decs
                               (or *sml-module-prefix* "")))
@@ -1700,6 +1713,7 @@ names LEXICAL-ENV binds, which they shadow."
      (let ((name (local-binding-symbol
                   (second dec) (local-declaration-lexical-bindings dec))))
        `(let ((,name nil))
+          ,@(let ((failure (val-rec-bind-failure dec))) (and failure (list failure)))
           (setf ,name ,(compile-expr (third dec)
                                      local-exceptions
                                      (acons (second dec) name lexical-env)))
@@ -1709,6 +1723,8 @@ names LEXICAL-ENV binds, which they shadow."
      (let* ((bindings (local-declaration-lexical-bindings dec))
             (extended-env (append bindings lexical-env)))
        `(let ,(mapcar (lambda (binding) `(,(cdr binding) nil)) bindings)
+          ,@(let ((failure (val-recs-bind-failure (cdr dec))))
+              (and failure (list failure)))
           ,@(mapcar (lambda (val-rec)
                       `(setf ,(cdr (assoc (second val-rec) bindings :test #'equal))
                              ,(compile-expr (third val-rec) local-exceptions extended-env)))
@@ -1719,12 +1735,14 @@ names LEXICAL-ENV binds, which they shadow."
                                       (local-declaration-lexical-bindings dec)))
     ((member (car dec) '(:type :infix :datatype-replication :expr :signature :open))
      body)
-    ;; A structure declared by `local' or `let' is a module like any other;
-    ;; the scope of its name is the compiler's business.
+    ;; A structure declared by `local' or `let' is a module like any other,
+    ;; whose members are lexical (LEXICAL-STRUCTURE-FORM); the scope of its
+    ;; name is the compiler's business.
     ((member (car dec) '(:structure :structure-alias :structure-app :functor))
-     `(progn ,(ir-compile-nested-structure
-               dec (lambda () (compile-decl dec local-exceptions lexical-env)))
-             ,body))
+     (emit-lexical-structure
+      (ir-compile-nested-structure
+       dec (lambda () (compile-decl dec local-exceptions lexical-env)))
+      body))
     ((eq (car dec) :exception)
      (let* ((name (local-binding-symbol
                    (second dec) (local-declaration-lexical-bindings dec)))
@@ -2240,9 +2258,18 @@ gives the record's labels, else a lookup by label."
         `(svref ,form ,(1+ index))
         `(sml-record-ref ,form ,label))))
 
+(defvar *sml-top-level-local* nil
+  "True while the declarations of a top-level `local' are compiled: the
+structures they declare are evaluated once, and keep their members in
+cells (see LEXICAL-STRUCTURE-FORM).")
+
 (defun compile-expr (ast &optional local-exceptions lexical-env)
   "Compiles an SML expression AST into a Common Lisp form: through the IR
 (src/ir.lisp), unless *SML-IR* is false or applications are debugged."
+  (when *sml-top-level-local*
+    (return-from compile-expr
+      (let ((*sml-top-level-local* nil))
+        (compile-expr ast local-exceptions lexical-env))))
   (if (and *sml-ir* (not *sml-debug-applications*))
       (ir-compile-expression ast local-exceptions lexical-env)
       (compile-expr-direct ast local-exceptions lexical-env)))
@@ -2433,9 +2460,22 @@ subexpressions go through COMPILE-EXPR."
 
     (t (error "Unknown AST: ~A" ast))))
 
+(defun val-rec-bind-failure (val-rec)
+  "A form that raises Bind when the `val rec' binding VAL-REC rebinds a
+constructor (the checker's :bind-fails), else NIL: rule 126 matches the
+constructor against the function.  Its expression, a `fn', has no effect."
+  (and (ir-checker-annotation val-rec :bind-fails)
+       (compile-match-failure "Bind" "val rec" val-rec)))
+
+(defun val-recs-bind-failure (val-recs)
+  "The form of VAL-RECS, `val rec' bindings joined by `and', that raises
+Bind (see VAL-REC-BIND-FAILURE), or NIL."
+  (some #'val-rec-bind-failure val-recs))
+
 (defun compile-top-level-val-rec (ast cell local-exceptions lexical-env)
   "Forms that set CELL, already bound, to the value of `val rec' AST."
-  `((setf ,cell ,(let ((*sml-binding-symbol-env*
+  `(,@(let ((failure (val-rec-bind-failure ast))) (and failure (list failure)))
+    (setf ,cell ,(let ((*sml-binding-symbol-env*
                          (acons (second ast) cell *sml-binding-symbol-env*)))
                    (compile-expr (third ast)
                                  local-exceptions
@@ -2595,6 +2635,8 @@ calls it with the fields of its argument."
                       *sml-binding-symbol-env*)))
        `(progn
           ,@(mapcar (lambda (cell) `(defparameter ,cell nil)) cells)
+          ,@(let ((failure (val-recs-bind-failure (cdr ast))))
+              (and failure (list failure)))
           ,@(mapcan (lambda (val-rec cell)
                       (compile-top-level-val-rec val-rec cell
                                                  local-exceptions lexical-env))
@@ -2744,11 +2786,12 @@ calls it with the fields of its argument."
                     body-decs
                     inner-exceptions
                     (append local-symbol-bindings lexical-env)))))
-           (compile-local-decls-into-body
-            local-decs
-            compiled-body
-            local-exceptions
-            lexical-env)))))
+           (let ((*sml-top-level-local* t))
+             (compile-local-decls-into-body
+              local-decs
+              compiled-body
+              local-exceptions
+              lexical-env))))))
 
     (t (error "Unknown Declaration: ~A" ast))))
 

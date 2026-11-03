@@ -1149,8 +1149,12 @@ the Common Lisp generated for a binding came from.")
   "The :val-rec nodes of `rec PAT = EXP'.  PAT is a variable or a layered
 pattern `v1 <: ty> as v2 <: ty> as ...', all of whose variables denote the
 function (Definition section 2.9 and rule 26; HaMLet test valrec): the first
-is bound to EXP, the others to its eta expansion."
+is bound to EXP, the others to its eta expansion.  The nodes of the
+variables bound by `as' are marked :layered; when the other one names a
+constructor, the binding raises Bind (rule 126 matches the pattern in the
+environment outside the `val rec')."
   (let ((names nil)
+        (atomic nil)
         (type nil))
     (labels ((walk (pat)
                (cond ((and (consp pat) (eq (car pat) :pat-typed))
@@ -1160,17 +1164,22 @@ is bound to EXP, the others to its eta expansion."
                       (walk (second pat))
                       (walk (third pat)))
                      ((and (consp pat) (member (car pat) '(:pat-var :pat-ctor)))
+                      (setf atomic (second pat))
                       (push (second pat) names))
                      (t (sml-parse-expected "a variable in `val rec'")))))
       (walk pat))
     (setf names (nreverse names))
-    (let ((type-plist (and type (list :type type))))
-      (cons `(:val-rec ,(first names) ,exp ,@type-plist ,@tyvar-plist)
-            (loop for name in (rest names)
-                  collect `(:val-rec ,name
-                                     (:fn (((:pat-var "x%") (:app (:var ,(first names))
-                                                                 (:var "x%")))))
-                                     ,@type-plist ,@tyvar-plist))))))
+    (flet ((atomic-plist (name)
+             (and (not (equal name atomic)) (list :layered t))))
+      (let ((type-plist (and type (list :type type))))
+        (cons `(:val-rec ,(first names) ,exp ,@type-plist ,@tyvar-plist
+                         ,@(atomic-plist (first names)))
+              (loop for name in (rest names)
+                    collect `(:val-rec ,name
+                                       (:fn (((:pat-var "x%") (:app (:var ,(first names))
+                                                                   (:var "x%")))))
+                                       ,@type-plist ,@tyvar-plist
+                                       ,@(atomic-plist name))))))))
 
 (defun parse-sml-val-dec ()
   (let ((tyvars (parse-sml-tyvarseq))
@@ -1182,6 +1191,10 @@ is bound to EXP, the others to its eta expansion."
             do (setf recursive t))
       (let ((pat (parse-sml-pat)))
         (expect-sml-reserved :equals)
+        ;; The names `val rec' binds are variables in its expressions and
+        ;; after it, even those that were constructors (rule 26).
+        (when recursive
+          (bind-sml-variables (mapcar #'second (sml-val-rec-nodes pat nil nil))))
         (push (list recursive pat (parse-sml-exp)) bindings))
       (unless (accept-sml-reserved :and)
         (return)))
