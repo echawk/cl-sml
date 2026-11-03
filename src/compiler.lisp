@@ -1700,6 +1700,7 @@ names LEXICAL-ENV binds, which they shadow."
      (let ((name (local-binding-symbol
                   (second dec) (local-declaration-lexical-bindings dec))))
        `(let ((,name nil))
+          ,@(let ((failure (val-rec-bind-failure dec))) (and failure (list failure)))
           (setf ,name ,(compile-expr (third dec)
                                      local-exceptions
                                      (acons (second dec) name lexical-env)))
@@ -1709,6 +1710,8 @@ names LEXICAL-ENV binds, which they shadow."
      (let* ((bindings (local-declaration-lexical-bindings dec))
             (extended-env (append bindings lexical-env)))
        `(let ,(mapcar (lambda (binding) `(,(cdr binding) nil)) bindings)
+          ,@(let ((failure (val-recs-bind-failure (cdr dec))))
+              (and failure (list failure)))
           ,@(mapcar (lambda (val-rec)
                       `(setf ,(cdr (assoc (second val-rec) bindings :test #'equal))
                              ,(compile-expr (third val-rec) local-exceptions extended-env)))
@@ -2433,9 +2436,22 @@ subexpressions go through COMPILE-EXPR."
 
     (t (error "Unknown AST: ~A" ast))))
 
+(defun val-rec-bind-failure (val-rec)
+  "A form that raises Bind when the `val rec' binding VAL-REC rebinds a
+constructor (the checker's :bind-fails), else NIL: rule 126 matches the
+constructor against the function.  Its expression, a `fn', has no effect."
+  (and (ir-checker-annotation val-rec :bind-fails)
+       (compile-match-failure "Bind" "val rec" val-rec)))
+
+(defun val-recs-bind-failure (val-recs)
+  "The form of VAL-RECS, `val rec' bindings joined by `and', that raises
+Bind (see VAL-REC-BIND-FAILURE), or NIL."
+  (some #'val-rec-bind-failure val-recs))
+
 (defun compile-top-level-val-rec (ast cell local-exceptions lexical-env)
   "Forms that set CELL, already bound, to the value of `val rec' AST."
-  `((setf ,cell ,(let ((*sml-binding-symbol-env*
+  `(,@(let ((failure (val-rec-bind-failure ast))) (and failure (list failure)))
+    (setf ,cell ,(let ((*sml-binding-symbol-env*
                          (acons (second ast) cell *sml-binding-symbol-env*)))
                    (compile-expr (third ast)
                                  local-exceptions
@@ -2595,6 +2611,8 @@ calls it with the fields of its argument."
                       *sml-binding-symbol-env*)))
        `(progn
           ,@(mapcar (lambda (cell) `(defparameter ,cell nil)) cells)
+          ,@(let ((failure (val-recs-bind-failure (cdr ast))))
+              (and failure (list failure)))
           ,@(mapcan (lambda (val-rec cell)
                       (compile-top-level-val-rec val-rec cell
                                                  local-exceptions lexical-env))

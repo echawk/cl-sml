@@ -777,8 +777,21 @@ bindings ((pat exp)...) and recursive bindings ((name :exp exp ty node) or
           (loop for (name kind body ty rec-node) in recursive
                 for (nil . valstr) in rec-ve
                 do (let ((existing (lookup-vid c name)))
+                     ;; [Section 2.9] No valbind may bind true, false, nil,
+                     ;; :: or ref.  Other constructors may be rebound: the
+                     ;; names are variables in C + VE, but rule 126 matches
+                     ;; the pattern in the outer environment, where the
+                     ;; constructor fails to match the function and the
+                     ;; binding raises Bind (HaMLet test valrec).
+                     (when (member name '("true" "false" "nil" "::" "ref") :test #'string=)
+                       (elab-error rec-node "val rec cannot bind ~A" name))
                      (when (and existing (not (eq (valstr-status existing) :v)))
-                       (elab-error rec-node "val rec cannot rebind constructor ~A" name)))
+                       (if (eq kind :clauses)
+                           ;; `fun' would raise Bind too (its derived form
+                           ;; is `val rec'); it is rejected instead.
+                           (elab-error rec-node "fun cannot rebind constructor ~A" name)
+                           (when (getf (cdddr rec-node) :atomic)
+                             (annotate rec-node :bind-fails t)))))
                    (let ((type (if (eq kind :clauses)
                                    (elab-fun-clauses c2 name body rec-node)
                                    (progn

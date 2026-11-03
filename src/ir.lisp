@@ -673,8 +673,13 @@ returns, as COMPILE-LOCAL-DECL compiles it."
                                 (list (local-binding-symbol (second rec) bindings)
                                       (ir-lower (third rec) local-exceptions env)))
                               recs))
-              (body (funcall body-thunk)))
-         (ir :letrec (ir-type body) values body)))
+              (body (funcall body-thunk))
+              (letrec (ir :letrec (ir-type body) values body))
+              (failure (val-recs-bind-failure recs)))
+         ;; A binding that rebinds a constructor raises Bind first.
+         (if failure
+             (ir :decl (ir-type body) (list :module failure nil) letrec)
+             letrec)))
       (:datatype
        (let ((body (funcall body-thunk)))
          (ir :decl (ir-type body)
