@@ -2519,16 +2519,21 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
 
 (defun ir-compile-nested-structure (dec thunk)
   "The form THUNK compiles for DEC, a structure (or functor) declared by
-`let' or `local' inside an expression, as a LEXICAL-STRUCTURE-FORM.  Its IR
+`let' or `local' inside an expression, as a LEXICAL-STRUCTURE-FORM (or by a
+top-level `local', as it is).  Its IR
 declarations are kept for DEC rather than added to the program's: they
 belong to the enclosing declaration, and the compiler compiles a `let' or
 `local' body before its declarations."
   (flet ((compile-form ()
-           ;; Nothing is hoisted out of it: its members become lexical
-           ;; variables (LEXICAL-STRUCTURE-FORM), which a hoisted function
-           ;; would not see.
-           (let ((*sml-hoisting-enabled* nil))
-             (lexical-structure-form dec (funcall thunk)))))
+           (if *sml-top-level-local*
+               (funcall thunk)
+               ;; Nothing is hoisted out of it, and its functions have no
+               ;; global workers: its members become lexical variables
+               ;; (LEXICAL-STRUCTURE-FORM), which a global function would
+               ;; not see.
+               (let ((*sml-hoisting-enabled* nil)
+                     (*sml-tupled-workers* nil))
+                 (lexical-structure-form dec (funcall thunk))))))
     (if *sml-ir-program*
         (let ((declarations (list nil)))
           (prog1 (let ((*sml-ir-program* declarations))

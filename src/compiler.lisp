@@ -2258,9 +2258,18 @@ gives the record's labels, else a lookup by label."
         `(svref ,form ,(1+ index))
         `(sml-record-ref ,form ,label))))
 
+(defvar *sml-top-level-local* nil
+  "True while the declarations of a top-level `local' are compiled: the
+structures they declare are evaluated once, and keep their members in
+cells (see LEXICAL-STRUCTURE-FORM).")
+
 (defun compile-expr (ast &optional local-exceptions lexical-env)
   "Compiles an SML expression AST into a Common Lisp form: through the IR
 (src/ir.lisp), unless *SML-IR* is false or applications are debugged."
+  (when *sml-top-level-local*
+    (return-from compile-expr
+      (let ((*sml-top-level-local* nil))
+        (compile-expr ast local-exceptions lexical-env))))
   (if (and *sml-ir* (not *sml-debug-applications*))
       (ir-compile-expression ast local-exceptions lexical-env)
       (compile-expr-direct ast local-exceptions lexical-env)))
@@ -2777,11 +2786,12 @@ calls it with the fields of its argument."
                     body-decs
                     inner-exceptions
                     (append local-symbol-bindings lexical-env)))))
-           (compile-local-decls-into-body
-            local-decs
-            compiled-body
-            local-exceptions
-            lexical-env)))))
+           (let ((*sml-top-level-local* t))
+             (compile-local-decls-into-body
+              local-decs
+              compiled-body
+              local-exceptions
+              lexical-env))))))
 
     (t (error "Unknown Declaration: ~A" ast))))
 
