@@ -483,6 +483,7 @@ generalize replaced by unit, or NIL when there are none."
   (let ((form (third node))
         (type (second node)))
     (cond
+      ((eq form 'pi) (ce-basis-value "Math.pi"))
       ((and (symbolp form) (ce-constructor-reference-p form type))
        (ce-constructor-value form type))
       ((symbolp form)
@@ -515,7 +516,6 @@ generalize replaced by unit, or NIL when there are none."
                 (if path
                     (ce-basis-value path)
                     (coalton-unsupported "built-in ~A" fn)))))))
-      ((eq form 'pi) (ce-basis-value "Math.pi"))
       (t (coalton-unsupported "reference ~S" form)))))
 
 (defun ce-datatype-result (type)
@@ -1205,7 +1205,8 @@ its variables become globals."
 (defun ce-datatype-declaration (declaration)
   (let ((entries nil))
     ;; Register every type first: datatypes in a group refer to each other.
-    (dolist (datatype (second declaration))
+    (dolist (datatype (remove nil (second declaration) :key #'fourth))
+      ;; (A withtype abbreviation comes without constructors.)
       (destructuring-bind (path arity params constructors) datatype
         (declare (ignore arity))
         (let* ((first-type (second (first constructors)))

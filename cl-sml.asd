@@ -102,3 +102,13 @@
                (:file "emit")
                (:file "basis"))
   :in-order-to ((test-op (test-op #:cl-sml/coalton-tests))))
+
+(asdf:defsystem #:cl-sml/coalton-tests
+  :description "Tests of cl-sml's Coalton backend"
+  :depends-on (#:cl-sml/coalton #:fiveam)
+  :pathname "t/"
+  :components ((:file "coalton-tests"))
+  :perform (test-op (operation component)
+             (declare (ignore operation component))
+             (unless (uiop:symbol-call '#:cl-sml-coalton-tests '#:run-coalton-tests)
+               (error "cl-sml Coalton backend tests failed"))))

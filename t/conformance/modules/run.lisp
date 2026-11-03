@@ -10,6 +10,8 @@
 ;;;;   CONF_BASIS    ignored: every SML package sees cl-sml's Basis (kept for
 ;;;;                 older command lines; it used to preload HaMLet's)
 ;;;;   CONF_TIMEOUT  seconds per test (default 60)
+;;;;   CONF_BACKEND  "coalton": compile through the Coalton backend (cl-sml/coalton,
+;;;;                 native checker)
 ;;;;   CONF_ISOLATE  "fork" (default for plain mode on SBCL): one forked child per test;
 ;;;;                 "none": in-process (run.sh restarts the Lisp after a crash and
 ;;;;                 resumes with CONF_RESUME=1; default with --checker, because
@@ -33,13 +35,15 @@
 (defvar *tests* (uiop:ensure-directory-pathname
                  (env "CONF_TESTDIR" (namestring (merge-pathnames "tests/" *root*)))))
 (defvar *checker* (string= (env "CONF_CHECKER" "0") "1"))
-(defvar *native* (string= (env "CONF_CHECKER" "0") "native"))
+(defvar *coalton* (string= (env "CONF_BACKEND" "") "coalton"))
+(defvar *native* (or *coalton* (string= (env "CONF_CHECKER" "0") "native")))
 (defvar *basis-mode* (env "CONF_BASIS" "auto"))
 (defvar *timeout* (parse-integer (env "CONF_TIMEOUT" "60")))
 (defvar *results*
   (uiop:ensure-directory-pathname
    (env "CONF_RESULTS"
-        (namestring (merge-pathnames (cond (*checker* "results/checker/")
+        (namestring (merge-pathnames (cond (*coalton* "results/coalton/")
+                                           (*checker* "results/checker/")
                                            (*native* "results/native/")
                                            (t "results/plain/"))
                                      *root*)))))
@@ -106,7 +110,10 @@
                 (*compile-verbose* nil)
                 (*compile-print* nil)
                 (*load-verbose* nil))
-            (cl-sml:load-sml-file source :package package)))
+            (if *coalton*
+                (uiop:symbol-call '#:cl-sml '#:load-sml-file-via-coalton source
+                                  :package-name package)
+                (cl-sml:load-sml-file source :package package))))
       (serious-condition (c)
         (setf status (classify c)
               diag (format nil "~A: ~A" (type-of c)
@@ -248,6 +255,9 @@ CONF_RESUME=1), print one line per test and a summary."
     (setf cl-sml:*sml-type-checker* (and *native* :native))
     ;; Elaborate the Basis once, before any fork.
     (when *native* (uiop:symbol-call '#:cl-sml.types '#:initial-env))
+    (when *coalton*
+      (quietly (lambda () (ql:quickload :cl-sml/coalton :silent t)))
+      (quietly (lambda () (uiop:symbol-call '#:cl-sml '#:load-coalton-basis))))
     (when *checker*
       (format t "~&;; enabling HaMLet type checker...~%")
       (quietly #'cl-sml:enable-hamlet-type-checker))
