@@ -226,6 +226,83 @@ structure Nested = struct structure I = Inc (Inc (struct val n = T.n end)) end
 val _ = print (Int.toString T.n ^ \" \" ^ Int.toString T.Once.n ^ \" \" ^ Int.toString Nested.I.n ^ \"\\n\")"
                (lines "42 41 44")))
 
+;;; Declarations in `let' and `local': datatypes are lifted, structures
+;;; are local bindings.
+
+(test coalton-local-datatypes
+  (same-output "fun sum xs =
+  let datatype 'a tree = L | N of 'a node withtype 'a node = 'a tree * 'a * 'a tree
+      fun ins (x, L) = N (L, x, L)
+        | ins (x, t as N (l, y, r)) = if x < y then N (ins (x, l), y, r) else N (l, y, ins (x, r))
+      fun fold f a L = a | fold f a (N (l, x, r)) = fold f (f (x, fold f a l)) r
+  in fold (op +) 0 (foldl ins L xs) end
+local datatype t = A | B of int * int  fun g A = 0 | g (B (j, k)) = j * k in val h = g (B (3, 4)) end
+val _ = print (Int.toString (sum [3, 1, 2] + h) ^ \"\\n\")"
+               (lines "18")))
+
+(test coalton-local-exception-generativity
+  ;; Each evaluation of the body makes a new exception.
+  (same-output "fun mk () = let exception E in (fn () => (raise E) : unit, fn (f : unit -> unit) => (f (); \"none\") handle E => \"mine\") end
+val (r1, h1) = mk ()
+val (r2, h2) = mk ()
+val _ = print (h1 r1 ^ \" \" ^ (h1 r2 handle _ => \"other\") ^ \"\\n\")"
+               (lines "mine other")))
+
+(test coalton-structure-in-let
+  (same-output "fun g n =
+  let structure S = struct
+        val k = n * 2
+        fun add (a, b) = a + b + k
+        val (p, q) = (k, k + 1)
+        structure T = struct datatype d = D of int val v = D (add (p, q)) end
+        exception X of int
+      end
+      val S.T.D w = S.T.v
+  in (raise S.X w) handle S.X m => m end
+fun h () =
+  let structure A :> sig type t val make : int -> t val get : t -> int end =
+        struct type t = int fun make x = x fun get x = x + 1 end
+  in A.get (A.make 41) end
+val _ = print (Int.toString (g 1) ^ \" \" ^ Int.toString (g 10) ^ \" \" ^ Int.toString (h ()) ^ \"\\n\")"
+               (lines "7 61 42"))
+  ;; The structure's members are the evaluation's own.  (The CL backend
+  ;; binds them in global cells, so it prints 22.)
+  (is (string= (lines "12")
+               (coalton-output "fun mkc n = let structure S = struct val k = n fun get () = k end in S.get end
+val a = mkc 1
+val b = mkc 2
+val _ = print (Int.toString (a ()) ^ Int.toString (b ()) ^ \"\\n\")"))))
+
+(test coalton-functor-applied-in-let-and-local
+  (same-output "signature ORD = sig type t val le : t * t -> bool end
+functor Sort (O : ORD) = struct
+  fun insert (x, []) = [x]
+    | insert (x, y :: ys) = if O.le (x, y) then x :: y :: ys else y :: insert (x, ys)
+  fun sort xs = foldl insert [] xs
+end
+fun sortDesc xs =
+  let structure D = Sort (struct type t = int fun le (a, b) = a >= b end)
+  in D.sort xs end
+local
+  structure I = Sort (struct type t = int val le = op <= end)
+  val base = 100
+in
+  val sorted = map (fn x => x + base) (I.sort [5, 3, 4])
+end
+val _ = print (String.concatWith \",\" (map Int.toString (sortDesc [2, 9, 4] @ sorted)) ^ \"\\n\")"
+               (lines "9,4,2,103,104,105")))
+
+(test coalton-abstype
+  (same-output "abstype counter = C of int ref
+with fun new () = C (ref 0) fun tick (C r) = (r := !r + 1; !r) end
+val c = new ()
+val _ = (tick c; print (Int.toString (tick c) ^ \"\\n\"))"
+               (lines "2"))
+  ;; The constructors are hidden outside `with ... end'.
+  (signals error
+    (cl-sml:emit-coalton-sml-string "abstype t = T of int with val x = T 1 end
+val y = case x of T n => n")))
+
 (test coalton-show
   (let ((text (with-output-to-string (s)
                 (cl-sml:show-sml-coalton "fun twice f x = f (f x)" :stream s))))
