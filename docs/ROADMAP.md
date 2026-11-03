@@ -498,16 +498,15 @@ closure conversion, monomorphisation) is not started.
 
 The system `cl-sml/coalton` (src/coalton) emits Coalton from the typed IR
 for the core language, structures and functors (each application
-specialised at compile time, item 21).  The Basis
-is `src/basis` emitted through the backend (1333 of its 1342
-declarations; the rest need IntInf beyond fixnums, Int64's range, or a
-structure inside `local`), over a small prelude of primitives
-(src/coalton/prelude.lisp).  Core corpus 62/63 through Coalton (abstype
-missing), Modules corpus 55/57 (IntInf, a structure in `let`; the 16
-functor tests pass since defunctorisation, they failed before).  Design and
+specialised at compile time, item 21), including datatypes, structures
+and functor applications declared by `let` and `local`, and `abstype`
+(datatypes lifted to the top level, a structure in `let` emitted as local
+bindings).  The Basis is `src/basis` emitted through the backend (1333 of
+its 1335 declarations; the rest need Int64's range beyond fixnums), over
+a small prelude of primitives (src/coalton/prelude.lisp).  Core corpus
+63/63 through Coalton, Modules corpus 56/57 (IntInf).  Design and
 decisions: docs/IR.md, "The Coalton backend".
 
-Next: abstype and datatypes in `let`/`local`; structures in `let` and
-`local` (so functor applications there); an IntInf type of its own; faster
-code (Coalton is 1x to 6x slower than the CL backend on t/bench, mostly
-from tuples allocated at calls and polymorphic equality).
+Next: an IntInf type of its own; faster code (Coalton is 1x to 6x slower
+than the CL backend on t/bench, mostly from tuples allocated at calls and
+polymorphic equality).
