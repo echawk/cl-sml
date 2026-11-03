@@ -216,6 +216,28 @@ val square = <fn>
 Commands are recognized only at the primary prompt, on lines starting with
 `:` and a letter, which no SML phrase does.
 
+## The Coalton backend (optional)
+
+The system `cl-sml/coalton` compiles SML to [Coalton](https://github.com/coalton-lang/coalton)
+instead of plain Lisp, through the typed IR (docs/IR.md, "The Coalton
+backend").  Only that system depends on Coalton.  It covers the core
+language and structures (no functors), and its Basis Library is
+`src/basis` itself, emitted to Coalton when it is first needed.
+
+```lisp
+(ql:quickload :cl-sml/coalton)
+(cl-sml:load-sml-via-coalton "val _ = print \"hello\\n\"")   ; compile and run
+(cl-sml:load-sml-file-via-coalton #p"prog.sml")
+(cl-sml:emit-coalton-sml-string "fun f x = x + 1")       ; the Coalton forms
+(cl-sml:show-sml-coalton "fun f x = x + 1")              ; printed
+(cl-sml:coalton-basis-report)        ; which Basis declarations Coalton has
+```
+
+Coalton type-checks what is emitted again.  Tests: `(asdf:test-system
+:cl-sml/coalton)`; the corpora and benchmarks take `--coalton`
+(`t/conformance/core/run.sh --coalton`, `t/conformance/modules/run.sh
+--coalton`, `sbcl --script t/bench/run.lisp coalton`).
+
 ## Files of generated Lisp
 
 `(cl-sml:emit-sml-file #p"program.sml" #p"program.lisp")` (or

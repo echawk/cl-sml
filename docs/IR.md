@@ -154,6 +154,7 @@ and the structure's own declaration follows its members.
 | `(:functor name :ast ast)` | the functor's AST, for a whole-program pass to specialize its applications (ROADMAP 21) |
 | `(:functor-application path functor argument :signature sigexp :opaque bool)` | |
 | `(:signature name sigexp)`, `(:open names)` | |
+| `(:local ((kind ((name . variable) ...) argp) ...) terms)` | `local A in B end` at top or structure level: each declaration of A, its kind and the lexical variables it binds (ARGP: an exception with an argument), and A's terms; recorded before B's declarations |
 
 Functor bodies are compiled as before (one closure per functor, applied at
 run time); their declarations are not recorded separately.
@@ -269,3 +270,56 @@ Still to do for Coalton:
 - the representation decisions (`:boxed`/`:flat`, tuple workers) are made
   during lowering; a Coalton emitter ignores them and uses the names and
   types.
+
+## The Coalton backend
+
+The system `cl-sml/coalton` (src/coalton/) emits Coalton from a program's
+IR declarations, compiled with the native checker and without the
+simplifier (`sml-ir-program`, `*sml-ir-simplify*` nil): the terms keep
+their types, and no untyped Basis template is inlined.
+
+| file | |
+|---|---|
+| `prelude.lisp` | package `cl-sml/coalton-prelude`: the types `Raw` (any Lisp object), `Exn`, `SmlVector`, `Ref`; `raise`, the native exception `SmlException`; exception tags; and the overloaded operators at each type (`\|int+\|`, `\|real<\|`, ...) as `lisp` forms of the CL backend's open code (`compile-overloaded-operation`) |
+| `emit.lisp` | the emitter: `emit-coalton-sml-string`, `load-sml-via-coalton`, `load-sml-file-via-coalton`, `show-sml-coalton` |
+| `basis.lisp` | the Basis: src/basis checked as one program and emitted into the package `SML.COALTON-BASIS` (`load-coalton-basis`, `coalton-basis-report`) |
+
+Each top-level declaration becomes one `coalton-toplevel` form, loaded in
+order, so effects happen in SML's order and a `fun ... and ...` group is
+one recursive group.  A program's package uses COALTON, COALTON-PRELUDE and
+the prelude; its names are its paths (`|S.f|`, a rebinding `|x%2|`),
+shadowing what it inherits, as Coalton defines only the current package's
+symbols.  Locals are `|x/3|`.
+
+Mapping (see also DESIGN-TYPECHECKER.md section 8):
+
+| SML | Coalton |
+|---|---|
+| int, word, word8, real, char, string, bool, unit | `IFix` (checked: Overflow), `UFix` (wraps at 62 bits), `U8`, `F64`, `Char`, `String`, `Boolean`, `Unit` |
+| list, option, order, `'a ref`, exn, `'a vector` | `List`, `Optional`, `Ordering`, `Ref` (a `Cell`, `Eq` by identity), `Exn`, `SmlVector` |
+| tuples, records | `Tuple` .. `Tuple5`; wider ones and records `Record{a,b}`, a type per label set defined in the prelude's package when first used |
+| datatype | `define-type`, `(derive Eq)` when it admits equality; a constructor of a tuple takes its fields |
+| abstract types (`:>`) | the structure's own type: linked by the structure's declaration in the Basis, by the native checker's Basis paths in programs |
+| `fun f (x, y)` at top level | worker `f%w` of type `A * B -> C`, wrapper `f`; `:call` calls the worker |
+| curried `fun`, `fn`, `let`, `letrec` | `define`/`fn` of one argument, `let` (Coalton's `let` is recursive) |
+| `:loop`, `:tail-call` | `rec`, or a local function when the calls are inside a match's fall-through thunks |
+| `case`, clauses | `match`; patterns Coalton cannot express (exception constructors, `ref`, layered patterns, non-printing characters, bool constants) become residual tests in the body, and a match that has them falls through rule by rule with thunks; several scrutinees are matched as a tuple unless only one position tests |
+| `raise e`, `e handle rules` | `(raise e)`, `(catch e ((the SmlException c) ...))`, re-raising when no rule matches |
+| `exception E of t` | a tag (`E%tag`, the run time's `sml-exception-tag`; the initial basis's for Fail, Empty, ...) and a constructor; local exceptions make a tag each time |
+| `use{b = "Name"} : t` (Basis) | the run time's primitive, its arguments and results converted between the two representations by type (unit, tuples, records, option, lists, enumerations) |
+| `val pat = e` | a hidden definition of `e`, then one definition per variable |
+| `local A in B end` | A's variables become globals `|name%local|` |
+
+Every top-level binding gets a `declare` of its type (with `Eq :a` for
+each equality type variable), so Coalton checks the backend's types
+against the native checker's.  A type variable the binding does not
+generalize is SML's default, unit (`[] = []`).  In programs, an
+application of a Basis function that is a primitive the IR opens
+(`Word.xorb`, `String.sub`, ...) is opened the same way.
+
+Not supported (`coalton-unsupported` names the construct): functors and
+functor applications, structures in `let` or `local`, datatypes in `let`
+or `local` (so `abstype`), flexible records whose labels are unknown.
+IntInf.int is Int.int in the Basis's sources, so IntInf values beyond the
+fixnum range fail in Coalton; the Basis's streams, `int` in its sources,
+are `cl_object` (Raw) for Coalton (`*coalton-basis-patches*`).
