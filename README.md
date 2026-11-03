@@ -239,6 +239,40 @@ Coalton type-checks what is emitted again.  Tests: `(asdf:test-system
 (`t/conformance/core/run.sh --coalton`, `t/conformance/modules/run.sh
 --coalton`, `sbcl --script t/bench/run.lisp coalton`).
 
+## Concurrent ML (optional)
+
+The system `cl-sml/cml` adds Concurrent ML: the structures `CML`,
+`SyncVar`, `Mailbox`, `Multicast` and `RunCML`, with the API that SML/NJ's
+and MLton's CML share (docs/DESIGN-CML.md).  Each CML thread is an OS
+thread (bordeaux-threads, a dependency of this system only); a thread
+blocked in `sync` waits on a condition variable, and choices among
+several enabled events are random.  Loading it makes the structures
+visible to every SML program; cl-sml without it is unchanged.
+
+```lisp
+(ql:quickload :cl-sml/cml)
+(cl-sml:load-sml-file #p"prog.sml")   ; a program that calls RunCML.doit
+(cl-sml.cml:seed-choice 42)           ; reproducible choices among enabled events
+```
+
+```sml
+val _ = RunCML.doit (fn () =>
+  let val ch = CML.channel ()
+  in CML.spawn (fn () => CML.send (ch, "hello"));
+     print (CML.recv ch ^ "\n");
+     RunCML.shutdown OS.Process.success
+  end, NONE)
+```
+
+`RunCML.doit` returns the status given to `shutdown`, or
+`OS.Process.failure` when no thread can run (deadlock, or all threads
+ended); `TextIO` stays blocking, per thread.  Threads cost about 50 µs to
+create and a few µs per rendezvous, and macOS allows about 8000, so
+programs with a thread per datum are slow.  With `cl-sml/coalton` also
+loaded, CML programs run through the Coalton backend too.  Tests:
+`(asdf:test-system :cl-sml/cml)` and `(asdf:test-system
+:cl-sml/cml-coalton-tests)`.
+
 ## Files of generated Lisp
 
 `(cl-sml:emit-sml-file #p"program.sml" #p"program.lisp")` (or

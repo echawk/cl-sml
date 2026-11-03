@@ -1,9 +1,10 @@
 # Design: Concurrent ML for cl-sml
 
-Status: investigation only; nothing is implemented. This file answers
-which CML to support, how to implement it on Common Lisp, what it means
-for the run time and the Coalton backend, how to test it, and in what
-order to build it. Sizes use the scale of `docs/ROADMAP.md` (S hours, M
+Status: milestones 1-7 are implemented (system `cl-sml/cml`, `src/cml`;
+section 6 says how and where the implementation departs from the plan
+below). This file answers which CML to support, how to implement it on
+Common Lisp, what it means for the run time and the Coalton backend, how
+to test it, and in what order to build it. Sizes use the scale of `docs/ROADMAP.md` (S hours, M
 days, L a week or more, XL weeks).
 
 Sources (cited by upstream repository and commit):
@@ -335,7 +336,140 @@ A small conformance list (each a few lines of SML with expected output):
 
 Milestones 1-7 make a usable CML: about two weeks of work.
 
+## 6. The implementation
+
+Decisions (the open questions below): bordeaux-threads, as a dependency
+of the separate system `cl-sml/cml` only; the default Basis and the
+`cl-sml` system do not change; threads are OS threads for now, behind a
+scheduler protocol a green-thread scheduler could implement later;
+`TextIO` stays blocking per thread; the choice among enabled events is
+random, with a seed (`cl-sml.cml:seed-choice`) for reproducible tests;
+the benchmarks' private CML gets a compat layer.
+
+Files:
+
+- `src/cml/scheduler.lisp`: the scheduler protocol and
+  `os-thread-scheduler`, its one implementation.
+- `src/cml/core.lisp`: threads, events (`force-event` turns an event into
+  branches, running guards and `withNack` functions; `sync` polls them in
+  the atomic region, commits to a random enabled one or blocks), channels,
+  time-outs, `joinEvt`, nack cvars, SyncVar's and Mailbox's base events,
+  `RunCML` (deadlock detection, shutdown).
+- `src/cml/primitives.lisp`: the `use{b = NAME}` primitives
+  (registered in `cl-sml::*sml-extension-primitives*`, which
+  `sml-basis-primitive` consults first when it is not empty) and the run
+  time's thread safety.
+- `src/cml/*.sml`: the signatures and structures. `src/cml/basis.lisp`
+  compiles them into the Basis's package (`define-sml-basis-extension`,
+  `src/basis.lisp`), and registers them in
+  `cl-sml::*sml-basis-extension-files*`, which the native checker and the
+  Coalton Basis elaborate after the Basis (before `values.sml`, which
+  rebinds `use`).
+- `t/cml`: the suite (`cl-sml/cml-tests`, and `cl-sml/cml-coalton-tests`
+  for the Coalton backend).
+
+The scheduler protocol (CLOS generic functions on `*scheduler*`):
+`call-atomically` (the atomic region: polling and committing),
+`make-waiter`, `block-waiter` (leave the atomic region, wait until woken
+or a deadline, re-enter), `wake-waiter`, `start-thread` (with the CML
+thread that `current-thread` returns in it), `current-thread`,
+`yield-thread`, `stop-thread` (for threads that ignore shutdown). The
+event protocol uses nothing else of the host. `os-thread-scheduler`
+implements it with one global lock, a condition variable per thread, and
+bordeaux-threads threads.
+
+Departures from the plan above:
+
+- Thread safety costs a single-threaded program nothing until
+  `RunCML.doit` first runs: cl-sml's run time has two hooks,
+  `*sml-runtime-lock-hook*` (shape and initial-exception interning) and
+  `*sml-stream-lock-hook*` (every TextIO and BinIO primitive and
+  `print`), that are NIL until then, when `cl-sml/cml` sets them and
+  replaces the exception and constructor tag tables by synchronized
+  copies. The tuple-shape vector is replaced, not adjusted, when it grows.
+  t/bench is unchanged (within noise) with cl-sml's hooks in place.
+- `*inherited-specials*` lists the special variables a new thread takes
+  from its parent (the standard streams, `*default-pathname-defaults*`,
+  `*sml-package*`, ...). `OS.FileSys.chDir` therefore changes the
+  directory of the calling thread only.
+- Abstract CML types are `int` in the SML sources (`type obj = int`, as
+  the streams are) and `cl_object` in the Coalton Basis (a patch); a
+  polymorphic primitive is eta-expanded so that it generalizes. Polls
+  take `SOME` and `NONE` from SML, and `RunCML` passes a status as 0 or 1,
+  so the primitives never build SML options or statuses, and the Coalton
+  backend passes them its own. The backend now converts an SML function
+  given to a primitive (`ce-to-cl` on arrow types).
+- `RunCML.doit` runs its function as the first CML thread and waits; the
+  time slice is ignored. When it finishes (shutdown, deadlock, or every
+  thread ended, the last two with `OS.Process.failure`), blocked threads
+  unwind at once; threads still running after
+  `*shutdown-grace-seconds*` (1 s) are stopped with
+  `bt:destroy-thread`. CML operations that need a thread (`sync`, `spawn`,
+  `getTid`, `exit`, `shutdown`) raise `Fail` outside `doit`; making
+  channels and variables, and `iPut`/`mPut`/`Mailbox.send`, work anywhere.
+- An uncaught exception ends its thread and is reported on the error
+  output (`*report-uncaught-exceptions*`).
+- Multicast is written in SML after Reppy's book (a stream of I-variables
+  appended to by a server thread), not ported from upstream.
+- Stack sizes: SBCL threads get the main thread's control stack size
+  (`--control-stack-size`; `os-thread-scheduler` takes `:stack-size`).
+  ECL's threads get a small C stack (about 512 KB on macOS) whatever
+  `--c-stack` says, so deep non-tail recursion in a CML thread can crash
+  ECL.
+- The Coalton backend runs the CML programs of t/cml except `time.sml`,
+  which fails on an older backend limitation: an int literal compared with
+  a `LargeInt.int` (`Time.toMilliseconds`) is typed as int.
+
+Real-world programs: `t/realworld/compat/cml.sml` replaces the SML/NJ
+benchmarks' `common/cml.sml` (`t/realworld/bin/assemble.sh`), so
+pingpong and cml-sieve run (their `testit` passes). cml-sieve's
+benchmark size (the 12000th prime, a thread per prime) is out of reach on
+macOS: the 2000th prime takes about 12 s (2000 threads, each number
+handed down the pipeline), and the 12000th exhausts a 1 GB heap before
+it meets the 8192-thread limit.
+
+### What a green-thread scheduler needs
+
+A green-thread scheduler implements the same protocol on one OS thread:
+`call-atomically` just calls its thunk (nothing else runs),
+`make-waiter` makes a slot for a continuation, `block-waiter` saves the
+current thread's continuation in the waiter and runs the next ready
+thread (returning when someone resumes it), `wake-waiter` puts the
+saved continuation on the ready queue, `start-thread` queues a new
+thread, `current-thread` is a variable the dispatcher sets, `yield-thread`
+requeues the current continuation, and the idle loop sleeps until the
+earliest deadline. `core.lisp` needs no change, except that
+`block-waiter` returns into a different Lisp stack frame, which is only
+possible if the code above it in the stack is in CPS.
+
+From the compiler that means:
+
+1. A CPS mode of the CL backend (or of the IR, before either backend):
+   every SML function takes its continuation; `sync`, `spawn`, `yield`,
+   `exit` and `RunCML.doit` are primitives that receive it. Code that
+   cannot reach them may stay direct (a whole-program effect analysis,
+   item 21 of docs/ROADMAP.md, can find it), but higher-order Basis
+   functions (`List.app`, `Option.map`) must be compiled in both styles.
+2. Constant stack for tail calls in CPS code: a trampoline (portable) or
+   SBCL's tail-call merging; the backend's loops for self-tail calls stay.
+3. Exceptions as a second continuation (or handlers recorded in the
+   thread), since Lisp `handler-case` frames do not survive a switch;
+   `wrapHandler` and the handler of a thread's top level follow.
+4. A Basis compiled in CPS for the functions that take SML functions,
+   and Lisp primitives that call SML (`use{b = ...}` with function
+   arguments: the CML primitives themselves) made CPS-aware.
+5. Preemption: compiled CPS code polls a flag at function entries or
+   loop back edges (a timer sets it), as SML/NJ does, so that a thread
+   that computes without synchronising does not starve the others.
+
+The scheduler then plugs in by binding `cl-sml.cml:*scheduler*` to an
+instance of its class when a program compiled in CPS mode runs. Both
+schedulers could coexist only if `RunCML.doit` chose by how the program
+was compiled.
+
 ## Open questions
+
+These were answered for the first version: see section 6.
 
 1. Dependency: bordeaux-threads, or our own small wrappers in
    `src/portability.lisp`? (This document leans to our own.)

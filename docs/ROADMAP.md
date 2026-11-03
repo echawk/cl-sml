@@ -548,4 +548,18 @@ Next: an IntInf type of its own; faster code (Coalton is 1x to 6x slower
 than the CL backend on t/bench, mostly from tuples allocated at calls and
 polymorphic equality).
 
-Concurrent ML (not started): design and milestones in docs/DESIGN-CML.md.
+### 23. Concurrent ML (L) — first version done
+
+The system `cl-sml/cml` (src/cml) implements milestones 1-7 of
+docs/DESIGN-CML.md: CML, SyncVar, Mailbox, Multicast and RunCML on one OS
+thread per CML thread, with Reppy's single-processor event protocol under
+one global lock, behind a scheduler protocol into which a green-thread
+scheduler (CPS conversion, section 6 there) could fit; the run time's
+thread safety (locked shape interning, per-stream locks, synchronized
+tables, special variables inherited at spawn), with no cost to programs
+that do not load it; and the same programs through the Coalton backend.
+Tests: t/cml.  The SML/NJ benchmarks pingpong and cml-sieve pass through a
+compat layer (t/realworld/compat/cml.sml).
+
+Next, if measurements ask for it: the "Parallel CML" protocol (milestone
+8), event-valued I/O (9), green threads (10).
