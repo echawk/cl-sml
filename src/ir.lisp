@@ -1174,8 +1174,10 @@ unboxed."
            `(let* ,bindings
               (declare (ignorable ,@(mapcar #'first bindings)))
               ,(ir-emit-rule-body patterns body)))))
+      ((ir-dispatch-match-p scrutinees rules) (ir-emit-dispatch-match node))
+      ((and *sml-decision-trees*
+            (ir-emit-decision-tree (ir-emit-list scrutinees) rules (ir-emit-failure failure))))
       ((ir-literal-match-p scrutinees rules) (ir-emit-literal-match node))
-      ((and (ir-dispatch-match-p scrutinees rules)) (ir-emit-dispatch-match node))
       ((= (length scrutinees) 1)
        `(trivia:match ,(ir-emit (first scrutinees))
           ,@(mapcar (lambda (rule)
@@ -1278,6 +1280,470 @@ whose groups of rules are hoisted functions (COMPILE-TUPLE-DISPATCH-CASE)."
         `(trivia:match ,value
            ,@clauses
            (_ (funcall ,fallback))))))
+
+;;; Decision trees (ROADMAP item 11; Maranget, "Compiling pattern matching
+;;; to good decision trees", ML Workshop 2008).  A match is a matrix of
+;;; rows (the patterns of a rule, the variables they have bound so far, the
+;;; rule) over columns (the CL forms of the subterms still to be tested),
+;;; split on one column at a time, so that each subterm is tested once.
+;;; Tuples, records and refs are taken apart, not tested.  Constants and
+;;; the constructors whose tags are known at compile time (nullary, boxed
+;;; and flat ones, `::' and `nil') exclude each other: a CASE (or an IF) on
+;;; the value or its tag has a branch for each of them, which keeps the
+;;; rows that may match it.  An exception constructor, or a constructor
+;;; known only at run time (of a local datatype, a functor body or a
+;;; functor's argument), may have the same value under another name, so it
+;;; is tested alone, and in the branch where it matches, the rows of the
+;;; others keep their column, to be tested later.  Rules reached from
+;;; several leaves become local functions (FLET), unless they are small.
+
+(defvar *sml-decision-trees* t
+  "When true, matches are compiled to decision trees (IR-EMIT-DECISION-TREE);
+when NIL, rule by rule by trivia, as before.")
+
+(defvar *ir-shared-action-size* 8
+  "Rules whose bodies are larger than this (in IR nodes) and are reached
+from several leaves of a decision tree are local functions.")
+
+(defvar *dt-tests* 0
+  "The number of tests of the decision tree being built.")
+
+(defvar *dt-test-limit* 0
+  "The most tests a decision tree may have; beyond it, the match is
+compiled by trivia instead.")
+
+(defvar *dt-leaf-marker* nil
+  "The car of the leaves of the tree being built, (marker rule bindings).")
+
+(defvar *dt-leaf-counts* nil
+  "For each rule, how many leaves of the tree being built reach it.")
+
+(defvar *dt-failure* nil
+  "The form of the tree being built that raises when no rule matches.")
+
+(defparameter +dt-wild+ (ir :p-wild nil))
+
+(defstruct (dt-row (:constructor make-dt-row (patterns bindings rule)))
+  "A row of a clause matrix: PATTERNS, one per column, none of them a
+variable or layered; the BINDINGS ((symbol representation form) ...) of
+the variables matched so far, and the index of its RULE."
+  patterns bindings rule)
+
+(defun dt-wild-p (pattern) (eq (ir-kind pattern) :p-wild))
+
+(defun dt-peel (pattern form bindings)
+  "PATTERN, matched against FORM, without its variable or layers, which are
+added to BINDINGS; returns the rest and the bindings."
+  (loop
+    (case (ir-kind pattern)
+      (:p-var (return (values +dt-wild+
+                              (cons (list (third pattern) (fourth pattern) form) bindings))))
+      (:p-as (push (list (third pattern) nil form) bindings)
+       (setf pattern (fourth pattern)))
+      (t (return (values pattern bindings))))))
+
+(defun dt-row (patterns forms bindings rule)
+  (let ((peeled nil))
+    (loop for pattern in patterns
+          for form in forms
+          do (multiple-value-bind (rest more) (dt-peel pattern form bindings)
+               (push rest peeled)
+               (setf bindings more)))
+    (make-dt-row (nreverse peeled) bindings rule)))
+
+(defun dt-replace (list index items)
+  "LIST with its element at INDEX replaced by the elements ITEMS."
+  (append (subseq list 0 index) items (nthcdr (1+ index) list)))
+
+(defun dt-product-p (pattern)
+  (member (ir-kind pattern) '(:p-tuple :p-record :p-record-lookup :p-ref)))
+
+(defun dt-product-fields (pattern form)
+  "The fields ((key form pattern) ...) of tuple, record or ref PATTERN
+matched against FORM."
+  (ecase (ir-kind pattern)
+    (:p-tuple (loop for subpattern in (third pattern)
+                    for i from 1
+                    collect (list i `(svref ,form ,i) subpattern)))
+    (:p-record (mapcar (lambda (field)
+                         (list (first field) `(svref ,form ,(first field)) (third field)))
+                       (fourth pattern)))
+    (:p-record-lookup (mapcar (lambda (field)
+                                (list (first field) `(sml-record-field ,form ,(first field))
+                                      (second field)))
+                              (third pattern)))
+    (:p-ref (list (list :ref `(svref ,form 1) (third pattern))))))
+
+(defun dt-static-key (pattern)
+  "The key of a constant or of a constructor whose tag is known, or NIL."
+  (case (ir-kind pattern)
+    (:p-const (list :const (third pattern)))
+    (:p-cons '(:cons))
+    (:p-con (destructuring-bind (how data) (subseq pattern 3 5)
+              (case how
+                (:eq-tag (list :tag data 0))
+                (:boxed (list :tag data :boxed))
+                (:flat (list :tag (car data) :flat (cdr data))))))))
+
+(defun dt-key (pattern)
+  "The key of the test that refutable PATTERN makes."
+  (or (dt-static-key pattern)
+      (case (ir-kind pattern)
+        (:p-exn (list :exn (fourth pattern)))
+        (:p-con (list :con (fourth pattern) (fifth pattern)))
+        (otherwise (throw 'dt-give-up nil)))))
+
+(defun dt-payload (pattern)
+  "The pattern of the argument of constructor PATTERN, or NIL."
+  (case (ir-kind pattern)
+    (:p-exn (fifth pattern))
+    (:p-con (sixth pattern))))
+
+(defun dt-subforms (key value payloadp)
+  "The forms of the subterms of VALUE, a variable, when it matches KEY."
+  (ecase (first key)
+    (:const nil)
+    (:cons (list `(car ,value) `(cdr ,value)))
+    (:tag (ecase (third key)
+            ((0) nil)
+            (:boxed (list `(cdr ,value)))
+            (:flat (loop for i from 1 to (fourth key) collect `(svref ,value ,i)))))
+    (:exn (and payloadp (list `(cdr ,value))))
+    (:con (and payloadp
+               (list (if (eq (second key) :functor-tag)
+                         `(cdr ,value)
+                         `(sml-constructed-argument ,value)))))))
+
+(defun dt-subpatterns (key pattern value width)
+  "The WIDTH patterns of the subterms that PATTERN, of KEY, matches against
+VALUE, and the variables bound to the whole argument of a flat
+constructor."
+  (case (first key)
+    (:cons (list (third pattern) (fourth pattern)))
+    (:tag
+     (if (eq (third key) :flat)
+         ;; The argument of a flat constructor is its slots; a variable for
+         ;; all of it gets a copy.
+         (multiple-value-bind (rest bindings)
+             (dt-peel (sixth pattern) `(sml-flat-constructed-argument ,value) nil)
+           (values (cond ((dt-wild-p rest) (make-list width :initial-element +dt-wild+))
+                         ((and (dt-product-p rest) (not (eq (ir-kind rest) :p-ref)))
+                          (let ((fields (dt-product-fields rest value)))
+                            (loop for i from 1 to width
+                                  collect (or (third (assoc i fields)) +dt-wild+))))
+                         (t (throw 'dt-give-up nil)))
+                   bindings))
+         (and (sixth pattern) (list (sixth pattern)))))
+    (t (let ((payload (dt-payload pattern)))
+         (cond ((zerop width) nil)
+               (payload (list payload))
+               (t (list +dt-wild+)))))))
+
+(defun dt-specialize (forms rows column key subforms keep-column)
+  "The matrix of the rows of ROWS that may match KEY in COLUMN, whose
+subterms there are SUBFORMS; when KEEP-COLUMN, the column stays, for the
+rows whose tests there do not exclude KEY."
+  (let* ((value (nth column forms))
+         (width (length subforms))
+         (wilds (make-list width :initial-element +dt-wild+))
+         (new-forms (dt-replace forms column
+                                (append subforms (and keep-column (list value))))))
+    (values new-forms
+            (loop for row in rows
+                  for pattern = (nth column (dt-row-patterns row))
+                  for row-key = (and (not (dt-wild-p pattern)) (dt-key pattern))
+                  for staticp = (and row-key (dt-static-key pattern))
+                  unless (and staticp (not (equal row-key key)))
+                    collect (multiple-value-bind (subpatterns bindings)
+                                (if (equal row-key key)
+                                    (dt-subpatterns key pattern value width)
+                                    wilds)
+                              (dt-row (dt-replace (dt-row-patterns row) column
+                                                  (append subpatterns
+                                                          (and keep-column
+                                                               (list (if (equal row-key key)
+                                                                         +dt-wild+
+                                                                         pattern)))))
+                                      new-forms
+                                      (append bindings (dt-row-bindings row))
+                                      (dt-row-rule row)))))))
+
+(defun dt-expand-product (forms rows column)
+  "The matrix with COLUMN, of tuples, records or refs, replaced by the
+columns of their fields that some row tests or binds."
+  (let ((form (nth column forms))
+        (keys nil))
+    (dolist (row rows)
+      (let ((pattern (nth column (dt-row-patterns row))))
+        (unless (dt-wild-p pattern)
+          (unless (dt-product-p pattern)
+            (throw 'dt-give-up nil))
+          (loop for (key subform subpattern) in (dt-product-fields pattern form)
+                unless (or (dt-wild-p subpattern) (assoc key keys :test #'equal))
+                  do (push (list key subform) keys)))))
+    (setf keys (nreverse keys))
+    (let ((new-forms (dt-replace forms column (mapcar #'second keys))))
+      (values new-forms
+              (mapcar (lambda (row)
+                        (let* ((pattern (nth column (dt-row-patterns row)))
+                               (fields (and (not (dt-wild-p pattern))
+                                            (dt-product-fields pattern form))))
+                          (dt-row (dt-replace (dt-row-patterns row) column
+                                              (mapcar (lambda (key)
+                                                        (or (third (assoc (first key) fields
+                                                                          :test #'equal))
+                                                            +dt-wild+))
+                                                      keys))
+                                  new-forms (dt-row-bindings row) (dt-row-rule row))))
+                      rows)))))
+
+(defun dt-choose-column (rows)
+  "The column to test: among those where the first row is refutable, the
+one with the longest prefix of rows refutable there (Maranget's
+heuristic p, after f), the leftmost of equals."
+  (let ((best nil) (best-score -1))
+    (dotimes (column (length (dt-row-patterns (first rows))) best)
+      (unless (dt-wild-p (nth column (dt-row-patterns (first rows))))
+        (let ((score (loop for row in rows
+                           while (not (dt-wild-p (nth column (dt-row-patterns row))))
+                           count t)))
+          (when (> score best-score)
+            (setf best column best-score score)))))))
+
+(defun dt-compile (forms rows)
+  "The CL form of the decision tree of the matrix (FORMS, ROWS), whose
+leaves are (*DT-LEAF-MARKER* rule bindings)."
+  (when (null rows)
+    (return-from dt-compile *dt-failure*))
+  (let ((product (position-if (lambda (column)
+                                (some (lambda (row)
+                                        (dt-product-p (nth column (dt-row-patterns row))))
+                                      rows))
+                              (loop for i below (length forms) collect i))))
+    (when product
+      (return-from dt-compile
+        (multiple-value-call #'dt-compile (dt-expand-product forms rows product)))))
+  (let ((first-row (first rows)))
+    (when (every #'dt-wild-p (dt-row-patterns first-row))
+      (incf (aref *dt-leaf-counts* (dt-row-rule first-row)))
+      (return-from dt-compile
+        (list *dt-leaf-marker* (dt-row-rule first-row) (dt-row-bindings first-row)))))
+  (when (> (incf *dt-tests*) *dt-test-limit*)
+    (throw 'dt-give-up nil))
+  (let* ((column (dt-choose-column rows))
+         (form (nth column forms)))
+    (if (symbolp form)
+        (dt-split forms rows column)
+        ;; Test a variable, not an access.
+        (let ((value (gensym "V")))
+          `(let ((,value ,form))
+             ,(dt-split (dt-replace forms column (list value)) rows column))))))
+
+(defun dt-split (forms rows column)
+  (let* ((value (nth column forms))
+         (patterns (mapcar (lambda (row) (nth column (dt-row-patterns row))) rows))
+         (head (first patterns)))
+    (if (dt-static-key head)
+        (dt-switch forms rows column)
+        ;; A test of one exception or constructor, which another may equal.
+        (let* ((key (dt-key head))
+               (payloadp (some (lambda (pattern)
+                                 (and (not (dt-wild-p pattern))
+                                      (equal (dt-key pattern) key)
+                                      (dt-payload pattern)))
+                               patterns))
+               (subforms (dt-subforms key value payloadp)))
+          `(if ,(dt-dynamic-test key value)
+               ,(multiple-value-call #'dt-compile
+                  (dt-specialize forms rows column key subforms t))
+               ,(dt-compile forms
+                            (remove-if (lambda (row)
+                                         (let ((pattern (nth column (dt-row-patterns row))))
+                                           (and (not (dt-wild-p pattern))
+                                                (equal (dt-key pattern) key))))
+                                       rows)))))))
+
+(defun dt-dynamic-test (key value)
+  "The test that VALUE matches KEY, of an exception or of a constructor
+whose tag is not known at compile time (see IR-EMIT-CONSTRUCTOR-PATTERN)."
+  (if (eq (first key) :exn)
+      `(eq (if (consp ,value) (car ,value) ,value)
+           (sml-exception-constructor-tag ,(second key)))
+      (destructuring-bind (how data) (rest key)
+        (ecase how
+          (:eql-form `(eql ,value ,data))
+          (:bound-eql `(and (boundp ',data) (eql ,value (symbol-value ',data))))
+          (:value-eql `(eql ,value (symbol-value ',data)))
+          (:tag-p `(sml-constructor-tag-p ,value ',data))
+          (:functor-tag `(and (consp ,value) (eq (car ,value) ,data)))
+          (:unknown-repr `(eq (sml-constructed-tag ,value) ',data))
+          (:variable `(eq (sml-constructed-tag ,value) (sml-constructor-value-tag ,data)))
+          (:runtime `(let ((tag (sml-constructed-tag ,value)))
+                       (and tag (sml-constructor-tag-p tag ',data))))))))
+
+(defun dt-complete-p (keys patterns)
+  "Do the static KEYS cover every value of the type of PATTERNS?"
+  (let ((type (ir-type (find-if-not #'dt-wild-p patterns))))
+    (case (first (first keys))
+      (:cons (= (length keys) 2))
+      (:const (and (= (length keys) 2)
+                   (member '(:const t) keys :test #'equal)
+                   (member '(:const nil) keys :test #'equal)))
+      (:tag (and (consp type) (eq (first type) :con)
+                 (= (length keys)
+                    (length (ir-tycon-constructors (second type)))))))))
+
+(defun dt-switch (forms rows column)
+  "A CASE (or IF) on the static keys of COLUMN."
+  (let* ((value (nth column forms))
+         (patterns (mapcar (lambda (row) (nth column (dt-row-patterns row))) rows))
+         (keys (remove-duplicates (remove nil (mapcar (lambda (pattern)
+                                                        (and (not (dt-wild-p pattern))
+                                                             (dt-static-key pattern)))
+                                                      patterns))
+                                  :test #'equal :from-end t))
+         (dynamicp (some (lambda (pattern)
+                           (and (not (dt-wild-p pattern)) (not (dt-static-key pattern))))
+                         patterns))
+         (branches (mapcar (lambda (key)
+                             (cons key
+                                   (multiple-value-call #'dt-compile
+                                     (dt-specialize forms rows column key
+                                                    (dt-subforms key value t)
+                                                    dynamicp))))
+                           keys))
+         (default (unless (dt-complete-p keys patterns)
+                    (dt-compile forms
+                                (remove-if (lambda (row)
+                                             (dt-static-key (nth column (dt-row-patterns row))))
+                                           rows)))))
+    (dt-switch-form value branches default)))
+
+(defun dt-switch-form (value branches default)
+  "The CL form choosing among BRANCHES ((key . form) ...) by the key of
+VALUE, or DEFAULT (NIL when the keys are all of the type's)."
+  (flet ((branch (key) (cdr (assoc key branches :test #'equal)))
+         (clauses (keyfn)
+           (loop for ((key . form) . more) on branches
+                 collect (if (and (null more) (null default))
+                             `(otherwise ,form)
+                             `((,(funcall keyfn key)) ,form))))
+         (otherwise () (and default `((otherwise ,default)))))
+    (let ((keys (mapcar #'car branches)))
+      (cond
+        ((and (null default) (null (rest branches))) (cdr (first branches)))
+        ((member '(:cons) keys :test #'equal)
+         `(if (consp ,value) ,(branch '(:cons)) ,(or (branch '(:const nil)) default)))
+        ((eq (first (first keys)) :const)
+         (cond ((null default) `(if ,value ,(branch '(:const t)) ,(branch '(:const nil))))
+               ((stringp (second (first keys)))
+                `(cond ,@(mapcar (lambda (branch)
+                                   `((string= ,value ,(second (car branch))) ,(cdr branch)))
+                                 branches)
+                       (t ,default)))
+               (t `(case ,value ,@(clauses #'second) ,@(otherwise)))))
+        ((every (lambda (key) (eql (third key) 0)) keys)
+         `(case ,value ,@(clauses #'second) ,@(otherwise)))
+        ((null (rest branches))
+         (let ((tag (second (first keys))))
+           `(if ,(ecase (third (first keys))
+                   (:boxed `(and (consp ,value) (eq (car ,value) ',tag)))
+                   (:flat `(and (simple-vector-p ,value) (eq (svref ,value 0) ',tag))))
+                ,(cdr (first branches))
+                ,default)))
+        ((and (null default) (= (length branches) 2))
+         (destructuring-bind ((key-1 . form-1) (key-2 . form-2)) branches
+           (let ((kinds (list (third key-1) (third key-2))))
+             (cond ((eql (third key-1) 0) `(if (eq ,value ',(second key-1)) ,form-1 ,form-2))
+                   ((eql (third key-2) 0) `(if (eq ,value ',(second key-2)) ,form-2 ,form-1))
+                   ((equal kinds '(:flat :flat))
+                    `(if (eq (svref ,value 0) ',(second key-1)) ,form-1 ,form-2))
+                   ((equal kinds '(:boxed :boxed))
+                    `(if (eq (car ,value) ',(second key-1)) ,form-1 ,form-2))
+                   ((eq (third key-1) :boxed) `(if (consp ,value) ,form-1 ,form-2))
+                   (t `(if (consp ,value) ,form-2 ,form-1))))))
+        (t
+         (let ((kinds (remove-duplicates (mapcar #'third keys))))
+           `(case ,(cond ((or default (member 0 kinds))
+                          `(let ((v ,value))
+                             (cond ((symbolp v) v) ((consp v) (car v)) (t (svref v 0)))))
+                         ((equal kinds '(:flat)) `(svref ,value 0))
+                         ((equal kinds '(:boxed)) `(car ,value))
+                         (t `(if (consp ,value) (car ,value) (svref ,value 0))))
+              ,@(clauses #'second)
+              ,@(otherwise))))))))
+
+(defun ir-emit-decision-tree (scrutinees rules failure)
+  "The CL form matching the values of the CL forms SCRUTINEES against RULES
+((patterns body) ...), FAILURE when none matches, as a decision tree; NIL
+when the tree would be too large."
+  (let* ((temporaries nil)
+         (forms (mapcar (lambda (form)
+                          (if (ir-variable-p form)
+                              form
+                              (let ((temporary (gensym "VALUE")))
+                                (push (list temporary form) temporaries)
+                                temporary)))
+                        scrutinees))
+         (*dt-tests* 0)
+         (*dt-test-limit* (+ 64 (* 16 (length rules))))
+         (*dt-leaf-marker* (gensym "LEAF"))
+         (*dt-leaf-counts* (make-array (length rules) :initial-element 0))
+         (*dt-failure* failure)
+         (tree (catch 'dt-give-up
+                 (dt-compile forms
+                             (loop for (patterns) in rules
+                                   for i from 0
+                                   collect (dt-row patterns forms nil i))))))
+    (when tree
+      (let ((actions (make-array (length rules) :initial-element nil))
+            (functions nil))
+        (labels ((action (rule bindings)
+                   ;; (name parameters . form) of RULE, made at its first leaf.
+                   (or (aref actions rule)
+                       (destructuring-bind (patterns body) (nth rule rules)
+                         (setf (aref actions rule)
+                               (list* (and (> (aref *dt-leaf-counts* rule) 1)
+                                           (> (ir-size body) *ir-shared-action-size*)
+                                           (gensym "RULE"))
+                                      (mapcar #'first bindings)
+                                      (ir-emit-rule-body patterns body))))))
+                 (value (binding)
+                   (destructuring-bind (symbol representation form) binding
+                     (declare (ignore symbol))
+                     (if (eq representation :real) `(sml-double ,form) form)))
+                 (leaf (rule bindings)
+                   (destructuring-bind (name parameters . form) (action rule bindings)
+                     (cond
+                       (name `(,name ,@(mapcar (lambda (parameter)
+                                                 (value (assoc parameter bindings)))
+                                               parameters)))
+                       (bindings `(let ,(mapcar (lambda (binding)
+                                                  (list (first binding) (value binding)))
+                                                bindings)
+                                    (declare (ignorable ,@(mapcar #'first bindings)))
+                                    ,form))
+                       (t form))))
+                 (fill (form)
+                   (cond ((atom form) form)
+                         ((eq (first form) *dt-leaf-marker*) (leaf (second form) (third form)))
+                         (t (let ((head (fill (car form)))
+                                  (tail (fill (cdr form))))
+                              (if (and (eq head (car form)) (eq tail (cdr form)))
+                                  form
+                                  (cons head tail)))))))
+          (let ((body (fill tree)))
+            (loop for entry across actions
+                  when (and entry (first entry))
+                    do (destructuring-bind (name parameters . form) entry
+                         (push `(,name ,parameters
+                                       (declare (ignorable ,@parameters))
+                                       ,form)
+                               functions)))
+            (let ((body (if functions `(flet ,(nreverse functions) ,body) body)))
+              (if temporaries
+                  `(let ,(nreverse temporaries) ,body)
+                  body))))))))
 
 (defun ir-emit-declaration (declaration body)
   "A local declaration around the CL form BODY (COMPILE-LOCAL-DECL)."
