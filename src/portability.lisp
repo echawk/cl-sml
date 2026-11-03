@@ -14,7 +14,10 @@
 (defvar *sml-optimize-policy* :default
   "The optimize policy of compiled SML: :DEFAULT (safe, and the CL compiler
 may optimize as usual), :DEBUG (full run-time checks and more debugging
-information, still with tail calls merged), or a list of OPTIMIZE
+information, still with tail calls merged), :FAST (SPEED 3, SAFETY 0: the
+CL compiler trusts the types cl-sml declares; SML's own checks, such as
+Overflow, Div and Subscript, stay, so SML semantics do not change), or a
+list of OPTIMIZE
 qualities such as ((SPEED 3) (SAFETY 1) (DEBUG 1)).  Read when SML is
 compiled.")
 
@@ -22,6 +25,7 @@ compiled.")
   (case *sml-optimize-policy*
     (:default '((speed 1) (safety 1) (debug 1)))
     (:debug '((speed 0) (safety 3) (debug 2)))
+    (:fast '((speed 3) (safety 0) (debug 0)))
     (t *sml-optimize-policy*)))
 
 (defun portable-tail-call-declarations ()
