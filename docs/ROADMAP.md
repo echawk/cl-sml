@@ -306,7 +306,23 @@ trees alternating three times on the same build, best of the three
 insertion with Okasaki's balance and a lexer on characters, strings and
 tokens):
 
-MEASURED
+| program | trivia | trees |
+|---|---|---|
+| `fib 30` | 0.006 s | 0.006 s |
+| `tak` | 0.004 s | 0.003 s |
+| `real` | 0.65 s | 0.61 s |
+| `bst` | 0.22 s | 0.21 s |
+| `eq` | 0.13 s | 0.12 s |
+| `word` | 0.012 s | 0.011 s |
+| `rec` | 0.12 s | 0.12 s |
+| `match` | 0.91 s | 0.90 s |
+
+Consing is unchanged (`match` 1891 MB either way).  The machine was
+loaded (`real` took 0.52 s on a quiet one), so compare the columns, not
+these numbers with the tables above.  On a quiet machine, `match` took
+0.71 s on master at 93b77a1, before this item.  Checks: SBCL suite 1116,
+ECL 1115, Coalton suite 61/61 (cold caches), Core corpus native 63/63,
+modules corpus native 57/57, real world native 98/119.
 
 Not done: a dispatch on string lengths before the characters for large
 string matches, and decision trees inside the hoisted groups of large
