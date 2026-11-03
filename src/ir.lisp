@@ -2483,11 +2483,14 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
                      (mapcar (lambda (local-dec)
                                (list (car local-dec)
                                      (and (consp local-dec)
-                                          (reverse (local-declaration-lexical-bindings local-dec)))))
+                                          (reverse (local-declaration-lexical-bindings local-dec)))
+                                     (and (eq (car local-dec) :exception)
+                                          (getf (cddr local-dec) :arg-type)
+                                          t)))
                              (second dec))
                      simplified)))))))
 
-(defvar *ir-program-mark* nil
+(defvar *ir-program-mark* :none
   "The declarations recorded before the declaration being compiled.")
 
 (defun ir-note-declaration (dec terms)
@@ -2496,7 +2499,7 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
 first."
   (when (and *sml-ir-program* (null *functor-scope-variables*))
     (let ((declarations (reverse (ir-declarations-of dec terms))))
-      (if (and (eq (car dec) :local) *ir-program-mark*
+      (if (and (eq (car dec) :local) (not (eq *ir-program-mark* :none))
                (tailp *ir-program-mark* (car *sml-ir-program*)))
           (setf (car *sml-ir-program*)
                 (append (ldiff (car *sml-ir-program*) *ir-program-mark*)

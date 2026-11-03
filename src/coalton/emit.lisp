@@ -77,6 +77,9 @@ syntax, its prelude, or the backend's prelude)."
 (defvar *ce-type-paths*)    ; path of a type or datatype -> coalton-type
 (defvar *ce-paths*)         ; path -> symbol of its latest binding
 (defvar *ce-local-globals*) ; variable of a top-level `local' -> symbol
+(defvar *ce-binding-tyvars* nil
+  "The type variables of the type of the top-level binding being emitted:
+others are not generalized, and SML defaults them (to unit).")
 
 (defun make-ce-state ()
   (list (cons '*ce-globals* (make-hash-table :test #'eq))
@@ -400,6 +403,33 @@ tuple's fields are the constructor's."
               (notany #'cdr constructors)
               (mapcar #'car constructors)))))
 
+(defun ce-default-tyvars (type)
+  "TYPE with its type variables that the binding being emitted does not
+generalize replaced by unit, or NIL when there are none."
+  (let ((free (remove-if (lambda (v) (member (car v) *ce-binding-tyvars*))
+                         (ce-type-tyvars type))))
+    (and free
+         (labels ((walk (type)
+                    (case (first type)
+                      (:tyvar (if (assoc (second type) free) '(:record nil nil) type))
+                      (:con (list* :con (second type) (mapcar #'walk (cddr type))))
+                      (:arrow (list :arrow (walk (second type)) (walk (third type))))
+                      (:record (list :record (mapcar (lambda (f) (cons (car f) (walk (cdr f))))
+                                                     (second type))
+                                     (third type)))
+                      (t type))))
+           (walk type)))))
+
+(defun ce-defaulted (form type)
+  "FORM, of IR TYPE, with the type variables SML defaults made unit."
+  (let ((defaulted (and type (or (ce-default-tyvars type) type))))
+    ;; A ground type is stated too: Coalton cannot tell the type of `[]'
+    ;; that SML's `([] : int list) = []' compares.
+    (if (and defaulted (null (ce-type-tyvars defaulted)))
+        (handler-case `(,(co "THE") ,(ce-type defaulted) ,form)
+          (coalton-unsupported () form))
+        form)))
+
 (defun ce-literal (value type)
   (let ((name (ce-type-name-of type)))
     (cond ((and (string= (or name "") "bool")) (co (if value "TRUE" "FALSE")))
@@ -680,7 +710,8 @@ tuple's fields are the constructor's."
       (:equality
        (destructuring-bind (test negated) (rest op)
          (declare (ignore test))
-         (cons (co (if negated "/=" "==")) forms)))
+         (cons (co (if negated "/=" "=="))
+               (cons (ce-defaulted (first forms) (second (first args))) (rest forms)))))
       (:not (cons (co "NOT") forms))
       (:deref (cons (co "deref") forms))
       (:list `(,(co "MAKE-LIST") ,@forms))
@@ -690,8 +721,10 @@ tuple's fields are the constructor's."
            (sml-assign (cons (co "assign") forms))
            ((sml-^ sml-@) (cons (co "<>") forms))
            (cons (cons (co "CONS") forms))
-           (sml-= (cons (co "==") forms))
-           (sml-<> (cons (co "/=") forms))
+           ((sml-= sml-<>)
+            (list* (co (if (eq fn 'sml-=) "==" "/="))
+                   (ce-defaulted (first forms) (second (first args)))
+                   (rest forms)))
            (sml-compose
             (let ((x (ce-temp "x")))
               `(,(co "FN") (,x) (,(first forms) (,(second forms) ,x)))))
@@ -730,15 +763,13 @@ tuple's fields are the constructor's."
                            v))
                         (t value))))
                (:p-as
-                (let ((inner (p (fourth pattern))))
-                  (if (symbolp inner)
-                      (progn (unless (eq inner (co "_"))
-                               (push (list :bind (ce-var (third pattern)) inner) residuals))
-                             (if (eq inner (co "_")) (ce-var (third pattern)) inner))
-                      (let ((v (ce-var (third pattern))))
-                        ;; Match the whole as V, then the inner pattern.
-                        (pop-and-sub v (fourth pattern))
-                        v))))
+                (let ((v (ce-var (third pattern)))
+                      (inner (fourth pattern)))
+                  (case (ir-kind inner)
+                    (:p-wild v)
+                    (:p-var (push (list :bind (ce-var (third inner)) v) residuals) v)
+                    ;; Match the whole as V, then V against the inner pattern.
+                    (t (push (list :sub v inner) residuals) v))))
                (:p-tuple
                 (let ((subs (third pattern)))
                   (cons (ce-record-constructor (loop for i from 1 to (length subs)
@@ -1078,7 +1109,9 @@ tuple's fields."
                   (destructuring-bind (ir-pattern index cells) pattern
                     (declare (ignore index))
                     (let ((temp (ce-fresh-name (format nil "%val~D" (hash-table-count *ce-globals*)))))
-                      (push `(,(co "DEFINE") ,temp ,(ce term)) forms)
+                      (push `(,(co "DEFINE") ,temp ,(let ((*ce-binding-tyvars* nil))
+                                                       (ce-defaulted (ce term) (second term))))
+                            forms)
                       (loop for (variable . cell) in cells
                             for binding = (find cell bindings :key #'second)
                             do (setf remaining (remove binding remaining))
@@ -1105,13 +1138,15 @@ tuple's fields."
                       ((null binding)
                        (push `(,(co "DEFINE")
                                ,(ce-fresh-name (format nil "%val~D" (hash-table-count *ce-globals*)))
-                               ,(ce term))
+                               ,(let ((*ce-binding-tyvars* nil))
+                                  (ce-defaulted (ce term) (second term))))
                              forms))
                       (t
                        (setf remaining (remove binding remaining))
                        (destructuring-bind (path cell type) binding
                          (declare (ignore path))
-                         (let ((symbol (ce-global-name cell)))
+                         (let ((symbol (ce-global-name cell))
+                               (*ce-binding-tyvars* (mapcar #'car (ce-type-tyvars type))))
                            (if (eq (ir-kind term) :fn)
                                (dolist (form (ce-define-function symbol cell type term))
                                  (push form forms))
@@ -1126,16 +1161,34 @@ tuple's fields."
   "The top-level definitions of the declarations of `local A in B end' (A):
 its variables become globals."
   (destructuring-bind (decs terms) (rest declaration)
-    (let ((bindings nil))
-      (loop for (kind pairs) in decs
-            do (unless (member kind '(:val :vals :val-rec :val-recs :fun :funs :open))
-                 (coalton-unsupported "a ~(~A~) in a top-level local" kind))
-               (setf bindings (append bindings pairs)))
+    (let ((bindings nil)
+          (exceptions nil))
+      (loop for (kind pairs argp) in decs
+            do (case kind
+                 ((:val :vals :val-rec :val-recs :fun :funs)
+                  (setf bindings (append bindings pairs)))
+                 ((:open :infix :infixr :nonfix))
+                 (:exception (push (list (car (first pairs)) (cdr (first pairs)) argp)
+                                   exceptions))
+                 (t (coalton-unsupported "a ~(~A~) in a top-level local" kind))))
       (dolist (pair bindings)
         (setf (gethash (cdr pair) *ce-local-globals*)
               (ce-fresh-name (format nil "~A%local" (car pair)))))
       (let ((forms nil)
             (remaining (copy-list bindings)))
+        (dolist (exception (reverse exceptions))
+          (destructuring-bind (name variable argp) exception
+            (let ((tag (ce-fresh-name (format nil "~A%local%tag" name)))
+                  (symbol (ce-fresh-name (format nil "~A%local" name)))
+                  (x (ce-temp "x")))
+              (setf (gethash variable *ce-exn-tags*) tag
+                    (gethash variable *ce-local-globals*) symbol)
+              (push `(,(co "DECLARE") ,tag ,(co "Raw")) forms)
+              (push `(,(co "DEFINE") ,tag (,(co "new-exn-tag") ,name)) forms)
+              (push (if argp
+                        `(,(co "DEFINE") (,symbol ,x) (,(co "exn-make") ,tag ,x))
+                        `(,(co "DEFINE") ,symbol (,(co "THE") ,(co "Exn") (,(co "unsafe-coerce") ,tag))))
+                    forms))))
         (dolist (term terms)
           (let* ((fn-name (and (eq (ir-kind term) :fn) (fifth term)))
                  (pair (or (and fn-name (find fn-name remaining :key #'car :test #'string=))

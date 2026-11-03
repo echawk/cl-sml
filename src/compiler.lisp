@@ -3697,9 +3697,10 @@ declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
 (defvar *ir-val-patterns*)
 (defvar *ir-program-mark*)
 
-(defun note-compiled-sml-declaration (dec form &optional ir val-patterns)
+(defun note-compiled-sml-declaration (dec form &optional ir val-patterns (mark :none))
   (when *sml-ir-program*
-    (let ((*ir-val-patterns* val-patterns))
+    (let ((*ir-val-patterns* val-patterns)
+          (*ir-program-mark* mark))
       (ir-note-declaration dec ir)))
   (when *sml-declaration-compiled-hook*
     (let ((*sml-declaration-ir* ir))
@@ -3712,9 +3713,9 @@ compiled declarations are being recorded."
   (if (or *sml-declaration-compiled-hook* *sml-ir-program*)
       (let* ((*sml-ir-log* (list nil))
              (*ir-val-patterns* (and *sml-ir-program* (list nil)))
-             (*ir-program-mark* (and *sml-ir-program* (car *sml-ir-program*)))
+             (*ir-program-mark* (if *sml-ir-program* (car *sml-ir-program*) :none))
              (form (compile-decl dec local-exceptions lexical-env)))
-        (values form (reverse (car *sml-ir-log*)) *ir-val-patterns*))
+        (values form (reverse (car *sml-ir-log*)) *ir-val-patterns* *ir-program-mark*))
       (compile-decl dec local-exceptions lexical-env)))
 
 (defun compile-program-decls (decs &optional (local-exceptions nil) lexical-env)

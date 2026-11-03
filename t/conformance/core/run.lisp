@@ -15,6 +15,8 @@
 ;;;                       otherwise no checker (plain mode)
 ;;;   CONF_TESTS="a b"    run only these tests (default: all)
 ;;;   CONF_TIMEOUT=60     per-test timeout in seconds (SBCL only)
+;;;   CONF_BACKEND=coalton  compile through the Coalton backend
+;;;                       (cl-sml/coalton; native checker)
 ;;;   CLSML=/path         the cl-sml checkout (default: the current directory)
 
 ;;; Load cl-sml first: the code below refers to its symbols.
@@ -42,7 +44,15 @@
 (defparameter *checker-p* (equal (env "CONF_CHECKER") "1"))
 (defparameter *native-p* (equal (env "CONF_CHECKER") "native"))
 (defparameter *timeout* (parse-integer (env "CONF_TIMEOUT" "60")))
-(defparameter *mode* (cond (*checker-p* "checked") (*native-p* "native") (t "plain")))
+(defparameter *coalton-p* (equal (env "CONF_BACKEND") "coalton"))
+(defparameter *mode* (cond (*coalton-p* "coalton") (*checker-p* "checked") (*native-p* "native")
+                           (t "plain")))
+
+(when *coalton-p*
+  (let ((*standard-output* (make-broadcast-stream))
+        (*error-output* (make-broadcast-stream)))
+    (ql:quickload :cl-sml/coalton :silent t)
+    (uiop:symbol-call '#:cl-sml '#:load-coalton-basis)))
 
 (defun test-names ()
   (let ((only (env "CONF_TESTS")))
@@ -92,7 +102,11 @@
             (handler-bind ((warning #'muffle-warning))
               (call-with-timeout
                *timeout*
-               (lambda () (cl-sml:load-sml-file source :package package)))))
+               (lambda ()
+                 (if *coalton-p*
+                     (uiop:symbol-call '#:cl-sml '#:load-sml-file-via-coalton source
+                                       :package-name package)
+                     (cl-sml:load-sml-file source :package package))))))
           (setf status :ran))
       #+sbcl
       (sb-ext:timeout ()
@@ -140,7 +154,7 @@
       (= passed (length results)))))
 
 ;;; HaMLet takes a while to load and elaborate its basis; do it once.
-(setf cl-sml:*sml-type-checker* (and *native-p* :native))
+(setf cl-sml:*sml-type-checker* (and (or *native-p* *coalton-p*) :native))
 (when *checker-p*
   (let ((*standard-output* (make-broadcast-stream))
         (*error-output* (make-broadcast-stream)))
