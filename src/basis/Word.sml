@@ -61,7 +61,9 @@ struct
         if radix = HEX andalso (c2 = #"x" orelse c2 = #"X") then SOME src2 else
         if Bool.not(c2 = #"w") then NONE else
         getc src2 >>= (fn(c3, src3) =>
-          SOME(if c3 = #"x" orelse c3 = #"X" then src3 else src2)
+          (* cl-sml: 0wx only in hexadecimal *)
+          SOME(if radix = HEX andalso (c3 = #"x" orelse c3 = #"X")
+               then src3 else src2)
         )
       ))
   fun scanOptPrefix radix getc src =
@@ -81,12 +83,16 @@ struct
           scanNum' (isDigit, base, base*w + fromInt(value c), k + 1) getc src'
       | NONE => SOME(w, k, src)
 
+  (* cl-sml: when a prefix has no digits after it, "0" alone is the number
+   * (the fallback scanned with base 0w0, and "0wx" raised Div) *)
   fun scan radix getc src =
-      scanOptPrefix radix getc (skipWS getc src) >>= (fn src1 =>
+      let val src0 = skipWS getc src in
+      scanOptPrefix radix getc src0 >>= (fn src1 =>
         case scanNum (isDigit radix, base radix) getc src1 of
           SOME(num, src2) => SOME(num, src2)
-        | NONE => scanNum (isDigit radix, 0w0) getc src
+        | NONE => scanNum (isDigit radix, base radix) getc src0
       )
+      end
 
   val toString   = fmt StringCvt.HEX
   val fromString = StringCvt.scanString(scan StringCvt.HEX)

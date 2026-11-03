@@ -625,6 +625,16 @@ val _ = say (IntInf.toString (Word64.toLargeInt (Word64.fromInt ~1)))
 val _ = say (IntInf.toString (Real.toLargeInt IEEEReal.TO_NEAREST 4.611686018427387904E18))
 val _ = say (IntInf.toString (Time.toNanoseconds (Time.fromSeconds (IntInf.pow (10, 12)))))"))))
 
+(test word-scan-prefix-without-digits
+  ;; Basis WORD: "0wx" with no hex digit after it scans as 0 (it raised
+  ;; Div), and "0wx" is a prefix only in hexadecimal.
+  (is (string= (lines "0" "0" "A" "NONE" "B" "0")
+               (run-sml "fun say w = print ((case w of NONE => \"NONE\" | SOME w => Word.toString w) ^ \"\\n\")
+val _ = app say [Word.fromString \"0wx\", Word.fromString \"0w\", Word.fromString \"0xa\",
+                 Word.fromString \"g\",
+                 StringCvt.scanString (Word.scan StringCvt.DEC) \" \\t11\",
+                 StringCvt.scanString (Word.scan StringCvt.DEC) \"0wx1\"]"))))
+
 (test date-structure
   ;; Date (Basis DATE): calendar, normalisation, fmt, scan, time round trips.
   (is (string= (lines "Wed Mar 08 19:06:45 1995"
