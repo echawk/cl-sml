@@ -14,7 +14,8 @@
 
 (defvar *bench-expected*
   '(("fib" . 832040) ("tak" . 140) ("real" . 3288753) ("bst" . 460260)
-    ("eq" . 1409666) ("word" . 15003428) ("rec" . 1432352292)))
+    ("eq" . 1409666) ("word" . 15003428) ("rec" . 1432352292)
+    ("match" . 35900014)))
 
 (defvar *bench-names*
   (or (cddr (uiop:raw-command-line-arguments)) (mapcar #'car *bench-expected*)))
