@@ -1,5 +1,6 @@
 #!/bin/sh
-# build-image.sh: SBCL core with cl-sml and its native checker loaded.  Every SML
+# build-image.sh: SBCL core with cl-sml, its native checker and its Concurrent
+# ML (cl-sml/cml, for compat/cml.sml) loaded.  Every SML
 # package sees cl-sml's Basis (src/basis/), so nothing is preloaded into
 # package SML.RW (it used to get HaMLet's basis sources).  Rebuilt by run.sh
 # when anything under src/ is newer than the core.
@@ -14,7 +15,7 @@ rm -f "$S/cl-sml-rw.core.new"
 sbcl --control-stack-size 1GB --dynamic-space-size 8GB --noinform --non-interactive \
   --eval '(load "~/.sbclrc")' \
   --eval "(push #p\"$P/\" asdf:*central-registry*)" \
-  --eval '(ql:quickload :cl-sml :silent t)' \
+  --eval '(ql:quickload :cl-sml/cml :silent t)' \
   --eval '(let ((*standard-output* (make-broadcast-stream)) (*error-output* (make-broadcast-stream))) (uiop:symbol-call (quote #:cl-sml.types) (quote #:initial-env)))' \
   --eval "(sb-ext:save-lisp-and-die \"$S/cl-sml-rw.core.new\")" > "$S/build-image.log" 2>&1
 mv "$S/cl-sml-rw.core.new" "$S/cl-sml-rw.core"

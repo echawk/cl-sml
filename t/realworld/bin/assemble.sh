@@ -42,20 +42,25 @@ for dir in "$B"/programs/*/; do
       compat="$compat $c"
     fi
   done
-  echo "$compat" > "$out/COMPAT"
   for f in bmark.sig log.sml; do
     echo "(******** util/$f ********)" >> "$prog"; cat "$B/util/$f" >> "$prog"
   done
   if [ -f "$dir/FILES" ]; then
     for f in $(cat "$dir/FILES"); do
       case $f in ../BASIS/*) continue ;; esac
-      if [ -f "$dir/$f" ]; then
+      if [ "$f" = ../common/cml.sml ]; then
+        # The benchmarks' own CML (on SMLofNJ.Cont), replaced by a thin
+        # layer over cl-sml's CML (compat/cml.sml); needs cl-sml/cml.
+        echo "(******** compat/cml.sml ********)" >> "$prog"; cat "$R/compat/cml.sml" >> "$prog"
+        compat="$compat cml"
+      elif [ -f "$dir/$f" ]; then
         echo "(******** $f ********)" >> "$prog"; cat "$dir/$f" >> "$prog"
       else
         missing="$missing $f"
       fi
     done
   fi
+  echo "$compat" > "$out/COMPAT"
   echo "(******** main.sml ********)" >> "$prog"; cat "$dir/main.sml" >> "$prog"
   echo 'val _ = Log.withOutput TextIO.stdOut Main.testit ();' > "$out/driver.sml"
   cat "$prog" "$out/driver.sml" > "$out/ref.sml"
