@@ -454,7 +454,19 @@ heuristic): capitalized names are constructors."
 ;;;; Types
 
 (defun sml-tycon-token-p (token)
-  (member (sml-token-kind token) '(:alnum :long)))
+  "Can TOKEN be a (long) type constructor: any identifier but `*'
+(Definition section 2.4)."
+  (or (member (sml-token-kind token) '(:alnum :long))
+      (and (eq (sml-token-kind token) :symbolic)
+           (string/= (sml-token-value token) "*"))))
+
+(defun expect-sml-tycon (&optional longp)
+  "A type constructor, qualified only when LONGP."
+  (let ((token (current-sml-token)))
+    (unless (and (sml-tycon-token-p token)
+                 (or longp (not (eq (sml-token-kind token) :long))))
+      (sml-parse-expected "a type constructor"))
+    (next-sml-token)))
 
 (defun at-sml-star-p ()
   (let ((token (current-sml-token)))
@@ -489,11 +501,11 @@ heuristic): capitalized names are constructors."
       (:tyvar
        (next-sml-token)
        (list :ty-var (sml-token-value token)))
-      ((:alnum :long)
-       (next-sml-token)
-       (list :ty-con (sml-token-value token) nil))
       (t
        (cond
+         ((sml-tycon-token-p token)
+          (next-sml-token)
+          (list :ty-con (sml-token-value token) nil))
          ((accept-sml-reserved :lbrace)
           (let ((fields nil))
             (unless (at-sml-reserved-p :rbrace)
@@ -1133,10 +1145,32 @@ the Common Lisp generated for a binding came from.")
   (cons (first nodes)
         (mapcar (lambda (node) (append node (list :and t))) (rest nodes))))
 
-(defun strip-sml-pattern-parens-and-types (pat)
-  (if (and (consp pat) (eq (car pat) :pat-typed))
-      (strip-sml-pattern-parens-and-types (second pat))
-      pat))
+(defun sml-val-rec-nodes (pat exp tyvar-plist)
+  "The :val-rec nodes of `rec PAT = EXP'.  PAT is a variable or a layered
+pattern `v1 <: ty> as v2 <: ty> as ...', all of whose variables denote the
+function (Definition section 2.9 and rule 26; HaMLet test valrec): the first
+is bound to EXP, the others to its eta expansion."
+  (let ((names nil)
+        (type nil))
+    (labels ((walk (pat)
+               (cond ((and (consp pat) (eq (car pat) :pat-typed))
+                      (unless type (setf type (third pat)))
+                      (walk (second pat)))
+                     ((and (consp pat) (eq (car pat) :pat-as))
+                      (walk (second pat))
+                      (walk (third pat)))
+                     ((and (consp pat) (member (car pat) '(:pat-var :pat-ctor)))
+                      (push (second pat) names))
+                     (t (sml-parse-expected "a variable in `val rec'")))))
+      (walk pat))
+    (setf names (nreverse names))
+    (let ((type-plist (and type (list :type type))))
+      (cons `(:val-rec ,(first names) ,exp ,@type-plist ,@tyvar-plist)
+            (loop for name in (rest names)
+                  collect `(:val-rec ,name
+                                     (:fn (((:pat-var "x%") (:app (:var ,(first names))
+                                                                 (:var "x%")))))
+                                     ,@type-plist ,@tyvar-plist))))))
 
 (defun parse-sml-val-dec ()
   (let ((tyvars (parse-sml-tyvarseq))
@@ -1162,14 +1196,11 @@ the Common Lisp generated for a binding came from.")
                                    (second pat)
                                    pat)))
                     (if recursive
-                        (let ((variable (strip-sml-pattern-parens-and-types pat)))
-                          (unless (and (consp variable)
-                                       (member (car variable) '(:pat-var :pat-ctor)))
-                            (sml-parse-expected "a variable in `val rec'"))
-                          `(:val-rec ,(second variable) ,exp
-                                     ,@(and type (list :type type)) ,@tyvar-plist))
-                        `(:val ,inner ,exp ,@(and type (list :type type)) ,@tyvar-plist)))))
+                        (sml-val-rec-nodes pat exp tyvar-plist)
+                        (list `(:val ,inner ,exp ,@(and type (list :type type))
+                                     ,@tyvar-plist))))))
               bindings)))
+      (setf nodes (apply #'append nodes))
       (dolist (binding bindings)
         (bind-sml-variables (sml-pattern-variable-names (second binding))))
       (let* ((plain (remove :val-rec nodes :key #'car))
@@ -1275,7 +1306,7 @@ parameter patterns (Definition section 2.6 and Appendix A)."
   (let ((bindings nil))
     (loop
       (let* ((tyvars (parse-sml-tyvarseq))
-             (name (sml-token-value (expect-sml-alnum-id "a type constructor"))))
+             (name (sml-token-value (expect-sml-tycon))))
         (expect-sml-reserved :equals)
         (push (list tyvars name (parse-sml-ty)) bindings))
       (unless (accept-sml-reserved :and)
@@ -1327,7 +1358,7 @@ the withtype bindings."
   (let ((datbinds nil))
     (loop
       (let* ((tyvars (parse-sml-tyvarseq))
-             (name (sml-token-value (expect-sml-alnum-id "a type constructor"))))
+             (name (sml-token-value (expect-sml-tycon))))
         (expect-sml-reserved :equals)
         (push (list tyvars name (parse-sml-condescs)) datbinds))
       (unless (accept-sml-reserved :and)
@@ -1380,7 +1411,7 @@ into scope, when known.  Returns them as (status . name) pairs."
              (name (sml-token-value name-token)))
         (next-sml-token)
         (next-sml-token)
-        (let* ((longtycon (sml-token-value (expect-sml-long-id "a type constructor")))
+        (let* ((longtycon (sml-token-value (expect-sml-tycon t)))
                (constructors (bind-sml-replicated-datatype
                               name (sml-token-start name-token) longtycon)))
           (list (note-sml-ast-position
@@ -1639,7 +1670,7 @@ into scope, when known.  Returns them as (status . name) pairs."
            (next-sml-token)
            (loop
              (let* ((tyvars (parse-sml-tyvarseq))
-                    (longtycon (sml-token-value (expect-sml-long-id "a type constructor"))))
+                    (longtycon (sml-token-value (expect-sml-tycon t))))
                (expect-sml-reserved :equals)
                (setf sigexp (list :sig-where sigexp tyvars longtycon (parse-sml-ty))))
              (unless (and (at-sml-reserved-p :and)
@@ -1678,7 +1709,7 @@ into scope, when known.  Returns them as (status . name) pairs."
          (let ((eqtype (sml-token-reserved-p (next-sml-token) :eqtype)))
            (loop
              (let* ((tyvars (parse-sml-tyvarseq))
-                    (name (sml-token-value (expect-sml-alnum-id "a type constructor"))))
+                    (name (sml-token-value (expect-sml-tycon))))
                (sml-scope-bind :tycons name :plain)
                (push (cond
                        (eqtype (list :spec-eqtype tyvars name))
@@ -1695,7 +1726,7 @@ into scope, when known.  Returns them as (status . name) pairs."
              (let ((name-token (next-sml-token)))
                (next-sml-token)
                (next-sml-token)
-               (let ((longtycon (sml-token-value (expect-sml-long-id "a type constructor"))))
+               (let ((longtycon (sml-token-value (expect-sml-tycon t))))
                  (bind-sml-replicated-datatype (sml-token-value name-token)
                                                (sml-token-start name-token)
                                                longtycon)
@@ -1704,7 +1735,7 @@ into scope, when known.  Returns them as (status . name) pairs."
              (let ((datbinds nil))
                (loop
                  (let* ((tyvars (parse-sml-tyvarseq))
-                        (name (sml-token-value (expect-sml-alnum-id "a type constructor"))))
+                        (name (sml-token-value (expect-sml-tycon))))
                    (expect-sml-reserved :equals)
                    (let ((constructors (parse-sml-condescs)))
                      (bind-sml-datatype name constructors)

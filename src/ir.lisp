@@ -623,6 +623,10 @@ COMPILE-LOCAL-VAL-BINDING)."
                              body))
                  (ir-failure "Bind" "val" pat))))))))
 
+(defvar *ir-nested-structures* (make-portable-weak-eq-hash-table)
+  "A structure declared by `let' or `local' (its declaration's AST) -> the
+IR declarations recorded for it, while a program's are (*SML-IR-PROGRAM*).")
+
 (defun ir-lower-declaration (dec local-exceptions lexical-env body-thunk)
   "DEC, a declaration of a `let' or `local', around the term BODY-THUNK
 returns, as COMPILE-LOCAL-DECL compiles it."
@@ -680,7 +684,9 @@ returns, as COMPILE-LOCAL-DECL compiles it."
                                    (local-datatype-constructor-tag ctor)
                                    (and (fourth ctor) t)
                                    (second ctor)))
-                           (third dec)))
+                           (third dec))
+                   ;; For the Coalton backend, which lifts the datatypes.
+                   (and *sml-ir-program* (ir-datatype-entries dec)))
              body)))
       (:exception
        (let ((body (funcall body-thunk)))
@@ -690,7 +696,9 @@ returns, as COMPILE-LOCAL-DECL compiles it."
              body)))
       (:exception-alias
        (let ((target (resolved-sml-symbol (third dec) lexical-env))
-             (lexicalp (and (lexical-symbol-for-name (third dec) lexical-env) t))
+             ;; Also a member of a structure the functor body names.
+             (lexicalp (or (and (lexical-symbol-for-name (third dec) lexical-env) t)
+                           (and (functor-scope-long-name-variable (third dec)) t)))
              (body (funcall body-thunk)))
          (ir :decl (ir-type body)
              (list :exception-alias (local-binding-symbol (second dec) bindings)
@@ -702,9 +710,12 @@ returns, as COMPILE-LOCAL-DECL compiles it."
        ;; compiler's business.
        (when *ir-template-mode*
          (throw 'ir-no-template nil))
-       (let ((form (compile-decl dec local-exceptions lexical-env))
+       (let ((form (ir-compile-nested-structure
+                    dec (lambda () (compile-decl dec local-exceptions lexical-env))))
              (body (funcall body-thunk)))
-         (ir :decl (ir-type body) (list :module form) body)))
+         (ir :decl (ir-type body)
+             (list :module form (gethash dec *ir-nested-structures*))
+             body)))
       (:local
        (let* ((outer (list *sml-binding-symbol-env* *sml-constructor-symbol-env*
                            *sml-local-constructor-arities* *sml-local-structure-members*
@@ -2951,20 +2962,7 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
                      (and (car *ir-val-patterns*)
                           (list :patterns (reverse (car *ir-val-patterns*)))))))
         (:datatype
-         (list (list :datatype
-                     (mapcar (lambda (binding)
-                               (destructuring-bind (name arity kind params body ctors) binding
-                                 (declare (ignore kind body))
-                                 (list (ir-declaration-path name) arity params
-                                       (mapcar (lambda (ctor)
-                                                 (let ((def (find (first ctor) (third dec)
-                                                                  :key #'second :test #'equal)))
-                                                   (list (ir-declaration-path (first ctor))
-                                                         (second ctor)
-                                                         (and def (datatype-constructor-flat-arity def)))))
-                                               ctors))))
-                             (types :env))
-                     simplified)))
+         (list (list :datatype (ir-datatype-entries dec) simplified)))
         (:datatype-replication
          (list (list :datatype-replication (ir-declaration-path (second dec)) (third dec))))
         (:type
@@ -3014,9 +3012,43 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
                                           (reverse (local-declaration-lexical-bindings local-dec)))
                                      (and (eq (car local-dec) :exception)
                                           (getf (cddr local-dec) :arg-type)
-                                          t)))
+                                          t)
+                                     ;; A datatype's types; a structure's
+                                     ;; declarations.
+                                     (case (car local-dec)
+                                       (:datatype (ir-datatype-entries local-dec))
+                                       ((:structure :structure-alias :structure-app :functor)
+                                        (gethash local-dec *ir-nested-structures*)))))
                              (second dec))
                      simplified)))))))
+
+(defun ir-datatype-entries (dec)
+  "The datatypes of declaration DEC, as a :datatype declaration lists them:
+((path arity params ((con-path type flat-arity) ...)) ...)."
+  (mapcar (lambda (binding)
+            (destructuring-bind (name arity kind params body ctors) binding
+              (declare (ignore kind body))
+              (list (ir-declaration-path name) arity params
+                    (mapcar (lambda (ctor)
+                              (let ((def (find (first ctor) (third dec)
+                                               :key #'second :test #'equal)))
+                                (list (ir-declaration-path (first ctor))
+                                      (second ctor)
+                                      (and def (datatype-constructor-flat-arity def)))))
+                            ctors))))
+          (nth-value 0 (ir-checker-declaration-env dec :env))))
+
+(defun ir-compile-nested-structure (dec thunk)
+  "The form THUNK compiles for DEC, a structure (or functor) declared by
+`let' or `local'.  Its IR declarations are kept for DEC rather than added
+to the program's: they belong to the enclosing declaration, and the
+compiler compiles a `let' or `local' body before its declarations."
+  (if *sml-ir-program*
+      (let ((declarations (list nil)))
+        (prog1 (let ((*sml-ir-program* declarations))
+                 (funcall thunk))
+          (setf (gethash dec *ir-nested-structures*) (reverse (car declarations)))))
+      (funcall thunk)))
 
 (defvar *ir-program-mark* :none
   "The declarations recorded before the declaration being compiled.")

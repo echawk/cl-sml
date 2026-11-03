@@ -52,6 +52,7 @@
            #:*sml-ir*
            #:*sml-ir-simplify*
            #:*sml-decision-trees*
+           #:*sml-defunctorize*
            #:*sml-ir-inline-size*
            #:print-sml-lisp
            #:clear-sml-lisp-source

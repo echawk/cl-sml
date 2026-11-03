@@ -404,6 +404,12 @@ missing when called."
                    collect (cons "" substructure)
                  else if (string-prefix-p prefix sub-prefix)
                         collect (cons (subseq sub-prefix (length prefix)) substructure)
+                 ;; NAME lies inside this substructure (NAME "A.B", SUB-PREFIX "A").
+                 else if (and (string/= sub-prefix "")
+                              (string-prefix-p (format nil "~A." sub-prefix) name))
+                        collect (cons "" (sml-substructure
+                                          substructure
+                                          (subseq name (1+ (length sub-prefix)))))
                  else if (string= sub-prefix "")
                         collect (cons "" (sml-substructure substructure name))))))))
 

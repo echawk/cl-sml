@@ -73,11 +73,13 @@ syntax, its prelude, or the backend's prelude)."
 (defvar *ce-names*)         ; names used in the package
 (defvar *ce-vars*)          ; IR variable -> symbol
 (defvar *ce-shapes*)        ; record shapes used: lists of labels
-(defvar *ce-hoisted*)       ; forms to emit before the current declaration
+(defvar *ce-hoisted* nil)   ; forms to emit before the current declaration
 (defvar *ce-path-count*)    ; path -> bindings so far
 (defvar *ce-type-paths*)    ; path of a type or datatype -> coalton-type
 (defvar *ce-paths*)         ; path -> symbol of its latest binding
 (defvar *ce-local-globals*) ; variable of a top-level `local' -> symbol
+(defvar *ce-constructor-variables*) ; variable bound to a local datatype's constructor -> t
+(defvar *ce-path-exceptions*) ; path of an exception -> its cell
 (defvar *ce-binding-tyvars* nil
   "The type variables of the type of the top-level binding being emitted:
 others are not generalized, and SML defaults them (to unit).")
@@ -91,7 +93,8 @@ others are not generalized, and SML defaults them (to unit).")
         (cons '*ce-path-count* (make-hash-table :test #'equal))
         (cons '*ce-type-paths* (make-hash-table :test #'equal))
         (cons '*ce-paths* (make-hash-table :test #'equal))
-        (cons '*ce-local-globals* (make-hash-table :test #'eq))))
+        (cons '*ce-local-globals* (make-hash-table :test #'eq))
+        (cons '*ce-constructor-variables* (make-hash-table :test #'eq))))
 
 (defun ce-intern (name)
   "The symbol NAME of the package being emitted, its own (shadowing any
@@ -489,6 +492,11 @@ generalize replaced by unit, or NIL when there are none."
        (ce-constructor-value form type))
       ((symbolp form)
        (or (gethash form *ce-globals*)
+           ;; A member of a structure of a `local' that the body names
+           ;; before the structure is compiled (the compiler compiles the
+           ;; body first): its name, not its cell.
+           (and (not (find #\; (symbol-name form)))
+                (gethash (symbol-name form) *ce-paths*))
            (and (not (eq (symbol-package form) *ce-package*))
                 (ce-basis-value (cell-path form)))
            (coalton-unsupported "unknown global ~A" form)))
@@ -566,7 +574,9 @@ generalize replaced by unit, or NIL when there are none."
       (:const (ce-literal (third node) type))
       (:unit (co "UNIT"))
       (:coalton-form (third node))
-      (:var (ce-var (third node)))
+      (:var (if (gethash (third node) *ce-constructor-variables*)
+                (ce-constructor-value (third node) type)
+                (ce-var (third node))))
       (:ref (ce-ref node))
       (:prim (ce-primitive (third node) (fourth node) type))
       (:tuple (let ((args (ce-list (third node))))
@@ -698,8 +708,137 @@ generalize replaced by unit, or NIL when there are none."
                             (ce-var target)
                             (ce-ref (list :ref nil target)))))
          ,(ce body))))
-    (:datatype (coalton-unsupported "a datatype declared in an expression"))
-    (:module (coalton-unsupported "a structure declared in an expression"))))
+    (:datatype
+     (destructuring-bind (constructors entries) (rest declaration)
+       (ce-lift-datatypes constructors entries)
+       (ce body)))
+    (:module
+     (destructuring-bind (form declarations) (rest declaration)
+       (declare (ignore form))
+       (ce-local-structure declarations body)))))
+
+(defun ce-lift-datatypes (constructors entries)
+  "Lift the datatypes ENTRIES (as a :datatype declaration lists them) that
+`let' or `local' declares to the top level: Coalton has no local types.
+The type names are static (one per elaboration), so one Coalton type per
+declaration is SML's semantics.  CONSTRUCTORS ((variable ...) ...) are
+the variables the constructors are bound to."
+  (unless entries
+    (coalton-unsupported "a local datatype whose types are unknown"))
+  (setf *ce-hoisted*
+        (append *ce-hoisted*
+                (ce-datatype-declaration (list :datatype entries) :hidden t)))
+  (dolist (constructor constructors)
+    (setf (gethash (first constructor) *ce-constructor-variables*) t)))
+
+(defun ce-local-structure (declarations body)
+  "A structure declared by `let' (its IR DECLARATIONS) around the term
+BODY.  A structure is a namespace: its members are local bindings, which
+may capture the expression's variables; only its datatypes are lifted."
+  (if (null declarations)
+      (ce body)
+      (let ((declaration (first declarations)))
+        (flet ((rest-form () (ce-local-structure (rest declarations) body)))
+          (ecase (first declaration)
+            (:val (ce-local-val-declaration declaration #'rest-form))
+            (:datatype
+             (setf *ce-hoisted*
+                   (append *ce-hoisted* (ce-datatype-declaration declaration :hidden t)))
+             (rest-form))
+            ((:exception :exception-alias)
+             (destructuring-bind (kind path target type &optional cell) declaration
+               (let* ((name (ce-constructor-short-name path))
+                      (tag (if (eq kind :exception)
+                               (ce-temp (format nil "~A%tag" name))
+                               (ce-exception-alias-tag target)))
+                      (symbol (ce-temp name))
+                      (x (ce-temp "x")))
+                 (when cell
+                   (setf (gethash cell *ce-exn-tags*) tag
+                         (gethash cell *ce-globals*) symbol))
+                 ;; A tag per evaluation: exceptions are generative.
+                 `(,(co "LET") (,@(when (eq kind :exception)
+                                    `((,tag (,(co "new-exn-tag") ,name))))
+                                (,symbol
+                                 ,(if (eq (first type) :arrow)
+                                      `(,(co "FN") (,x) (,(co "exn-make") ,tag ,x))
+                                      `(,(co "THE") ,(co "Exn") (,(co "unsafe-coerce") ,tag)))))
+                   ,(rest-form)))))
+            (:type (ce-type-declaration declaration) (rest-form))
+            (:structure (ce-structure-declaration declaration) (rest-form))
+            ((:structure-alias :signature :open :datatype-replication :functor) (rest-form))
+            (:local (coalton-unsupported "a local in a structure declared in an expression"))
+            (:functor-application
+             (coalton-unsupported "an application of functor ~A, which was not specialised"
+                                  (third declaration))))))))
+
+(defun ce-local-val-declaration (declaration rest-form)
+  "A :val DECLARATION of a structure declared by `let', around the form
+REST-FORM returns: one `let' (recursive, for `fun ... and ...')."
+  (destructuring-bind (bindings terms &key patterns) (rest declaration)
+    (let ((lets nil)
+          (remaining (copy-list bindings)))
+      (dolist (binding bindings)
+        (when (second binding)
+          (setf (gethash (second binding) *ce-globals*)
+                (ce-temp (ce-constructor-short-name (first binding))))))
+      (flet ((function-binding (term)
+               (let ((fn-name (and (eq (ir-kind term) :fn) (fifth term))))
+                 (and fn-name
+                      (find-if (lambda (b)
+                                 (string= (ce-constructor-short-name (first b)) fn-name))
+                               remaining)))))
+        ;; The workers of the functions of a tuple's fields, which a
+        ;; :call names, first: the group is recursive.
+        (dolist (term terms)
+          (let ((binding (function-binding term)))
+            (when (and binding (second binding) (> (length (third term)) 1))
+              (setf (gethash (second binding) *ce-workers*)
+                    (ce-temp (format nil "~A%w"
+                                     (symbol-name (gethash (second binding) *ce-globals*))))))))
+      (loop for term in terms
+            for index from 0
+            for pattern = (find index patterns :key #'second)
+            do (if pattern
+                   (destructuring-bind (ir-pattern index cells) pattern
+                     (declare (ignore index))
+                     (let ((temp (ce-temp "val")))
+                       (push (list temp (ce term)) lets)
+                       (loop for (variable . cell) in cells
+                             do (setf remaining (remove cell remaining :key #'second))
+                                (push (list (gethash cell *ce-globals*)
+                                            (ce-match (list temp) nil
+                                                      (list (list (list ir-pattern)
+                                                                  (list :var nil variable)))
+                                                      (ce-match-failure '("Bind" "val"))))
+                                      lets))))
+                   (let* ((binding (or (function-binding term)
+                                       (and (= (length terms) (length bindings)) (first remaining))
+                                       (and (= (length remaining) 1) (= (length terms) 1)
+                                            (first remaining)))))
+                     (setf remaining (remove binding remaining))
+                     (let ((symbol (if binding
+                                       (gethash (second binding) *ce-globals*)
+                                       (ce-temp "val"))))
+                       (if (and binding (gethash (second binding) *ce-workers*))
+                           ;; A function of a tuple's fields: its worker,
+                           ;; and a wrapper taking the tuple.
+                           (let ((worker (gethash (second binding) *ce-workers*))
+                                 (vars (mapcar #'ce-var (third term)))
+                                 (tuple (ce-temp "args")))
+                             (push (list worker `(,(co "FN") ,vars ,(ce (fourth term)))) lets)
+                             (push (list symbol
+                                         `(,(co "FN") (,tuple)
+                                           (,(co "MATCH") ,tuple
+                                            ((,(ce-record-constructor
+                                                (mapcar #'car (second (second (second term)))))
+                                              ,@vars)
+                                             (,worker ,@vars)))))
+                                   lets))
+                           (push (list symbol (ce term)) lets)))))))
+      (when remaining
+        (coalton-unsupported "bindings without terms: ~{~A~^, ~}" (mapcar #'first remaining)))
+      `(,(co "LET") ,(nreverse lets) ,(funcall rest-form)))))
 
 ;;; Primitive operations
 
@@ -1227,36 +1366,26 @@ tuple's fields."
 
 (defun ce-local-declaration-bindings (declaration)
   "The top-level definitions of the declarations of `local A in B end' (A):
-its variables become globals."
+its variables become globals, its datatypes are lifted, its structures'
+declarations are emitted like top-level ones, in A's order."
   (destructuring-bind (decs terms) (rest declaration)
-    (let ((bindings nil)
-          (exceptions nil))
-      (loop for (kind pairs argp) in decs
+    (let ((bindings nil))
+      (loop for (kind pairs nil extra) in decs
             do (case kind
                  ((:val :vals :val-rec :val-recs :fun :funs)
                   (setf bindings (append bindings pairs)))
-                 ((:open :infix :infixr :nonfix))
-                 (:exception (push (list (car (first pairs)) (cdr (first pairs)) argp)
-                                   exceptions))
+                 ;; Lifted (*ce-hoisted*), before the declaration.
+                 (:datatype
+                  (ce-lift-datatypes (mapcar (lambda (pair) (list (cdr pair))) pairs) extra))
+                 ((:open :infix :infixr :nonfix :exception :type :datatype-replication
+                   :structure :structure-alias :structure-app :functor :signature))
                  (t (coalton-unsupported "a ~(~A~) in a top-level local" kind))))
       (dolist (pair bindings)
         (setf (gethash (cdr pair) *ce-local-globals*)
               (ce-fresh-name (format nil "~A%local" (car pair)))))
-      (let ((forms nil)
+      ;; The definitions of each variable, from the terms.
+      (let ((definitions nil)
             (remaining (copy-list bindings)))
-        (dolist (exception (reverse exceptions))
-          (destructuring-bind (name variable argp) exception
-            (let ((tag (ce-fresh-name (format nil "~A%local%tag" name)))
-                  (symbol (ce-fresh-name (format nil "~A%local" name)))
-                  (x (ce-temp "x")))
-              (setf (gethash variable *ce-exn-tags*) tag
-                    (gethash variable *ce-local-globals*) symbol)
-              (push `(,(co "DECLARE") ,tag ,(co "Raw")) forms)
-              (push `(,(co "DEFINE") ,tag (,(co "new-exn-tag") ,name)) forms)
-              (push (if argp
-                        `(,(co "DEFINE") (,symbol ,x) (,(co "exn-make") ,tag ,x))
-                        `(,(co "DEFINE") ,symbol (,(co "THE") ,(co "Exn") (,(co "unsafe-coerce") ,tag))))
-                    forms))))
         (dolist (term terms)
           (let* ((fn-name (and (eq (ir-kind term) :fn) (fifth term)))
                  (pair (or (and fn-name (find fn-name remaining :key #'car :test #'string=))
@@ -1264,13 +1393,48 @@ its variables become globals."
                            (coalton-unsupported "a top-level local's bindings"))))
             (setf remaining (remove pair remaining))
             (let ((symbol (gethash (cdr pair) *ce-local-globals*)))
-              (if (eq (ir-kind term) :fn)
-                  (dolist (form (ce-define-function symbol (cdr pair) (second term) term))
-                    (push form forms))
-                  (push `(,(co "DEFINE") ,symbol ,(ce term)) forms)))))
-        (list (apply #'ce-toplevel (nreverse forms)))))))
+              (push (cons pair
+                          (if (eq (ir-kind term) :fn)
+                              (ce-define-function symbol (cdr pair) (second term) term)
+                              `((,(co "DEFINE") ,symbol ,(ce term)))))
+                    definitions))))
+        (let ((toplevels nil)
+              (forms nil))
+          (flet ((flush ()
+                   (when forms
+                     (push (apply #'ce-toplevel (nreverse forms)) toplevels)
+                     (setf forms nil))))
+            (loop for (kind pairs argp extra) in decs
+                  do (case kind
+                       (:exception
+                        (destructuring-bind ((name . variable)) pairs
+                          (let ((tag (ce-fresh-name (format nil "~A%local%tag" name)))
+                                (symbol (ce-fresh-name (format nil "~A%local" name)))
+                                (x (ce-temp "x")))
+                            (setf (gethash variable *ce-exn-tags*) tag
+                                  (gethash variable *ce-local-globals*) symbol)
+                            (push `(,(co "DECLARE") ,tag ,(co "Raw")) forms)
+                            (push `(,(co "DEFINE") ,tag (,(co "new-exn-tag") ,name)) forms)
+                            (push (if argp
+                                      `(,(co "DEFINE") (,symbol ,x) (,(co "exn-make") ,tag ,x))
+                                      `(,(co "DEFINE") ,symbol
+                                        (,(co "THE") ,(co "Exn") (,(co "unsafe-coerce") ,tag))))
+                                  forms))))
+                       ((:val :vals :val-rec :val-recs :fun :funs)
+                        (dolist (pair pairs)
+                          (dolist (form (cdr (assoc pair definitions)))
+                            (push form forms))))
+                       ((:structure :structure-alias :structure-app :functor)
+                        (flush)
+                        (dolist (nested extra)
+                          (dolist (form (ce-declaration nested))
+                            (push form toplevels))))))
+            (flush))
+          (nreverse toplevels))))))
 
-(defun ce-datatype-declaration (declaration)
+(defun ce-datatype-declaration (declaration &key hidden)
+  "The forms of the :datatype DECLARATION.  HIDDEN: a datatype declared by
+`let' or `local', lifted to the top level under names of its own."
   (let ((entries nil))
     ;; Register every type first: datatypes in a group refer to each other.
     (dolist (datatype (remove nil (second declaration) :key #'fourth))
@@ -1284,22 +1448,27 @@ its variables become globals."
                (builtin (and *ce-basis-mode*
                              (member name '("option" "order" "list" "bool" "ref" "cl_object" "large_int")
                                      :test #'string=))))
-          (unless builtin
+          (unless (or builtin
+                      ;; Lifted already (a term emitted twice).
+                      (and hidden (gethash (ir-tycon-stamp tycon) *ce-types*)))
             (let ((entry (make-coalton-type
-                          :symbol (ce-fresh-name path)
+                          :symbol (ce-fresh-name (if hidden (format nil "~A%local" path) path))
                           :params params
                           :constructors
                           (mapcar (lambda (constructor)
                                     (destructuring-bind (con-path type flat) constructor
                                       (declare (ignore flat))
                                       (list (ce-constructor-short-name con-path)
-                                            (ce-fresh-name con-path)
+                                            (ce-fresh-name (if hidden
+                                                               (format nil "~A%local" con-path)
+                                                               con-path))
                                             (if (eq (first type) :arrow)
                                                 (ce-constructor-fields (second type))
                                                 0))))
                                   constructors))))
-              (setf (gethash (ir-tycon-stamp tycon) *ce-types*) entry
-                    (gethash path *ce-type-paths*) entry)
+              (setf (gethash (ir-tycon-stamp tycon) *ce-types*) entry)
+              (unless hidden
+                (setf (gethash path *ce-type-paths*) entry))
               (push (list entry tycon constructors) entries))))))
     (when entries
       (list
@@ -1307,20 +1476,26 @@ its variables become globals."
               (loop for (entry tycon constructors) in (nreverse entries)
                     for tyvars = (list nil)
                     for params = (mapcar (lambda (p) (ce-tyvar p tyvars)) (coalton-type-params entry))
+                    for definition
+                      = `(,(co "DEFINE-TYPE") ,(if params
+                                                     (cons (coalton-type-symbol entry) params)
+                                                     (coalton-type-symbol entry))
+                          ,@(loop for (nil symbol nfields) in (coalton-type-constructors entry)
+                                  for (nil type) in constructors
+                                  collect (if (= nfields 0)
+                                              symbol
+                                              (let ((arg (second type)))
+                                                (cons symbol
+                                                      (if (> nfields 1)
+                                                          (mapcar (lambda (f) (ce-type (cdr f) tyvars))
+                                                                  (second arg))
+                                                          (list (ce-type arg tyvars))))))))
+                    ;; SML97 closes a datatype over its own parameters.
+                    do (unless (= (length (car tyvars)) (length params))
+                         (coalton-unsupported "datatype ~A has free type variables"
+                                              (coalton-type-symbol entry)))
                     append `(,@(when (ir-tycon-equality tycon) `((,(co "DERIVE") ,(co "EQ"))))
-                             (,(co "DEFINE-TYPE") ,(if params
-                                                       (cons (coalton-type-symbol entry) params)
-                                                       (coalton-type-symbol entry))
-                              ,@(loop for (nil symbol nfields) in (coalton-type-constructors entry)
-                                      for (nil type) in constructors
-                                      collect (if (= nfields 0)
-                                                  symbol
-                                                  (let ((arg (second type)))
-                                                    (cons symbol
-                                                          (if (> nfields 1)
-                                                              (mapcar (lambda (f) (ce-type (cdr f) tyvars))
-                                                                      (second arg))
-                                                              (list (ce-type arg tyvars)))))))))))))))
+                             ,definition)))))))
 
 (defun ce-exception-declaration (declaration)
   (destructuring-bind (kind path target type &optional cell) declaration
@@ -1332,14 +1507,7 @@ its variables become globals."
                  (if (and *ce-basis-mode* (sml-initial-exception-name-p name))
                      (list (co "initial-exn-tag") name)
                      (list (co "new-exn-tag") name))
-                 (let ((target-cell (and (stringp target)
-                                         (gethash target *ce-path-exceptions*))))
-                   (cond (target-cell (gethash target-cell *ce-exn-tags*))
-                         ((and *coalton-basis*
-                               (gethash target (coalton-registry-exceptions *coalton-basis*))))
-                         ((sml-initial-exception-name-p (ce-constructor-short-name target))
-                          (list (co "initial-exn-tag") (ce-constructor-short-name target)))
-                         (t (coalton-unsupported "unknown exception ~A" target)))))))
+                 (ce-exception-alias-tag target))))
       (when cell
         (setf (gethash cell *ce-exn-tags*) tag
               (gethash path *ce-path-exceptions*) cell))
@@ -1352,22 +1520,41 @@ its variables become globals."
                  `(,(co "DEFINE") ,symbol (,(co "unsafe-coerce") ,tag)))
              `(,(co "DECLARE") ,symbol ,(ce-scheme type)))))))
 
-(defvar *ce-path-exceptions*)
+(defun ce-exception-alias-tag (target)
+  "The tag form of the exception path TARGET, which `exception E = TARGET'
+names."
+  (let ((target-cell (and (stringp target)
+                          (gethash target *ce-path-exceptions*))))
+    (cond (target-cell (gethash target-cell *ce-exn-tags*))
+          ((and *coalton-basis*
+                (gethash target (coalton-registry-exceptions *coalton-basis*))))
+          ((sml-initial-exception-name-p (ce-constructor-short-name target))
+           (list (co "initial-exn-tag") (ce-constructor-short-name target)))
+          (t (coalton-unsupported "unknown exception ~A" target)))))
+
 
 (defun ce-declaration (declaration)
-  "The forms of IR DECLARATION (a list)."
-  (let ((*ce-vars* (make-hash-table :test #'equal)))
-    (ecase (first declaration)
-      (:val (ce-val-declaration declaration))
-      (:datatype (ce-datatype-declaration declaration))
-      ((:exception :exception-alias) (ce-exception-declaration declaration))
-      (:type (ce-type-declaration declaration))
-      (:local (ce-local-declaration-bindings declaration))
-      (:structure (ce-structure-declaration declaration))
-      ((:structure-alias :signature :open :datatype-replication) nil)
-      ((:functor :functor-application)
-       (coalton-unsupported "functors are not supported by the Coalton backend (~A ~A)"
-                            (first declaration) (second declaration))))))
+  "The forms of IR DECLARATION (a list), after those of the datatypes it
+declares in expressions (lifted)."
+  (let* ((*ce-vars* (make-hash-table :test #'equal))
+         (*ce-hoisted* nil)
+         (forms (ce-declaration-forms declaration)))
+    (append *ce-hoisted* forms)))
+
+(defun ce-declaration-forms (declaration)
+  (ecase (first declaration)
+    (:val (ce-val-declaration declaration))
+    (:datatype (ce-datatype-declaration declaration))
+    ((:exception :exception-alias) (ce-exception-declaration declaration))
+    (:type (ce-type-declaration declaration))
+    (:local (ce-local-declaration-bindings declaration))
+    (:structure (ce-structure-declaration declaration))
+    ;; Applications are specialised (*sml-defunctorize*): a functor
+    ;; declares nothing of its own.
+    ((:structure-alias :signature :open :datatype-replication :functor) nil)
+    (:functor-application
+     (coalton-unsupported "an application of functor ~A, which was not specialised"
+                          (third declaration)))))
 
 ;;; Record shapes: generated types, defined in the prelude's package.
 
@@ -1426,7 +1613,8 @@ Returns a list of (declaration forms) or, with ON-ERROR :COLLECT, of
 
 (defun sml-program-ir-for-coalton (source package-name)
   (let ((*sml-ir-simplify* nil)
-        (*sml-tupled-workers* t))
+        (*sml-tupled-workers* t)
+        (*sml-defunctorize* t))
     (sml-ir-program source :package package-name)))
 
 (defvar *coalton-program-counter* 0)

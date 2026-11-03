@@ -120,11 +120,188 @@ local val base = 100 fun helper x = x + base in val v = helper 1 end
 val _ = print (Int.toString (Q.sum (Q.push (2, Q.push (3, Q.empty))) + v) ^ \"\\n\")"
                (lines "106")))
 
-(test coalton-rejects-functors
-  (signals cl-sml::coalton-unsupported
+;;; Functors: each application is a copy of the body (*sml-defunctorize*).
+
+(test coalton-functor-application
+  (same-output "signature ORD = sig type t val lt : t * t -> bool end
+functor Sort (O : ORD) = struct
+  fun insert (x, []) = [x]
+    | insert (x, y :: ys) = if O.lt (x, y) then x :: y :: ys else y :: insert (x, ys)
+  fun sort xs = foldl insert [] xs
+end
+structure Up = Sort (struct type t = int fun lt (a : int, b) = a < b end)
+structure Down = Sort (struct type t = string fun lt (a : string, b) = a > b end)
+val _ = print (String.concatWith \" \" (map Int.toString (Up.sort [3, 1, 2])) ^ \"\\n\")
+val _ = print (String.concatWith \" \" (Down.sort [\"a\", \"c\", \"b\"]) ^ \"\\n\")"
+               (lines "1 2 3" "c b a"))
+  ;; The derived forms: functor F (spec), applied to declarations.
+  (same-output "functor Add (val n : int type t val conv : t -> int) = struct fun add x = conv x + n end
+structure A5 = Add (val n = 5 type t = int fun conv x = x)
+structure Len = Add (val n = 100 type t = string val conv = size)
+val _ = print (Int.toString (A5.add 1 + Len.add \"abc\") ^ \"\\n\")"
+               (lines "109")))
+
+(test coalton-functor-generativity
+  ;; Each application has its own datatype and exception.
+  (same-output "functor F (X : sig type t end) = struct
+  datatype box = Box of X.t
+  exception E of int
+  fun unbox (Box v) = v
+end
+structure A = F (struct type t = int end)
+structure B = F (struct type t = int end)
+val _ = print (Int.toString (A.unbox (A.Box 1) + B.unbox (B.Box 2)) ^ \"\\n\")
+val _ = (raise A.E 1) handle B.E _ => print \"B.E\\n\" | A.E n => print \"A.E\\n\""
+               (lines "3" "A.E"))
+  (signals error
     (cl-sml:emit-coalton-sml-string
-     "functor F (X : sig val x : int end) = struct val y = X.x end
-structure A = F (struct val x = 1 end)")))
+     "functor F (X : sig type t end) = struct datatype box = Box of X.t fun unbox (Box v) = v end
+structure A = F (struct type t = int end)
+structure B = F (struct type t = int end)
+val x = A.unbox (B.Box 1)")))
+
+(test coalton-functor-opaque-result
+  (same-output "signature COUNTER = sig type t val zero : t val inc : t -> t val get : t -> int end
+functor Counter (val step : int) :> COUNTER = struct
+  type t = int val zero = 0 fun inc n = n + step fun get n = n
+end
+structure C2 = Counter (val step = 2)
+structure C5 = Counter (val step = 5)
+val _ = print (Int.toString (C2.get (C2.inc (C2.inc C2.zero)) + C5.get (C5.inc C5.zero)) ^ \"\\n\")"
+               (lines "9"))
+  ;; The result's type is abstract, and each application's is its own.
+  (signals error
+    (cl-sml:emit-coalton-sml-string
+     "functor Counter (val step : int) :> sig type t val zero : t end = struct type t = int val zero = 0 end
+structure C = Counter (val step = 1)
+val bad = C.zero + 1"))
+  (signals error
+    (cl-sml:emit-coalton-sml-string
+     "functor Counter (val step : int) :> sig type t val zero : t val get : t -> int end =
+struct type t = int val zero = 0 fun get n = n end
+structure C = Counter (val step = 1)
+structure D = Counter (val step = 1)
+val bad = C.get D.zero")))
+
+(test coalton-functor-definition-scope
+  ;; The body's free identifiers mean what they meant where the functor was
+  ;; defined, although the application sees later bindings of the names.
+  (same-output "datatype color = Red | Green
+structure U = struct val name = \"U1\" end
+exception Boom
+val k = 10
+fun pick Red = \"red\" | pick Green = \"green\"
+functor F (X : sig val c : color end) = struct
+  fun show () = pick X.c ^ \"/\" ^ U.name ^ \"/\" ^ Int.toString k
+  fun isRed Red = true | isRed _ = false
+  fun fail () = raise Boom
+  val other : color = Green
+end
+datatype color = Red | Blue
+fun pick _ = \"shadowed\"
+structure U = struct val name = \"U2\" end
+exception Boom
+val k = 99
+structure A = F (struct val c = Green end)
+val _ = print (A.show () ^ \" \" ^ Bool.toString (A.isRed A.other) ^ \"\\n\")
+val _ = A.fail () handle Boom => print \"new Boom\\n\" | _ => print \"old Boom\\n\""
+               (lines "green/U1/10 false" "old Boom"))
+  ;; A Basis identifier rebound between the definition and an application
+  ;; cannot be reached from the copy: an error rather than a wrong program.
+  (signals error
+    (cl-sml:emit-coalton-sml-string
+     "functor P (X : sig end) = struct fun say s = print s end
+fun print (s : string) = ()
+structure Q = P (struct end)")))
+
+(test coalton-functor-in-functor
+  (same-output "functor Inc (X : sig val n : int end) = struct val n = X.n + 1 end
+functor Twice (X : sig val n : int end) = struct
+  structure Once = Inc (X)
+  structure Again = Inc (Once)
+  val n = Again.n
+end
+structure T = Twice (struct val n = 40 end)
+structure Nested = struct structure I = Inc (Inc (struct val n = T.n end)) end
+val _ = print (Int.toString T.n ^ \" \" ^ Int.toString T.Once.n ^ \" \" ^ Int.toString Nested.I.n ^ \"\\n\")"
+               (lines "42 41 44")))
+
+;;; Declarations in `let' and `local': datatypes are lifted, structures
+;;; are local bindings.
+
+(test coalton-local-datatypes
+  (same-output "fun sum xs =
+  let datatype 'a tree = L | N of 'a node withtype 'a node = 'a tree * 'a * 'a tree
+      fun ins (x, L) = N (L, x, L)
+        | ins (x, t as N (l, y, r)) = if x < y then N (ins (x, l), y, r) else N (l, y, ins (x, r))
+      fun fold f a L = a | fold f a (N (l, x, r)) = fold f (f (x, fold f a l)) r
+  in fold (op +) 0 (foldl ins L xs) end
+local datatype t = A | B of int * int  fun g A = 0 | g (B (j, k)) = j * k in val h = g (B (3, 4)) end
+val _ = print (Int.toString (sum [3, 1, 2] + h) ^ \"\\n\")"
+               (lines "18")))
+
+(test coalton-local-exception-generativity
+  ;; Each evaluation of the body makes a new exception.
+  (same-output "fun mk () = let exception E in (fn () => (raise E) : unit, fn (f : unit -> unit) => (f (); \"none\") handle E => \"mine\") end
+val (r1, h1) = mk ()
+val (r2, h2) = mk ()
+val _ = print (h1 r1 ^ \" \" ^ (h1 r2 handle _ => \"other\") ^ \"\\n\")"
+               (lines "mine other")))
+
+(test coalton-structure-in-let
+  (same-output "fun g n =
+  let structure S = struct
+        val k = n * 2
+        fun add (a, b) = a + b + k
+        val (p, q) = (k, k + 1)
+        structure T = struct datatype d = D of int val v = D (add (p, q)) end
+        exception X of int
+      end
+      val S.T.D w = S.T.v
+  in (raise S.X w) handle S.X m => m end
+fun h () =
+  let structure A :> sig type t val make : int -> t val get : t -> int end =
+        struct type t = int fun make x = x fun get x = x + 1 end
+  in A.get (A.make 41) end
+val _ = print (Int.toString (g 1) ^ \" \" ^ Int.toString (g 10) ^ \" \" ^ Int.toString (h ()) ^ \"\\n\")"
+               (lines "7 61 42"))
+  ;; The structure's members are the evaluation's own.  (The CL backend
+  ;; binds them in global cells, so it prints 22.)
+  (is (string= (lines "12")
+               (coalton-output "fun mkc n = let structure S = struct val k = n fun get () = k end in S.get end
+val a = mkc 1
+val b = mkc 2
+val _ = print (Int.toString (a ()) ^ Int.toString (b ()) ^ \"\\n\")"))))
+
+(test coalton-functor-applied-in-let-and-local
+  (same-output "signature ORD = sig type t val le : t * t -> bool end
+functor Sort (O : ORD) = struct
+  fun insert (x, []) = [x]
+    | insert (x, y :: ys) = if O.le (x, y) then x :: y :: ys else y :: insert (x, ys)
+  fun sort xs = foldl insert [] xs
+end
+fun sortDesc xs =
+  let structure D = Sort (struct type t = int fun le (a, b) = a >= b end)
+  in D.sort xs end
+local
+  structure I = Sort (struct type t = int val le = op <= end)
+  val base = 100
+in
+  val sorted = map (fn x => x + base) (I.sort [5, 3, 4])
+end
+val _ = print (String.concatWith \",\" (map Int.toString (sortDesc [2, 9, 4] @ sorted)) ^ \"\\n\")"
+               (lines "9,4,2,103,104,105")))
+
+(test coalton-abstype
+  (same-output "abstype counter = C of int ref
+with fun new () = C (ref 0) fun tick (C r) = (r := !r + 1; !r) end
+val c = new ()
+val _ = (tick c; print (Int.toString (tick c) ^ \"\\n\"))"
+               (lines "2"))
+  ;; The constructors are hidden outside `with ... end'.
+  (signals error
+    (cl-sml:emit-coalton-sml-string "abstype t = T of int with val x = T 1 end
+val y = case x of T n => n")))
 
 (test coalton-show
   (let ((text (with-output-to-string (s)

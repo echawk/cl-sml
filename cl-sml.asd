@@ -46,6 +46,7 @@
                              (:file "elab-core")
                              (:file "sig")
                              (:file "elab-module")
+                             (:file "defunctorize")
                              (:file "initial-basis")
                              (:file "annotations")
                              (:file "typecheck")))

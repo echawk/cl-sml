@@ -163,6 +163,36 @@ shows the types EXPECTED and FOUND."
 
 ;;;; Identifiers
 
+(defvar *functor-scan* nil
+  "While a functor is elaborated for defunctorisation (defunctorize.lisp):
+the FUNCTOR-SCAN that records how the body's identifiers resolve.")
+
+(defvar *pending-top-level-decs* nil
+  "Declarations to elaborate right after the current top-level one: the
+definition environment a functor's applications refer to.")
+
+(defvar *functor-instances* nil
+  "While a program is elaborated with defunctorisation: the number of
+functor applications copied so far, which names their arguments.")
+
+(defvar *functor-instance-checks* nil
+  "While a program is elaborated with defunctorisation: an EQ hash table
+from the copies of functor bodies to the templates whose free identifiers
+must still mean, where the copy is elaborated, what they meant where the
+functor was defined.")
+
+(defun defunctorizing-p ()
+  "Are functor applications being replaced by copies of their bodies?
+Not while a functor's own body is elaborated."
+  (and cl-sml:*sml-defunctorize* *functor-instance-checks* (null *functor-scan*)))
+
+(defun note-identifier (c node name namespace)
+  "Record for defunctorisation the occurrence NODE of identifier NAME (of
+NAMESPACE :vid, :tycon, :strid, :sigid or :funid; a long name is recorded
+as its first structure identifier), looked up in context C."
+  (when *functor-scan*
+    (record-functor-identifier *functor-scan* (context-env c) node name namespace)))
+
 (defun long-name-p (name)
   (and (stringp name) (position #\. name) (> (length name) 1)
        ;; `...' and symbolic identifiers made of dots are not long.
@@ -181,6 +211,7 @@ unchecked."
 
 (defun lookup-long-vid (c name node)
   "The VALSTR of identifier NAME, or NIL for an unchecked long identifier."
+  (note-identifier c node name :vid)
   (if (long-name-p name)
       (multiple-value-bind (env last) (long-strid-env c name node)
         (and env
@@ -199,6 +230,7 @@ unchecked."
 
 (defun lookup-long-tycon (c name node)
   "The TYSTR of type constructor NAME, or NIL when unchecked."
+  (note-identifier c node name :tycon)
   (if (long-name-p name)
       (multiple-value-bind (env last) (long-strid-env c name node)
         (and env
@@ -209,6 +241,7 @@ unchecked."
 
 (defun lookup-long-strid (c name node)
   "The environment of structure NAME, or NIL when unchecked."
+  (note-identifier c node name :strid)
   (multiple-value-bind (strids last) (split-long-name name)
     (multiple-value-bind (env missing)
         (env-lookup-strids (context-env c) (append strids (list last)))
@@ -485,6 +518,8 @@ constructor or exception constructor."
       ((and long (eq (valstr-status valstr) :v))
        (elab-error pat "~A is not a constructor" name))
       ((and valstr (not (eq (valstr-status valstr) :v))) ; [Rule 35]
+       (unless long
+         (note-identifier c pat name :vid))
        (multiple-value-bind (type fresh) (instantiate (valstr-scheme valstr))
          (note-overloaded pat fresh)
          (when (eq (car (repr type)) :arrow)
@@ -911,11 +946,11 @@ HaMLet); they must not reach the top level (rule 87)."
                            (make-valstr (mono-scheme (if ty
                                                          (arrow-type (elab-ty c ty) (exn-type))
                                                          (exn-type)))
-                                        :e (gensym "EXN"))))
+                                        :e (new-exception-id))))
                         (:exception-alias ; [Rule 31]
                          (let ((valstr (lookup-long-vid c (third node) node)))
                            (cond ((null valstr)
-                                  (make-valstr (mono-scheme (exn-type)) :e (gensym "EXN")))
+                                  (make-valstr (mono-scheme (exn-type)) :e (new-exception-id)))
                                  ((eq (valstr-status valstr) :e) valstr)
                                  (t (elab-error node "~A is not an exception" (third node))))))))))
 
@@ -978,11 +1013,35 @@ HaMLet); they must not reach the top level (rule 87)."
           (setf (first groups) (append (first groups) (list dec)))
           (push (list dec) groups)))))
 
+(defun dec-group-at (cell)
+  "The group of bindings joined by `and' that starts at CELL of a
+declaration list."
+  (cons (car cell)
+        (loop for dec in (rest cell)
+              while (and-continuation-p dec)
+              collect dec)))
+
+(defmacro do-dec-groups ((group decs context &optional (cell (gensym "CELL"))) &body body)
+  "Run BODY with GROUP bound to each group of the declaration list DECS
+(see DEC-GROUPS) and CELL to the group's first cell.  With
+cl-sml:*sml-defunctorize*, the functor applications of each group are
+first replaced by copies of the functors' bodies (EXPAND-FUNCTOR-APPLICATIONS,
+which changes DECS in place), in the context the form CONTEXT evaluates to
+then."
+  `(loop with ,cell = ,decs
+         while ,cell
+         do (when (defunctorizing-p)
+              (loop while (expand-functor-applications ,context ,cell)))
+            (let ((,group (dec-group-at ,cell)))
+              ,@body
+              (setf ,cell (nthcdr (length ,group) ,cell)))))
+
 (defun elab-decs (c decs)
   "[Rules 23, 24] A declaration sequence; returns its environment."
   (let ((env (make-env)))
-    (dolist (group (dec-groups decs) env)
-      (setf env (env-plus env (elab-dec (context-plus-env c env) group))))))
+    (do-dec-groups (group decs (context-plus-env c env))
+      (setf env (env-plus env (elab-dec (context-plus-env c env) group))))
+    env))
 
 ;;;; Top-level declarations
 
@@ -1073,14 +1132,20 @@ program (top-level declarations ended by `;', or the end of the text)."
                (check-top-level-env last-node program))
              (setf program (make-env)
                    saw-unknown nil)))
-      (dolist (group (dec-groups decs))
+      (do-dec-groups (group decs (context-plus-env c env) cell)
         (when (and last-node (program-boundary-p (first group)))
           (end-program))
         (let* ((*overloaded* nil)
                (*deferred-records* nil)
                (*saw-unknown* nil)
                (*level* 0)
+               (*pending-top-level-decs* nil)
                (increment (elab-dec (context-plus-env c env) group)))
+          ;; Defunctorisation: the declarations a functor's definition
+          ;; needs right after it (its definition environment's bindings).
+          (when *pending-top-level-decs*
+            (let ((last (nthcdr (1- (length group)) cell)))
+              (setf (cdr last) (append *pending-top-level-decs* (cdr last)))))
           (let ((*position-fallback* (first group)))
             (resolve-overloading)
             (check-flexible-records))

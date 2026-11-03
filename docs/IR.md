@@ -43,12 +43,13 @@ A term is a list `(kind type . fields)`.  `type` is the node's SML type
 | `:match` | scrutinees, ((patterns body) ...), failure | `case`, `fn`, `fun` clauses (one scrutinee per curried argument) and pattern bindings; failure is `(exception where offset)`, raised when no rule matches |
 | `:loop` | tag, variables, inits, body | the loop of a function with self tail calls (ROADMAP 8) |
 | `:tail-call` | (tag . variables), args | a self tail call: assign the loop's variables and restart it |
-| `:decl` | declaration, body | a local `datatype` (`(:datatype ((symbol tag argp name) ...))`), `exception`, exception alias, or `(:module form)` |
+| `:decl` | declaration, body | a local `datatype` (`(:datatype ((symbol tag argp name) ...) types)`, TYPES as a `:datatype` declaration lists them, when declarations are recorded), `exception`, exception alias, or `(:module form declarations)` |
 
 There is no `:lisp` node any more.  The one escape hatch left is
 `(:decl (:module form) body)`: a structure or functor declared inside a
 `let` or `local` expression is compiled by `compile-decl` like any
-declaration, and its CL form is kept.  `:ref` holds the CL form that reads
+declaration, and its CL form is kept, with, when declarations are recorded
+(below), the structure's IR declarations.  `:ref` holds the CL form that reads
 a global (a cell, or a built-in function).
 
 Variables are uninterned symbols; each binder binds a symbol of its own,
@@ -187,10 +188,75 @@ and the structure's own declaration follows its members.
 | `(:functor name :ast ast)` | the functor's AST, for a whole-program pass to specialize its applications (ROADMAP 21) |
 | `(:functor-application path functor argument :signature sigexp :opaque bool)` | |
 | `(:signature name sigexp)`, `(:open names)` | |
-| `(:local ((kind ((name . variable) ...) argp) ...) terms)` | `local A in B end` at top or structure level: each declaration of A, its kind and the lexical variables it binds (ARGP: an exception with an argument), and A's terms; recorded before B's declarations |
+| `(:local ((kind ((name . variable) ...) argp extra) ...) terms)` | `local A in B end` at top or structure level: each declaration of A, its kind and the lexical variables it binds (ARGP: an exception with an argument; EXTRA: a datatype's types, as `:datatype` lists them, or a structure's IR declarations), and A's terms; recorded before B's declarations |
 
 Functor bodies are compiled as before (one closure per functor, applied at
-run time); their declarations are not recorded separately.
+run time); their declarations are not recorded separately.  With
+`cl-sml:*sml-defunctorize*` (below), applications are ordinary structures
+by the time they are compiled, so their declarations are recorded like
+any structure's, and no `:functor-application` is left.
+
+A structure declared by `let` or `local` is not a declaration of the
+program: its IR declarations go with it (`ir-compile-nested-structure`),
+into its `:decl` node or its `local`'s `extra`, in order.  (The compiler
+compiles a `let` or `local` body before its declarations, so recording
+them in the program would put them after the body.)
+
+## Functors: defunctorisation
+
+`cl-sml:*sml-defunctorize*` (ROADMAP 21; `src/types/defunctorize.lisp`)
+makes the native checker specialise each functor application at compile
+time, in the AST, before the code generators see it.  The Coalton backend
+sets it always; the CL backend applies functors at run time unless it is
+set.  `structure S = F (A)` becomes
+
+```sml
+structure F%argK = A : PARAMSIG      (* transparent: the realisation *)
+structure S = BODY' : RESULTSIG      (* or :>, as F declares *)
+```
+
+where `BODY'` is a copy of `F`'s body whose occurrences of the parameter
+refer to `F%argK` (for the derived form `functor F (spec)`, the
+specification's names become `F%argK.name`).  The copy is elaborated like
+any structure, so it has concrete types, and the code generators compile
+it as one.  Names containing `%` cannot be written in SML, so the hidden
+structures cannot clash with the program's.
+
+- **Where.**  Before elaborating each group of declarations (top level,
+  structure bodies, `let` and `local`), `do-dec-groups` replaces the
+  structure bindings whose structure expression applies a functor
+  (directly, under a constraint, in a `let` body, or as another
+  application's argument) by the argument structures and the copy, in the
+  declaration list itself, which the compiler then compiles.  An argument
+  structure goes before the binding, or into the `let`'s declarations.
+  Functor bodies are not expanded; their applications are expanded in
+  each copy (functors applied in functors).
+- **Generativity.**  Each copy is elaborated anew: its datatypes have type
+  names of their own, its exceptions identities of their own, and the
+  compiler gives them their own constructors and tags.  An opaque result
+  signature makes fresh abstract types per application.
+- **Scoping.**  The body's free identifiers must mean what they mean where
+  the functor is defined, although the application may see later bindings
+  of the same names.  While a functor is elaborated, every identifier
+  occurrence is recorded with its binding (`note-identifier`, a
+  `functor-scan`).  Occurrences of the program's own bindings (values,
+  constructors, exceptions, types, structures) from the definition
+  environment are rebound by a hidden structure declared right after the
+  functor, `structure F%env = struct val x = x  datatype t = datatype t
+  exception E = E  structure A = A ... end`, and the copies refer to
+  `F%env.x`.  Occurrences of the Basis, signatures and functors are
+  checked where each copy is elaborated: a copy that would see another
+  binding of the name is an error (`check-functor-instance`).
+- **Template.**  A functor's signature (`funsig`) keeps a
+  `functor-template`: the parameter, its signature, the result signature,
+  the body and the recorded occurrences.  Functors declared while the
+  flag is off have none, and their applications stay run-time ones.
+
+Not supported: a Basis identifier, signature or functor rebound between
+a functor's definition and its application (an error); for the Coalton
+backend, nothing more (applications inside `let` and `local` are
+structures there, which it supports).  The CL backend's Modules corpus passes with the flag on
+(`t/conformance/modules/run.sh --native --defunctorize`).
 
 ## The simplifier
 
@@ -290,9 +356,8 @@ Has:
 Still to do for Coalton:
 
 - a whole-program driver: Coalton wants every definition known, so
-  functor applications must be specialised (defunctorised) from the
-  recorded ASTs, and the Basis compiled with the checker so that its
-  terms are typed;
+  functor applications are specialised (defunctorised, above), and the
+  Basis compiled with the checker so that its terms are typed;
 - `:let` binders and `:fn` parameters carry no type of their own (their
   uses do; the `:fn` type gives the parameters');
 - polymorphism: types inside a let-polymorphic function carry its type
@@ -309,7 +374,9 @@ Still to do for Coalton:
 The system `cl-sml/coalton` (src/coalton/) emits Coalton from a program's
 IR declarations, compiled with the native checker and without the
 simplifier (`sml-ir-program`, `*sml-ir-simplify*` nil): the terms keep
-their types, and no untyped Basis template is inlined.
+their types, and no untyped Basis template is inlined.  Functor
+applications are specialised (`*sml-defunctorize*`, "Functors:
+defunctorisation" above); a functor declaration emits nothing.
 
 | file | |
 |---|---|
@@ -341,7 +408,9 @@ Mapping (see also DESIGN-TYPECHECKER.md section 8):
 | `exception E of t` | a tag (`E%tag`, the run time's `sml-exception-tag`; the initial basis's for Fail, Empty, ...) and a constructor; local exceptions make a tag each time |
 | `use{b = "Name"} : t` (Basis) | the run time's primitive, its arguments and results converted between the two representations by type (unit, tuples, records, option, lists, enumerations) |
 | `val pat = e` | a hidden definition of `e`, then one definition per variable |
-| `local A in B end` | A's variables become globals `|name%local|` |
+| `local A in B end` | A's variables become globals `|name%local|`; its structures' declarations are emitted like top-level ones, in A's order |
+| `datatype` in `let` or `local`, `abstype` | lifted to the top level as `|t%local|` (constructors `|C%local|`): Coalton has no local types.  SML97 closes a datatype over its own type variables (the checker rejects others), and type names are static, one per elaboration, so one Coalton type per declaration is SML's semantics.  `abstype` is a `local` whose body sees the constructors; the checker hides them |
+| structure in `let` | a namespace: its members are local `let` bindings, which may capture the expression's variables (a function of a tuple's fields gets a local worker); its datatypes are lifted, its exceptions make a tag per evaluation |
 
 Every top-level binding gets a `declare` of its type (with `Eq :a` for
 each equality type variable), so Coalton checks the backend's types
@@ -350,9 +419,10 @@ generalize is SML's default, unit (`[] = []`).  In programs, an
 application of a Basis function that is a primitive the IR opens
 (`Word.xorb`, `String.sub`, ...) is opened the same way.
 
-Not supported (`coalton-unsupported` names the construct): functors and
-functor applications, structures in `let` or `local`, datatypes in `let`
-or `local` (so `abstype`), flexible records whose labels are unknown.
+Not supported (`coalton-unsupported` names the construct): a `local`
+inside a structure declared by `let`, or one nested in a top-level
+`local`'s declarations; flexible records whose labels are unknown; an
+application of a functor declared while `*sml-defunctorize*` was off.
 IntInf.int is Int.int in the Basis's sources, so IntInf values beyond the
 fixnum range fail in Coalton; the Basis's streams, `int` in its sources,
 are `cl_object` (Raw) for Coalton (`*coalton-basis-patches*`).

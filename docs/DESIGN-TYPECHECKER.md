@@ -255,6 +255,7 @@ HaMLet files. Rule numbers from the Definition go in comments at each case
 | `src/types/elab-core.lisp` | `ElabCore`, `Clos` | Rules 1-55: expressions, matches, patterns, declarations, value restriction (4.7), closure (4.8) |
 | `src/types/check-pattern.lisp` | `CheckPattern` | Exhaustiveness and redundancy (4.11), as warnings |
 | `src/types/elab-module.lisp` | `ElabModule`, `Sig`, `FunSig`, `StaticBasis` | Rules 56-100: structures, signatures, matching with realisation, functors, sharing, `where type` |
+| `src/types/defunctorize.lisp` | (none) | With `cl-sml:*sml-defunctorize*`: functor applications replaced by elaborated copies of the body (docs/IR.md, "Functors: defunctorisation") |
 | `src/types/initial.lisp` | `InitialStaticEnv`, `InitialStaticBasis` | The top-level environment of Appendix C (bool, list, ref, exceptions, overloaded operators) |
 | `src/types/print.lisp` | `PPType`, `PPStaticBasis` | Printing in HaMLet's format, so differential tests compare text |
 
