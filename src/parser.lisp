@@ -1149,8 +1149,8 @@ the Common Lisp generated for a binding came from.")
   "The :val-rec nodes of `rec PAT = EXP'.  PAT is a variable or a layered
 pattern `v1 <: ty> as v2 <: ty> as ...', all of whose variables denote the
 function (Definition section 2.9 and rule 26; HaMLet test valrec): the first
-is bound to EXP, the others to its eta expansion.  The node of the innermost
-variable, the one not bound by `as', is marked :atomic: when it names a
+is bound to EXP, the others to its eta expansion.  The nodes of the
+variables bound by `as' are marked :layered; when the other one names a
 constructor, the binding raises Bind (rule 126 matches the pattern in the
 environment outside the `val rec')."
   (let ((names nil)
@@ -1170,7 +1170,7 @@ environment outside the `val rec')."
       (walk pat))
     (setf names (nreverse names))
     (flet ((atomic-plist (name)
-             (and (equal name atomic) (list :atomic t))))
+             (and (not (equal name atomic)) (list :layered t))))
       (let ((type-plist (and type (list :type type))))
         (cons `(:val-rec ,(first names) ,exp ,@type-plist ,@tyvar-plist
                          ,@(atomic-plist (first names)))

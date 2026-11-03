@@ -790,7 +790,7 @@ bindings ((pat exp)...) and recursive bindings ((name :exp exp ty node) or
                            ;; `fun' would raise Bind too (its derived form
                            ;; is `val rec'); it is rejected instead.
                            (elab-error rec-node "fun cannot rebind constructor ~A" name)
-                           (when (getf (cdddr rec-node) :atomic)
+                           (when (not (getf (cdddr rec-node) :layered))
                              (annotate rec-node :bind-fails t)))))
                    (let ((type (if (eq kind :clauses)
                                    (elab-fun-clauses c2 name body rec-node)
