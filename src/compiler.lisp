@@ -1802,6 +1802,12 @@ names LEXICAL-ENV binds, which they shadow."
                                          (append var-map lexical-env)))
               (cells (mapcar (lambda (entry) (new-sml-binding-cell (car entry)))
                              var-map)))
+         (when (and *ir-val-patterns* *sml-ir-log* (native-sml-static-facts-p))
+           (push (list (ir-lower-pattern pat local-exceptions (append var-map lexical-env)
+                                         (ir-node-type expr))
+                       (1- (length (car *sml-ir-log*)))
+                       (mapcar #'cons (mapcar #'cdr var-map) cells))
+                 (car *ir-val-patterns*)))
          `(let ((,tmp ,compiled-expr))
             (trivia:match ,tmp
               (,compiled-pat
@@ -3688,10 +3694,13 @@ environment (e.g. *SML-MODULE-PREFIX*) is still in effect.")
 declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
 
 (defvar *sml-ir-program*)
+(defvar *ir-val-patterns*)
+(defvar *ir-program-mark*)
 
-(defun note-compiled-sml-declaration (dec form &optional ir)
+(defun note-compiled-sml-declaration (dec form &optional ir val-patterns)
   (when *sml-ir-program*
-    (ir-note-declaration dec ir))
+    (let ((*ir-val-patterns* val-patterns))
+      (ir-note-declaration dec ir)))
   (when *sml-declaration-compiled-hook*
     (let ((*sml-declaration-ir* ir))
       (funcall *sml-declaration-compiled-hook* dec form)))
@@ -3702,8 +3711,10 @@ declaration, a list of (LOWERED . SIMPLIFIED), in order (see SHOW-SML-IR).")
 compiled declarations are being recorded."
   (if (or *sml-declaration-compiled-hook* *sml-ir-program*)
       (let* ((*sml-ir-log* (list nil))
+             (*ir-val-patterns* (and *sml-ir-program* (list nil)))
+             (*ir-program-mark* (and *sml-ir-program* (car *sml-ir-program*)))
              (form (compile-decl dec local-exceptions lexical-env)))
-        (values form (reverse (car *sml-ir-log*))))
+        (values form (reverse (car *sml-ir-log*)) *ir-val-patterns*))
       (compile-decl dec local-exceptions lexical-env)))
 
 (defun compile-program-decls (decs &optional (local-exceptions nil) lexical-env)

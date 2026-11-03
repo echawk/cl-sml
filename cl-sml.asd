@@ -88,3 +88,17 @@
              (declare (ignore operation component))
              (unless (uiop:symbol-call '#:cl-sml-test-runner '#:run-tests)
                (error "cl-sml tests failed"))))
+
+;;; The optional Coalton backend (docs/IR.md, "The Coalton backend"): SML
+;;; programs compiled to Coalton through the typed IR.  Only this system
+;;; depends on Coalton; cl-sml itself does not.
+(asdf:defsystem #:cl-sml/coalton
+  :description "cl-sml's Coalton backend"
+  :license "See LICENSE"
+  :depends-on (#:cl-sml #:coalton)
+  :pathname "src/coalton/"
+  :serial t
+  :components ((:file "prelude")
+               (:file "emit")
+               (:file "basis"))
+  :in-order-to ((test-op (test-op #:cl-sml/coalton-tests))))

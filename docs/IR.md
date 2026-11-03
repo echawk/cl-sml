@@ -145,10 +145,10 @@ and the structure's own declaration follows its members.
 
 | declaration | |
 |---|---|
-| `(:val ((path cell type) ...) terms)` | `val`, `val rec`, `fun` (and `and` groups): the names bound, their cells and types (schemes' bodies), and the simplified IR terms compiled |
+| `(:val ((path cell type) ...) terms [:patterns ((pattern index ((variable . cell) ...)) ...)])` | `val`, `val rec`, `fun` (and `and` groups): the names bound, their cells and types (schemes' bodies), and the simplified IR terms compiled, trivial ones included; for a `val` whose pattern is not a variable, its IR pattern, the index of its expression among the terms, and the cells of the pattern's variables |
 | `(:datatype ((path arity params ((con-path type flat-arity) ...)) ...) terms)` | each constructor's type (an arrow from its argument), and the width of its flat representation (0 for boxed or nullary) |
 | `(:type ((path params body) ...))` | |
-| `(:exception path nil type)`, `(:exception-alias path target type)` | |
+| `(:exception path nil type cell)`, `(:exception-alias path target type cell)` | |
 | `(:structure path :signature sigexp :opaque bool :types ((name arity kind params body constructors) ...))` | the types as the signature exports them: an abstract type's body is a type constructor of its own without constructors |
 | `(:structure-alias path source)` | |
 | `(:functor name :ast ast)` | the functor's AST, for a whole-program pass to specialize its applications (ROADMAP 21) |

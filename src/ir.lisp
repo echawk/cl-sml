@@ -2347,7 +2347,9 @@ is in scope."
       (ir-lint-term lowered "lowered")
       (unless (eq simplified lowered)
         (ir-lint-term simplified "simplified")))
-    (when (and *sml-ir-log* (not (ir-trivial-term-p lowered)))
+    ;; A program's IR declarations (*SML-IR-PROGRAM*) need every term,
+    ;; trivial ones included (`val z = 3').
+    (when (and *sml-ir-log* (or *sml-ir-program* (not (ir-trivial-term-p lowered))))
       (push (cons lowered simplified) (car *sml-ir-log*)))
     (let ((*ir-emit-scope* (lexical-environment-symbols lexical-env)))
       (ir-emit simplified))))
@@ -2390,6 +2392,12 @@ fields as :type \"...\"; patterns are shown the same way."
   "When a cons, the IR declarations of the program being compiled are
 pushed onto its car.")
 
+(defvar *ir-val-patterns* nil
+  "While a declaration is recorded (*SML-IR-PROGRAM*), a cons whose car
+collects (IR-PATTERN TERM-INDEX ((VARIABLE . CELL) ...)) for each top-level
+`val' binding whose pattern is not a variable, TERM-INDEX being the
+position of its expression among the declaration's terms.")
+
 (defun ir-declaration-path (name)
   (current-qualified-sml-name name))
 
@@ -2401,7 +2409,7 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
            (values* (key) (nth-value 1 (funcall 'ir-checker-declaration-env dec key))))
       (case (car dec)
         ((:val :vals :val-rec :val-recs :fun :funs :expr)
-         (list (list :val
+         (list (list* :val
                      (mapcar (lambda (binding)
                                (destructuring-bind (name status type) binding
                                  (declare (ignore status))
@@ -2409,7 +2417,11 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
                                        (ignore-errors (current-binding-symbol name))
                                        type)))
                              (values* :env))
-                     simplified)))
+                     simplified
+                     ;; A binding `val pat = e' whose pattern is not a
+                     ;; variable: its IR pattern, and its variables' cells.
+                     (and (car *ir-val-patterns*)
+                          (list :patterns (reverse (car *ir-val-patterns*)))))))
         (:datatype
          (list (list :datatype
                      (mapcar (lambda (binding)
@@ -2436,7 +2448,9 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
         ((:exception :exception-alias)
          (list (list (car dec) (ir-declaration-path (second dec))
                      (and (eq (car dec) :exception-alias) (third dec))
-                     (third (first (values* :env))))))
+                     (third (first (values* :env)))
+                     ;; The exception's cell.
+                     (ignore-errors (current-binding-symbol (second dec))))))
         (:structure
          (let ((sigexp (getf (cdddr dec) :sigexp)))
            (list (list :structure (ir-declaration-path (second dec))
@@ -2461,13 +2475,34 @@ for which the IR terms TERMS ((lowered . simplified) ...) were compiled."
         (:functor
          (list (list :functor (second dec) :ast dec)))
         (:signature (list (list :signature (second dec) (third dec))))
-        (:open (list (list :open (second dec))))))))
+        (:open (list (list :open (second dec))))
+        ;; `local A in B end': B's declarations are recorded on their own;
+        ;; A's bindings are lexical variables of the program.
+        (:local
+         (list (list :local
+                     (mapcar (lambda (local-dec)
+                               (list (car local-dec)
+                                     (and (consp local-dec)
+                                          (reverse (local-declaration-lexical-bindings local-dec)))))
+                             (second dec))
+                     simplified)))))))
+
+(defvar *ir-program-mark* nil
+  "The declarations recorded before the declaration being compiled.")
 
 (defun ir-note-declaration (dec terms)
-  "Record the IR declarations of DEC (see *SML-IR-PROGRAM*)."
+  "Record the IR declarations of DEC (see *SML-IR-PROGRAM*).  Those of a
+`local' come before the declarations of its body, which were recorded
+first."
   (when (and *sml-ir-program* (null *functor-scope-variables*))
-    (dolist (declaration (ir-declarations-of dec terms))
-      (push declaration (car *sml-ir-program*)))))
+    (let ((declarations (reverse (ir-declarations-of dec terms))))
+      (if (and (eq (car dec) :local) *ir-program-mark*
+               (tailp *ir-program-mark* (car *sml-ir-program*)))
+          (setf (car *sml-ir-program*)
+                (append (ldiff (car *sml-ir-program*) *ir-program-mark*)
+                        declarations
+                        *ir-program-mark*))
+          (setf (car *sml-ir-program*) (append declarations (car *sml-ir-program*)))))))
 
 (defun sml-ir-program (source &key (package "SML.IR-PROGRAM"))
   "The IR declarations of the SML program SOURCE, compiled (not run) in
