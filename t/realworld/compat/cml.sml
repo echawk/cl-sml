@@ -5,7 +5,10 @@
    (system cl-sml/cml, docs/DESIGN-CML.md).  run runs its function as the
    first thread of RunCML.doit and shuts down when it returns, which ends
    the threads still blocked (the sieve's filters).  exit ends the calling
-   thread. *)
+   thread.  The Basis's CML is reached through BasisCML: within the new
+   structure, cl-sml would take CML.spawn for the new structure's own. *)
+
+structure BasisCML = CML
 
 structure CML : sig
 
@@ -27,9 +30,9 @@ structure CML : sig
 
     datatype 'a result = Value of 'a | Raised of exn
 
-    fun spawn f = ignore (CML.spawn f)
-    val yield = CML.yield
-    fun exit () = CML.exit ()
+    fun spawn f = ignore (BasisCML.spawn f)
+    val yield = BasisCML.yield
+    fun exit () = BasisCML.exit ()
 
     fun run (f, arg) = let
           val result = ref NONE
@@ -44,9 +47,9 @@ structure CML : sig
               | NONE => raise Fail "deadlock"
           end
 
-    type 'a chan = 'a CML.chan
-    val channel = CML.channel
-    val send = CML.send
-    val recv = CML.recv
+    type 'a chan = 'a BasisCML.chan
+    val channel = BasisCML.channel
+    val send = BasisCML.send
+    val recv = BasisCML.recv
 
   end
