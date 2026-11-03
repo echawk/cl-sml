@@ -77,16 +77,22 @@
               '(:struct ((:val (:pat-var "compare") (:var "TyName.compare"))))))))
 
 (test compile-literal-case-uses-native-common-lisp-case
-  (let ((form (cl-sml:compile-sml-expression-string
-               "case code of 1 => \"one\" | 2 => \"two\" | _ => \"other\""
-               :package "SML.COMPILER-TEST")))
-    (is (eq 'case (first form)))
-    (is (string= "code" (symbol-name (second form))))
-    (is (equal '(1) (first (third form))))
-    (is (equal '(2) (first (fourth form))))
-    (is (eq 'otherwise (first (fifth form))))
-    (is (search "INVOKE-SML-CASE-ACTION"
-                (write-to-string form :pretty nil)))))
+  (flet ((compiled ()
+           (cl-sml:compile-sml-expression-string
+            "case code of 1 => \"one\" | 2 => \"two\" | _ => \"other\""
+            :package "SML.COMPILER-TEST")))
+    ;; A decision tree (ROADMAP item 11) with its actions inline, and
+    ;; without decision trees, actions as thunks.
+    (dolist (trees '(t nil))
+      (let ((form (let ((cl-sml:*sml-decision-trees* trees)) (compiled))))
+        (is (eq 'case (first form)))
+        (is (string= "code" (symbol-name (second form))))
+        (is (equal '(1) (first (third form))))
+        (is (equal '(2) (first (fourth form))))
+        (is (eq 'otherwise (first (fifth form))))
+        (is (eq (not trees)
+                (not (not (search "INVOKE-SML-CASE-ACTION"
+                                  (write-to-string form :pretty nil))))))))))
 
 (test compile-self-tail-calls-as-jumps
   (flet ((compiled (source)

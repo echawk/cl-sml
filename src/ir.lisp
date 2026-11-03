@@ -1452,8 +1452,12 @@ rows whose tests there do not exclude KEY."
             (loop for row in rows
                   for pattern = (nth column (dt-row-patterns row))
                   for row-key = (and (not (dt-wild-p pattern)) (dt-key pattern))
-                  for staticp = (and row-key (dt-static-key pattern))
-                  unless (and staticp (not (equal row-key key)))
+                  ;; Two static keys exclude each other; a dynamic key
+                  ;; may denote any constructor.
+                  unless (and row-key
+                              (dt-static-key pattern)
+                              (member (first key) '(:const :cons :tag))
+                              (not (equal row-key key)))
                     collect (multiple-value-bind (subpatterns bindings)
                                 (if (equal row-key key)
                                     (dt-subpatterns key pattern value width)
@@ -1584,7 +1588,7 @@ whose tag is not known at compile time (see IR-EMIT-CONSTRUCTOR-PATTERN)."
 (defun dt-complete-p (keys patterns)
   "Do the static KEYS cover every value of the type of PATTERNS?"
   (let ((type (ir-type (find-if-not #'dt-wild-p patterns))))
-    (case (first (first keys))
+    (case (if (member '(:cons) keys :test #'equal) :cons (first (first keys)))
       (:cons (= (length keys) 2))
       (:const (and (= (length keys) 2)
                    (member '(:const t) keys :test #'equal)
@@ -1693,7 +1697,7 @@ VALUE, or DEFAULT (NIL when the keys are all of the type's)."
 when the tree would be too large."
   (let* ((temporaries nil)
          (forms (mapcar (lambda (form)
-                          (if (ir-variable-p form)
+                          (if (and form (symbolp form))
                               form
                               (let ((temporary (gensym "VALUE")))
                                 (push (list temporary form) temporaries)

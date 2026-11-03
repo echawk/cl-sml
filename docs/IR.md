@@ -58,8 +58,9 @@ assigned: what the simplifier knows about a cell stays true.
 
 ### Patterns
 
-Patterns are IR data too, `(kind type . fields)`; `ir-emit-pattern` turns
-them into trivia patterns.  Lowering takes every decision `compile-pat`
+Patterns are IR data too, `(kind type . fields)`; matches are compiled
+from them to decision trees (see Emission), and `ir-emit-pattern` turns
+them into trivia patterns for the matches that are not.  Lowering takes every decision `compile-pat`
 takes and records it:
 
 | kind | fields |
@@ -87,8 +88,40 @@ such match, not only `fun` clauses); a match on literals is a CL `case`
 whose actions are thunks; a match of 12 or more rules on the first field
 of a tuple is a `case` on that field whose groups are hoisted into
 global functions (taking the variables in scope that they use, computed at
-emission); others are `trivia:match` or, for several scrutinees,
-`trivia:match*`.
+emission).  Other matches, and the rules of `handle`, are decision trees
+(ROADMAP 11; Maranget, "Compiling pattern matching to good decision
+trees", ML Workshop 2008), built by `ir-emit-decision-tree` on a matrix of
+rows (a rule's patterns, the variables bound so far) over columns (the
+forms of the subterms left to test):
+
+- tuples, records and refs are taken apart, never tested, and only the
+  fields some row tests or binds become columns;
+- the column tested is one where the first row is refutable, with the
+  longest run of refutable rows from the top (Maranget's heuristics f and
+  p); the subterm is let-bound once and tested once;
+- constants and constructors whose tags are known at compile time
+  (`:eq-tag`, `:boxed`, `:flat`, `::`, `nil`) exclude each other: a `case`
+  on the value or on its tag (`car` of a boxed value, slot 0 of a flat
+  one) or an `if`, whose branch for each key keeps the rows that may match
+  it; when the keys are all the constructors of the datatype (from the
+  pattern's type), there is no default branch.  Strings are compared as
+  trivia did (type and length, then characters);
+- exceptions and the constructors known only at run time (the other
+  `how`s) may denote the same value under different forms (`exception F =
+  E`, functor instances), so each is tested alone (comparing tags as
+  before), and where it matches, the rows of the others keep their column
+  to be tested later;
+- a rule reached from several leaves whose body is larger than
+  `*ir-shared-action-size*` (8 nodes) is an `flet` function of its
+  variables; smaller ones are copied;
+- no rule left raises the match's failure (`Match`, `Bind`, or re-raising
+  in a handler), as before.
+
+A tree with more than 64 + 16 x rules tests, or a pattern the builder does
+not handle, falls back to the old emission: a `case` with thunks for a
+match on literals, `trivia:match` (or `trivia:match*` for several
+scrutinees) otherwise.  `cl-sml:*sml-decision-trees*` (default `t`) set to
+`nil` compiles every match the old way, for comparison.
 
 ## Types
 
@@ -206,8 +239,8 @@ cells, functions, tuples, records and constructors of pure terms, and the
 primitives that cannot raise.  Int arithmetic can raise `Overflow`, so it
 is not pure.
 
-Pattern matching is still compiled by trivia, rule by rule; decision trees
-(ROADMAP 11) were not added (see the ROADMAP for why).
+Pattern matching is compiled to decision trees at emission (see
+Emission), not by a pass on the IR.
 
 ## Seeing the IR
 
