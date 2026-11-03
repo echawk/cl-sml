@@ -1619,6 +1619,16 @@ whose tag is not known at compile time (see IR-EMIT-CONSTRUCTOR-PATTERN)."
                                            rows)))))
     (dt-switch-form value branches default)))
 
+(defun dt-string-test (value string)
+  "Is VALUE, a string, STRING?  As trivia tests it: the type and length,
+then the characters (SML strings are simple)."
+  `(and (typep ,value '(simple-string ,(length string)))
+        ,@(if (<= (length string) 16)
+              (loop for char across string
+                    for i from 0
+                    collect `(char= (schar ,value ,i) ,char))
+              `((string= ,value ,string)))))
+
 (defun dt-switch-form (value branches default)
   "The CL form choosing among BRANCHES ((key . form) ...) by the key of
 VALUE, or DEFAULT (NIL when the keys are all of the type's)."
@@ -1638,7 +1648,8 @@ VALUE, or DEFAULT (NIL when the keys are all of the type's)."
          (cond ((null default) `(if ,value ,(branch '(:const t)) ,(branch '(:const nil))))
                ((stringp (second (first keys)))
                 `(cond ,@(mapcar (lambda (branch)
-                                   `((string= ,value ,(second (car branch))) ,(cdr branch)))
+                                   `(,(dt-string-test value (second (car branch)))
+                                     ,(cdr branch)))
                                  branches)
                        (t ,default)))
                (t `(case ,value ,@(clauses #'second) ,@(otherwise)))))
@@ -1664,12 +1675,15 @@ VALUE, or DEFAULT (NIL when the keys are all of the type's)."
                    (t `(if (consp ,value) ,form-2 ,form-1))))))
         (t
          (let ((kinds (remove-duplicates (mapcar #'third keys))))
-           `(case ,(cond ((or default (member 0 kinds))
-                          `(let ((v ,value))
-                             (cond ((symbolp v) v) ((consp v) (car v)) (t (svref v 0)))))
-                         ((equal kinds '(:flat)) `(svref ,value 0))
-                         ((equal kinds '(:boxed)) `(car ,value))
-                         (t `(if (consp ,value) (car ,value) (svref ,value 0))))
+           ;; The tag of a value of a constructor of another kind than
+           ;; those of KEYS is the value, which is no key.
+           `(case ,(cond ((and (null default) (equal kinds '(:flat))) `(svref ,value 0))
+                         ((and (null default) (equal kinds '(:boxed))) `(car ,value))
+                         (t `(cond ,@(and (member :boxed kinds)
+                                          `(((consp ,value) (car ,value))))
+                                   ,@(and (member :flat kinds)
+                                          `(((simple-vector-p ,value) (svref ,value 0))))
+                                   (t ,value))))
               ,@(clauses #'second)
               ,@(otherwise))))))))
 
