@@ -23,14 +23,18 @@
 resolved at the end of each declaration, so that a structure is complete
 before it is matched against a signature."
   (let ((env (make-env)))
-    (dolist (group (dec-groups decs) env)
+    (do-dec-groups (group decs (context-plus-env c env))
       (setf env (env-plus env (elab-dec (context-plus-env c env) group)))
       (let ((*position-fallback* (first group)))
-        (resolve-overloading)))))
+        (resolve-overloading)))
+    env))
 
 (defun elab-strexp (c strexp)
   "The environment STREXP elaborates to."
   (let ((*position-fallback* (if (node-offset strexp) strexp *position-fallback*)))
+    (when *functor-instance-checks*
+      (dolist (template (gethash strexp *functor-instance-checks*))
+        (check-functor-instance c template strexp)))
     (ecase (car strexp)
       (:struct                          ; [Rule 50]
        (env-clean (elab-strdecs c (second strexp))))
@@ -52,6 +56,7 @@ before it is matched against a signature."
          (elab-strexp (context-plus-env c env) (third strexp)))))))
 
 (defun lookup-funsig (c name node)
+  (note-identifier c node name :funid)
   (or (cdr (assoc name (env-f (context-env c)) :test #'string=))
       (elab-error node "unknown functor ~A" name)))
 
@@ -93,6 +98,7 @@ the functor body generates."
               env)))
 
 (defun lookup-sig (c name node)
+  (note-identifier c node name :sigid)
   (or (cdr (assoc name (env-g (context-env c)) :test #'string=))
       (elab-error node "unknown signature ~A" name)))
 
@@ -297,12 +303,18 @@ the structures have in common, pairwise (HaMLet ElabModule, SHARINGSpec)."
 (defun elab-funbind (c node)
   "[Rule 86] functor funid (strid : sigexp) <: sigexp'> = strexp, and the
 derived form funid (spec), whose specification's names the body sees as if
-opened (Appendix A)."
+opened (Appendix A).  With defunctorisation, the functor signature also
+carries the template its applications copy."
   (let* ((stamp *stamp*)
+         (scan (and (defunctorizing-p) (make-functor-scan (context-env c))))
+         (*functor-scan* scan)
          (param (node-key node :param))
          (param-sigexp (or (node-key node :param-sigexp)
                            (list :sig (node-key node :param-specs))))
          (sig (elab-sigexp c param-sigexp))
+         (scanned-param (when scan
+                          (setf (functor-scan-param scan) param
+                                (functor-scan-param-env scan) (sig-env sig))))
          (body-context
            (if param
                (context-plus-env c (make-env nil nil (list (cons param (sig-env sig)))))
@@ -317,7 +329,9 @@ opened (Appendix A)."
                                  (or (<= (tyname-stamp tyname) stamp)
                                      (member tyname (sig-tynames sig))))
                                (env-tynames result))))
-    (make-funsig (sig-tynames sig) (sig-env sig) generated result)))
+    (declare (ignore scanned-param))
+    (make-funsig (sig-tynames sig) (sig-env sig) generated result
+                 (and scan (functor-template scan node param-sigexp)))))
 
 (defun elab-funbinds (c group)
   (check-distinct-labels (first group) (mapcar #'second group))

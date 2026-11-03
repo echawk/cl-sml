@@ -30,7 +30,10 @@ Returns the environment it binds and the parser environment it leaves."
 (its positions in the parser's tables, which must still be bound), in ENV.
 Returns the environment it binds."
   (let ((*source* source)
-        (*filename* filename))
+        (*filename* filename)
+        (*functor-instances* 0)
+        (*functor-instance-checks* (and cl-sml:*sml-defunctorize*
+                                        (make-hash-table :test 'eq))))
     (elab-top-level-decs (make-context env) (rest program))))
 
 (defun basis-structure-tynames (env tycon &rest members)

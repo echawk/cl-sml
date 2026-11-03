@@ -423,6 +423,13 @@ from the AST by COMPILE-EXPR-DIRECT, as before the IR.")
   "When true, the IR is simplified (inlining, beta reduction, constant
 folding, dead-binding elimination, known cases) before CL is emitted.")
 
+(defvar *sml-defunctorize* nil
+  "When true, the native checker specialises each application of a functor
+at compile time (defunctorisation, src/types/defunctorize.lisp): the
+application becomes an ordinary structure, a copy of the functor's body.
+The Coalton backend always sets it; the CL backend applies functors at run
+time unless it is set.")
+
 (defvar *ir-fun-type-node* nil
   "The AST node whose type is that of the `fun' whose clauses are being
 lowered to the IR, when it is not the clauses themselves.")

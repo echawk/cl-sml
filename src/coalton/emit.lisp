@@ -1364,10 +1364,12 @@ its variables become globals."
       (:type (ce-type-declaration declaration))
       (:local (ce-local-declaration-bindings declaration))
       (:structure (ce-structure-declaration declaration))
-      ((:structure-alias :signature :open :datatype-replication) nil)
-      ((:functor :functor-application)
-       (coalton-unsupported "functors are not supported by the Coalton backend (~A ~A)"
-                            (first declaration) (second declaration))))))
+      ;; Applications are specialised (*sml-defunctorize*): a functor
+      ;; declares nothing of its own.
+      ((:structure-alias :signature :open :datatype-replication :functor) nil)
+      (:functor-application
+       (coalton-unsupported "an application of functor ~A, which was not specialised"
+                            (third declaration))))))
 
 ;;; Record shapes: generated types, defined in the prelude's package.
 
@@ -1426,7 +1428,8 @@ Returns a list of (declaration forms) or, with ON-ERROR :COLLECT, of
 
 (defun sml-program-ir-for-coalton (source package-name)
   (let ((*sml-ir-simplify* nil)
-        (*sml-tupled-workers* t))
+        (*sml-tupled-workers* t)
+        (*sml-defunctorize* t))
     (sml-ir-program source :package package-name)))
 
 (defvar *coalton-program-counter* 0)

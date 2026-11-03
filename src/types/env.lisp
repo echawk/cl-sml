@@ -57,9 +57,13 @@
   tynames                               ; T, the bound (flexible) type names
   env)
 
-(defstruct (funsig (:constructor make-funsig (tynames env result-tynames result-env)))
+(defstruct (funsig (:constructor make-funsig (tynames env result-tynames result-env
+                                              &optional template)))
   tynames env                           ; (T)E, the parameter signature
-  result-tynames result-env)            ; (T')E', the result
+  result-tynames result-env             ; (T')E', the result
+  ;; With cl-sml:*sml-defunctorize*, what an application needs to copy the
+  ;; body (a FUNCTOR-TEMPLATE, defunctorize.lisp).
+  template)
 
 (defstruct (context (:constructor make-context (env &optional u)))
   env
