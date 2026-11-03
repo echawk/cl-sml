@@ -1,13 +1,55 @@
 # Project Todo
 
-- [ ] Continue SML97 conformance work.
+- [ ] Continue SML97 conformance work.  The default pipeline is the native
+  checker (`src/types/`) and the CL backend; HaMLet is only a test oracle
+  (`cl-sml/hamlet-oracle`) and a large test program.
+  - [x] Own corpora: `t/conformance/core` 63/63 and `t/conformance/modules`
+    57/57 with `--native`.
+  - HaMLet's conformance programs (`hamlet/test/*.sml`, judged by
+    `hamlet/test/CONFORMANCE.txt`), default pipeline, 2026-11:
+    - Must be accepted and run: 19/23 (was 17/23).  Fixed: `exhaustive`
+      (a match on all 256 chars is exhaustive), `id` (symbolic type
+      constructors such as `&`).  Failing: `abstype` and `fun-case` (notes
+      4 and 5: infeasible together with `abstype2` / in general; HaMLet
+      fails them too), `functor-poly` (HaMLet fails it too), `valrec`
+      (parses now; `val rec LESS = fn ...` is rejected, "val rec cannot
+      rebind constructor", where the Definition accepts it and raises Bind
+      at run time, see its note 3).
+    - Must be rejected or warned: 9/9.  `dec-strdec`: overloading is
+      resolved per value declaration, so cases A to C are rejected like
+      HaMLet does (allowed) and B'' and C' are rejected (required).
+    - Matter of interpretation: `flexrecord2`, `undetermined2` rejected,
+      as HaMLet does.
+  - Real-world corpus (`t/realworld/run.sh`, `MODES=native`, 119 programs
+    from external/benchmarks and LunarML's tests): 98/119 (was 96/119;
+    fixed bm-mlyacc and ln-mlbasis-scan-word).  Failures by class:
+    - Non-standard extensions (out of scope): SMLofNJ.Cont (cml-sieve,
+      pingpong), Int54 (int54), numeric literals with `_` (int-inf) and
+      hexadecimal reals (real, real-intinf), a `;` before `end` in a `let`
+      body (dlx), datatypes and `type` declarations that use an enclosing
+      type variable (core-equality, core-local_datatype; Successor ML,
+      ruled out by Definition section 2.9), `Word.wordSize = 64` required
+      (core-xorshift64).
+    - Optional Basis structures not provided: Posix (plclub-ray),
+      WideChar/WideString (widestring-*).
+    - Program bug (also fails under the reference compilers): barnes-hut.
+    - Word size: mandelbrot-rat assumes `Word.wordSize >= Int.precision`
+      (`Word.~>>` of `Word.fromInt n` for n near 2^62); our word is 62
+      bits.  The Basis allows any word size, so not a bug, but every
+      common compiler has a word at least as wide as int.
+    - Time-outs (performance, 120 s): count-graphs, fft, id-ray,
+      mandelbrot, mc-ray, simple; aobench takes 27 s alone and can time out
+      when six programs run in parallel.
+  - Remaining, in priority order:
+    1. `val rec` rebinding a constructor (HaMLet `valrec`): accept, and
+       raise Bind at run time (Definition rules 26 and 126).
+    2. Performance of the time-outs above (real arithmetic, arrays).
+    3. Optional Basis structures (Posix subset, WideChar/WideString) if
+       programs need them.
+    4. A word as wide as int (63 bits) to match other compilers.
   - [x] Core tuples, unit, patterns, records, exceptions, local declarations,
     type annotations/metadata, file loading, package namespaces, and REPL.
   - [x] Load all files in `hamlet/basis/all.sml` and `hamlet/hamlet.sml`.
-  - [x] Make HaMLet operational: it parses, elaborates (SML97 type checking)
-    and evaluates programs, e.g. `./cl-hamlet file.sml` and the `cl-hamlet`
-    REPL.  Known gaps: basis library is re-elaborated on every start (~6s),
-    and `sml-primitive-stub`s remain for rarely used primitives.
   - [ ] Load and run representative programs from `HOL/`.  `scripts/test-hol`
     loads 170 portableML, Holmake hfs, prekernel, src/0 and src/thm
     sources (with shims in `t/testdata/hol-shims/`), checked by the native
