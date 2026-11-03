@@ -397,6 +397,36 @@ Caveats:
   issue the user remembered) could make Coalton accept something our checker
   rejected. That is harmless, because our checker runs first.
 
+### What was built (ROADMAP 22)
+
+The backend (src/coalton, docs/IR.md "The Coalton backend") follows the
+table with these decisions, for the Coalton of late 2026 (fixed-arity
+functions, `A * B -> C`; native exceptions):
+
+- `int` is `IFix` (SBCL's fixnum, the CL backend's 63-bit range), with the
+  CL backend's checked operations (`|int+|` ... raise Overflow); `word` is
+  `UFix` (62 bits, wrapping), `word8` `U8`, `real` `F64`.
+- Pairs to 5-tuples are `Tuple` .. `Tuple5`; wider tuples and records a
+  generated type per label set, its fields' types as parameters.
+- Datatypes are `define-type`, with `(derive Eq)` when SML's equality
+  admits them; `''a` needs no annotation (Coalton infers `Eq :a`).
+- `order` is `Ordering`, `option` `Optional`, `'a ref` a newtype over
+  `Cell` whose `Eq` is identity (Coalton's `Cell` compares contents).
+- exn is the run time's exception values; `raise`/`handle` are Coalton's
+  `throw`/`catch` of the native exception `SmlException`, the Lisp
+  condition `sml-raised-exception`, so Coalton code, the CL backend and the
+  run time's primitives raise and handle the same exceptions.  Coalton's
+  `define-exception` takes no type variables and is closed, so it cannot
+  be SML's extensible exn itself.
+- A function with a tuple parameter is an N-argument worker
+  (`A * B -> C`) plus a wrapper; curried functions stay curried.
+
+Disagreements found: Coalton rejected nothing our checker accepted that
+was not the backend's fault.  Two places where SML and Coalton differ
+needed the backend to say more than the IR's types: a type variable SML
+defaults (`[] = []` at unit) and an expansive top-level value whose type
+has a variable (Coalton does not generalize it): both get unit.
+
 ## 9. Decisions and open questions
 
 Decided with the user (2026-10-31):

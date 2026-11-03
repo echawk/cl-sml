@@ -1,6 +1,7 @@
 ;;; Micro-benchmarks for the code generator (docs/ROADMAP.md items 13-14).
 ;;; Usage, from the repository root:
-;;;   sbcl --dynamic-space-size 4GB --script t/bench/run.lisp [native|plain] [NAME...]
+;;;   sbcl --dynamic-space-size 4GB --script t/bench/run.lisp [native|plain|coalton] [NAME...]
+;;; (coalton: through the Coalton backend, cl-sml/coalton.)
 ;;; Each program defines `benchmark : unit -> int'.  Prints the compile
 ;;; time, the best run time of three, the bytes consed by that run, and the
 ;;; result (which must not change when the compiler changes).
@@ -21,6 +22,27 @@
 (defvar *bench-checker*
   (if (equal (second (uiop:raw-command-line-arguments)) "plain") nil :native))
 
+(defvar *bench-coalton* (equal (second (uiop:raw-command-line-arguments)) "coalton"))
+
+(when *bench-coalton*
+  (ql:quickload :cl-sml/coalton :silent t)
+  (uiop:symbol-call '#:cl-sml '#:load-coalton-basis))
+
+(defun bench-load (pathname package)
+  "Compile and run the program; return its `benchmark' as a CL function of
+no arguments."
+  (if *bench-coalton*
+      (let* ((coalton-package (uiop:symbol-call '#:cl-sml '#:load-sml-file-via-coalton
+                                                pathname :package-name package))
+             (symbol (find-symbol "benchmark" coalton-package))
+             (*package* coalton-package))
+        (compile nil `(lambda () (,(find-symbol "COALTON" "COALTON")
+                                   (,symbol ,(find-symbol "UNIT" "COALTON"))))))
+      (progn
+        (cl-sml:load-sml-file pathname :package package)
+        (let ((function (cl-sml:sml-function "benchmark" package)))
+          (lambda () (funcall function (cl-sml::sml-unit)))))))
+
 (defun bench-seconds (start)
   (/ (- (get-internal-real-time) start) (float internal-time-units-per-second 1d0)))
 
@@ -37,15 +59,15 @@
   (let* ((package (format nil "SML.BENCH.~A" (string-upcase name)))
          (cl-sml:*sml-type-checker* *bench-checker*)
          (start (get-internal-real-time)))
-    (cl-sml:load-sml-file (merge-pathnames (format nil "~A.sml" name) *bench-directory*)
-                          :package package)
-    (let ((compile-seconds (bench-seconds start))
+    (let ((benchmark (bench-load (merge-pathnames (format nil "~A.sml" name) *bench-directory*)
+                                 package))
+          (compile-seconds (bench-seconds start))
           (best nil) (bytes nil) (result nil))
       (dotimes (i 3)
         #+sbcl (sb-ext:gc :full t)
         (let ((bytes0 (bench-bytes-consed))
               (run-start (get-internal-real-time)))
-          (setf result (funcall (cl-sml:sml-function "benchmark" package) (cl-sml::sml-unit)))
+          (setf result (funcall benchmark))
           (let ((seconds (bench-seconds run-start)))
             (when (or (null best) (< seconds best))
               (setf best seconds

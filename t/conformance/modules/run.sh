@@ -13,6 +13,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --checker) CONF_CHECKER=1 ;;
     --native) CONF_CHECKER=native ;;
+    --coalton) CONF_BACKEND=coalton ;;
     --basis) shift; CONF_BASIS=$1 ;;
     --timeout) shift; CONF_TIMEOUT=$1 ;;
     --isolate) shift; ISOLATE=$1 ;;
@@ -24,7 +25,7 @@ if [ -z "$ISOLATE" ]; then
   if [ "$CONF_CHECKER" = 1 ]; then ISOLATE=none; else ISOLATE=fork; fi
 fi
 CONF_ISOLATE=${CONF_ISOLATE:-$ISOLATE}
-export CONF_CHECKER CONF_BASIS CONF_TIMEOUT CONF_TESTS CONF_ISOLATE
+export CONF_CHECKER CONF_BASIS CONF_TIMEOUT CONF_TESTS CONF_ISOLATE CONF_BACKEND
 # Keep ASDF's fasl cache and cl-sml's generated artifacts out of $HOME and /tmp.
 export XDG_CACHE_HOME="$HERE/.cache"
 export TMPDIR="$HERE/tmp/"

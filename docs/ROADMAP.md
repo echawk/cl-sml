@@ -472,7 +472,18 @@ use control-flow analysis to find the target of each call, contify
 local functions, convert closures, and monomorphize hot polymorphic
 code. Item 19 and a whole-program build mode are needed first.
 
-### 22. Optional Coalton backend (XL)
+### 22. Optional Coalton backend (XL) — first version done
 
-See `PLAN.md`. This needs items 18 to 20. The backend must stay
-optional, and the plain CL backend must keep working without it.
+The system `cl-sml/coalton` (src/coalton) emits Coalton from the typed IR
+for the core language and structures; functors are rejected.  The Basis
+is `src/basis` emitted through the backend (1333 of its 1342
+declarations; the rest need IntInf beyond fixnums, Int64's range, or a
+structure inside `local`), over a small prelude of primitives
+(src/coalton/prelude.lisp).  Core corpus 62/63 through Coalton (abstype
+missing), Modules corpus 39/57 (16 functor tests, IntInf, a structure in
+`let`).  Design and decisions: docs/IR.md, "The Coalton backend".
+
+Next: defunctorise functor applications from the recorded ASTs (item 21);
+abstype and datatypes in `let`/`local`; an IntInf type of its own; faster
+code (Coalton is 1x to 6x slower than the CL backend on t/bench, mostly
+from tuples allocated at calls and polymorphic equality).
