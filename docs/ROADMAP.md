@@ -472,18 +472,42 @@ use control-flow analysis to find the target of each call, contify
 local functions, convert closures, and monomorphize hot polymorphic
 code. Item 19 and a whole-program build mode are needed first.
 
+**Done: defunctorisation.**  With `cl-sml:*sml-defunctorize*`, the native
+checker replaces each functor application by a copy of the functor's
+body, which it elaborates like any structure: the argument becomes a
+hidden structure `F%argK = A : PARAMSIG`, the body's copy refers to it,
+and the result signature constrains the copy (`:` or `:>`).  Each copy has
+its own datatypes and exceptions (generativity); the body's free
+identifiers keep their definition-site meaning through a hidden structure
+`F%env` declared after the functor; functors applied in functor bodies,
+the derived forms, and applications in structures, `let` and `local` are
+expanded too.  Details: docs/IR.md, "Functors: defunctorisation"
+(src/types/defunctorize.lisp).  The Coalton backend always sets the flag;
+the CL backend keeps run-time functors, and passes the Modules corpus
+with the flag too (`run.sh --native --defunctorize`, 57/57).
+
+Left: a Basis identifier, signature or functor that the body uses and
+that is rebound between the definition and an application is an error
+(checked) rather than reached; the copies are not shared between
+applications with the same argument (code size); the CL backend could
+use the copies by default once their compile time and code size are
+measured.  The rest of the item (control-flow analysis, contification,
+closure conversion, monomorphisation) is not started.
+
 ### 22. Optional Coalton backend (XL) — first version done
 
 The system `cl-sml/coalton` (src/coalton) emits Coalton from the typed IR
-for the core language and structures; functors are rejected.  The Basis
+for the core language, structures and functors (each application
+specialised at compile time, item 21).  The Basis
 is `src/basis` emitted through the backend (1333 of its 1342
 declarations; the rest need IntInf beyond fixnums, Int64's range, or a
 structure inside `local`), over a small prelude of primitives
 (src/coalton/prelude.lisp).  Core corpus 62/63 through Coalton (abstype
-missing), Modules corpus 39/57 (16 functor tests, IntInf, a structure in
-`let`).  Design and decisions: docs/IR.md, "The Coalton backend".
+missing), Modules corpus 55/57 (IntInf, a structure in `let`; the 16
+functor tests pass since defunctorisation, they failed before).  Design and
+decisions: docs/IR.md, "The Coalton backend".
 
-Next: defunctorise functor applications from the recorded ASTs (item 21);
-abstype and datatypes in `let`/`local`; an IntInf type of its own; faster
+Next: abstype and datatypes in `let`/`local`; structures in `let` and
+`local` (so functor applications there); an IntInf type of its own; faster
 code (Coalton is 1x to 6x slower than the CL backend on t/bench, mostly
 from tuples allocated at calls and polymorphic equality).

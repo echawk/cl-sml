@@ -221,7 +221,8 @@ Commands are recognized only at the primary prompt, on lines starting with
 The system `cl-sml/coalton` compiles SML to [Coalton](https://github.com/coalton-lang/coalton)
 instead of plain Lisp, through the typed IR (docs/IR.md, "The Coalton
 backend").  Only that system depends on Coalton.  It covers the core
-language and structures (no functors), and its Basis Library is
+language, structures and functors (each functor application is specialised
+at compile time), and its Basis Library is
 `src/basis` itself, emitted to Coalton when it is first needed.
 
 ```lisp
