@@ -297,6 +297,21 @@ restriction, match checks and annotations")
   (is (null (warnings "val x = (raise Fail \"x\") handle Fail _ => 1")))
   (is (equal '("match rule 2 is redundant")
              (warnings "val x = 1 handle Div => 1 | Div => 2")))
+  ;; Exceptions are generative per declaration and per functor application
+  ;; (rules 31, 54), not per specification (rule 73).
+  (is (null (warnings "functor F () = struct exception E of int end
+structure A = F () structure B = F ()
+val x = (raise A.E 1) handle B.E _ => 0 | A.E n => n")))
+  (is (null (warnings "signature S = sig exception X end
+structure A : S = struct exception X end
+structure B :> S = struct exception X end
+val x = (raise A.X) handle B.X => 0 | A.X => 1")))
+  (is (equal '("match rule 2 is redundant")
+             (warnings "signature S = sig exception X end
+structure A : S = struct exception X end
+functor G (P : S) = struct exception Y = P.X end
+structure B = G (A)
+val x = (raise A.X) handle B.Y => 0 | A.X => 1")))
   (let ((cl-sml:*native-match-warnings* nil))
     (is (equal "val f : t -> int
 " (subseq (cl-sml:typecheck-sml-string "datatype t = A | B val f = fn A => 1") 19)))))

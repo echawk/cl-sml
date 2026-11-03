@@ -211,11 +211,42 @@ monomorphic value polymorphic (HaMLet test undetermined3)."
                          (scheme->string (valstr-scheme valstr))
                          (scheme->string (valstr-scheme sig-valstr)))))))
 
+(defun adopt-exception-ids (sig-env env &optional (ids (make-hash-table :test 'equal)))
+  "SIG-ENV with each exception taking the identity of the exception of the
+same name in ENV, which matches it; IDS maps each replaced identity to its
+replacement.  An exception is generative at its declaration, not at a
+specification (Definition rules 31 and 73): two structures matched
+against one signature keep their exceptions apart."
+  (values
+   (make-env (loop for (vid . valstr) in (env-ve sig-env)
+                   collect (let ((actual (cdr (assoc vid (env-ve env) :test #'string=))))
+                             (cons vid
+                                   (if (and actual
+                                            (eq (valstr-status valstr) :e)
+                                            (eq (valstr-status actual) :e))
+                                       (progn (setf (gethash (valstr-id valstr) ids)
+                                                    (valstr-id actual))
+                                              (make-valstr (valstr-scheme valstr) :e
+                                                           (valstr-id actual)))
+                                       valstr))))
+             (env-te sig-env)
+             (loop for (strid . sub) in (env-se sig-env)
+                   collect (cons strid
+                                 (let ((actual (env-lookup-strid env strid)))
+                                   (if actual
+                                       (adopt-exception-ids sub actual ids)
+                                       sub))))
+             (env-g sig-env)
+             (env-f sig-env))
+   ids))
+
 (defun match-sig (env sig node)
   "Match ENV against signature SIG (HaMLet Sig.match): returns phi of SIG's
-environment, which ENV enriches, and the realisation phi."
+environment, which ENV enriches, with ENV's exceptions (ADOPT-EXCEPTION-IDS),
+the realisation phi, and the map from SIG's exception identities to ENV's."
   (let* ((phi (match-realisation env (sig-env sig) (sig-tynames sig)
                                  (make-hash-table :test 'eq) node nil))
          (instance (realise-env (sig-env sig) phi)))
     (check-enrichment env instance node nil)
-    (values instance phi)))
+    (multiple-value-bind (instance ids) (adopt-exception-ids instance env)
+      (values instance phi ids))))

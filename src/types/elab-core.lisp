@@ -946,11 +946,11 @@ HaMLet); they must not reach the top level (rule 87)."
                            (make-valstr (mono-scheme (if ty
                                                          (arrow-type (elab-ty c ty) (exn-type))
                                                          (exn-type)))
-                                        :e (gensym "EXN"))))
+                                        :e (new-exception-id))))
                         (:exception-alias ; [Rule 31]
                          (let ((valstr (lookup-long-vid c (third node) node)))
                            (cond ((null valstr)
-                                  (make-valstr (mono-scheme (exn-type)) :e (gensym "EXN")))
+                                  (make-valstr (mono-scheme (exn-type)) :e (new-exception-id)))
                                  ((eq (valstr-status valstr) :e) valstr)
                                  (t (elab-error node "~A is not an exception" (third node))))))))))
 

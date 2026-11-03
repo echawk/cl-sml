@@ -89,6 +89,22 @@ val _ = print (Int.toString (U.Array.sub (a, 1)) ^ \"\\n\")"))))
 
 ;;; Functors are generative: each application evaluates the body afresh.
 
+(test functor-exceptions-are-generative-and-aliases-keep-identity
+  ;; Each application declares new exceptions (rule 54); `exception Y = P.X'
+  ;; denotes the argument's exception (rule 31).
+  (let ((program "signature S = sig exception X end
+functor F () = struct exception E of int end
+structure A = F () structure B = F ()
+structure C : S = struct exception X end
+functor G (P : S) = struct exception Y = P.X fun f () = raise Y end
+structure GC = G (C)
+val r1 = (raise B.E 1) handle A.E n => n | B.E _ => 2
+val r2 = (raise C.X) handle GC.Y => 3 | _ => 0
+val r3 = (GC.f ()) handle C.X => 4 | _ => 0
+val _ = app (fn n => print (Int.toString n ^ \"\\n\")) [r1, r2, r3]"))
+    (is (string= (lines "2" "3" "4") (run-sml program)))
+    (is (string= (lines "2" "3" "4") (load-sml program)))))
+
 (test functor-applications-have-state-of-their-own
   (let ((program "functor Counter (X : sig val start : int end) = struct
   val r = ref X.start

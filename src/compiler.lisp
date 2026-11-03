@@ -1739,7 +1739,8 @@ names LEXICAL-ENV binds, which they shadow."
      (let ((name (local-binding-symbol
                   (second dec) (local-declaration-lexical-bindings dec)))
            (target (resolved-sml-symbol (third dec) lexical-env)))
-       `(let ((,name ,(if (lexical-symbol-for-name (third dec) lexical-env)
+       `(let ((,name ,(if (or (lexical-symbol-for-name (third dec) lexical-env)
+                              (functor-scope-long-name-variable (third dec)))
                           target
                           `(if (boundp ',target)
                                (symbol-value ',target)

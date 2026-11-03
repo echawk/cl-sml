@@ -48,7 +48,7 @@ before it is matched against a signature."
          ;; [Rule 53] opaque: the signature's own (fresh) type names.
          (let ((instance (match-sig env sig strexp)))
            (if (getf (cdddr strexp) :opaque)
-               (sig-env sig)
+               (values (adopt-exception-ids (sig-env sig) env))
                instance))))
       (:str-app (elab-functor-application c strexp (second strexp) (third strexp)))
       (:str-let                         ; [Rule 55]
@@ -66,11 +66,35 @@ signature, then realise the result, with fresh names for the type names
 the functor body generates."
   (let* ((funsig (lookup-funsig c funid node))
          (env (elab-strexp c arg)))
-    (multiple-value-bind (instance phi)
+    (multiple-value-bind (instance phi ids)
         (match-sig env (make-sig (funsig-tynames funsig) (funsig-env funsig)) node)
       (declare (ignore instance))
       (let ((phi (renaming (funsig-result-tynames funsig) phi)))
-        (realise-env (funsig-result-env funsig) phi)))))
+        (renew-exceptions (realise-env (funsig-result-env funsig) phi)
+                          ids (funsig-stamp funsig))))))
+
+(defun renew-exceptions (env ids stamp)
+  "ENV with the exceptions of the functor parameter (the keys of IDS) taken
+from the argument, and those the functor body declared (identities after
+STAMP) fresh: each application generates new exceptions (rules 31, 54)."
+  (labels ((renew (id)
+             (or (gethash id ids)
+                 (if (and (consp id) (integerp (cdr id)) (> (cdr id) stamp))
+                     (setf (gethash id ids) (new-exception-id))
+                     id)))
+           (walk (env)
+             (make-env (loop for (vid . valstr) in (env-ve env)
+                             collect (cons vid
+                                           (if (eq (valstr-status valstr) :e)
+                                               (make-valstr (valstr-scheme valstr) :e
+                                                            (renew (valstr-id valstr)))
+                                               valstr)))
+                       (env-te env)
+                       (loop for (strid . sub) in (env-se env)
+                             collect (cons strid (walk sub)))
+                       (env-g env)
+                       (env-f env))))
+    (walk env)))
 
 ;;;; Structure bindings [rules 57, 61]
 
@@ -203,7 +227,7 @@ StaticEnv.isWellFormed)."
                              (make-valstr (mono-scheme (if ty
                                                            (arrow-type (elab-ty c ty) (exn-type))
                                                            (exn-type)))
-                                          :e (gensym "EXN")))))))
+                                          :e (new-exception-id)))))))
     (:spec-structure                    ; [Rules 74, 84]
      (make-env nil nil (list (cons (second spec) (elab-sigexp-env c (third spec))))))
     (:spec-include                      ; [Rule 75]
@@ -331,7 +355,8 @@ carries the template its applications copy."
                                (env-tynames result))))
     (declare (ignore scanned-param))
     (make-funsig (sig-tynames sig) (sig-env sig) generated result
-                 (and scan (functor-template scan node param-sigexp)))))
+                 (and scan (functor-template scan node param-sigexp))
+                 stamp)))
 
 (defun elab-funbinds (c group)
   (check-distinct-labels (first group) (mapcar #'second group))

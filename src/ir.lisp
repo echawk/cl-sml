@@ -690,7 +690,9 @@ returns, as COMPILE-LOCAL-DECL compiles it."
              body)))
       (:exception-alias
        (let ((target (resolved-sml-symbol (third dec) lexical-env))
-             (lexicalp (and (lexical-symbol-for-name (third dec) lexical-env) t))
+             ;; Also a member of a structure the functor body names.
+             (lexicalp (or (and (lexical-symbol-for-name (third dec) lexical-env) t)
+                           (and (functor-scope-long-name-variable (third dec)) t)))
              (body (funcall body-thunk)))
          (ir :decl (ir-type body)
              (list :exception-alias (local-binding-symbol (second dec) bindings)
