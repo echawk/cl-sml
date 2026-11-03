@@ -510,3 +510,5 @@ decisions: docs/IR.md, "The Coalton backend".
 Next: an IntInf type of its own; faster code (Coalton is 1x to 6x slower
 than the CL backend on t/bench, mostly from tuples allocated at calls and
 polymorphic equality).
+
+Concurrent ML (not started): design and milestones in docs/DESIGN-CML.md.
