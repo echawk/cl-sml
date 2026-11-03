@@ -743,3 +743,14 @@ val _ = p (f 0)  val _ = p (f 1)  val _ = p (f 2)
 functor M (type u) = struct datatype t = X | Y of u * u fun h (Y (_, _)) = \"d\" | h X = \"e\" end
 structure N = M (type u = int)
 val _ = p (N.h (N.Y (1, 2)))"))))
+
+(test decision-trees-switch-on-self-tail-call-arguments
+  ;; The switches test the loop variables of the self-tail calls directly.
+  (is (string= "41 3 "
+               (run-sml-with-and-without-trees
+                "fun p s = print (s ^ \" \")
+fun count (0, a) = a | count (1, a) = count (0, a + 1) | count (n, a) = count (n - 1, a + 2)
+val _ = p (Int.toString (count (21, 0)))
+datatype d = X | Y | Z
+fun walk (X, n) = n | walk (Y, n) = walk (X, n + 1) | walk (Z, n) = walk (Y, n + 2)
+val _ = p (Int.toString (walk (Z, 0)))"))))

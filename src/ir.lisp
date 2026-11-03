@@ -1623,26 +1623,67 @@ whose tag is not known at compile time (see IR-EMIT-CONSTRUCTOR-PATTERN)."
                                            rows)))))
     (dt-switch-form value branches default)))
 
-(defun dt-string-test (value string)
-  "Is VALUE, a string, STRING?  As trivia tests it: the type and length,
-then the characters (SML strings are simple)."
-  `(and (typep ,value '(simple-string ,(length string)))
-        ,@(if (<= (length string) 16)
-              (loop for char across string
-                    for i from 0
-                    collect `(char= (schar ,value ,i) ,char))
-              `((string= ,value ,string)))))
+(defun dt-string-switch (value branches default)
+  "Choose among BRANCHES ((key . form) ...), whose keys are strings, as
+trivia does: by type and length once, then by characters (SML strings are
+simple)."
+  (let ((block (gensym "STRING"))
+        (lengths (remove-duplicates (mapcar (lambda (branch) (length (second (car branch))))
+                                            branches))))
+    `(block ,block
+       (when (simple-string-p ,value)
+         (case (length ,value)
+           ,@(mapcar
+              (lambda (length)
+                `((,length)
+                  (cond
+                    ,@(loop for ((nil string) . form) in branches
+                            when (= (length string) length)
+                              collect `(,(if (<= length 16)
+                                             `(and ,@(loop for char across string
+                                                           for i from 0
+                                                           collect `(char= (schar ,value ,i) ,char)))
+                                             `(string= ,value ,string))
+                                        (return-from ,block ,form))))))
+              lengths)))
+       ,default)))
+
+(defun dt-case (form test branches default)
+  "Choose among BRANCHES ((key . form) ...), whose keys are constants or
+tags compared by TEST, by FORM, or DEFAULT (NIL when the keys are all
+those of the type).  SBCL compiles a CASE on a few sparse keys to a
+perfect hash, slower than comparing them in turn, as trivia did."
+  (flet ((no-jump-tables (form)
+           #+sbcl `(locally (declare (optimize (sb-c:jump-table 0))) ,form)
+           #-sbcl form)
+         (jump-tables (form)
+           #+sbcl `(locally (declare (optimize (sb-c:jump-table 1))) ,form)
+           #-sbcl form))
+    (if (> (length branches) 12)
+        `(case ,form
+           ,@(loop for ((key . branch) . more) on branches
+                   collect (if (and (null more) (null default))
+                               `(otherwise ,branch)
+                               `((,(second key)) ,branch)))
+           ,@(and default `((otherwise ,default))))
+        ;; FORM, when a variable, is not rebound: it may be one that a
+        ;; self-tail call in a branch assigns.
+        (let* ((value (if (symbolp form) form (gensym "KEY")))
+               (choice (no-jump-tables
+                        `(cond ,@(loop for ((key . branch) . more) on branches
+                                       collect (if (and (null more) (null default))
+                                                   `(t ,(jump-tables branch))
+                                                   `((,test ,value ',(second key))
+                                                     ,(jump-tables branch))))
+                               ,@(and default `((t ,(jump-tables default))))))))
+          (if (eq value form)
+              choice
+              `(let ((,value ,form)) ,choice))))))
 
 (defun dt-switch-form (value branches default)
   "The CL form choosing among BRANCHES ((key . form) ...) by the key of
 VALUE, or DEFAULT (NIL when the keys are all of the type's)."
-  (flet ((branch (key) (cdr (assoc key branches :test #'equal)))
-         (clauses (keyfn)
-           (loop for ((key . form) . more) on branches
-                 collect (if (and (null more) (null default))
-                             `(otherwise ,form)
-                             `((,(funcall keyfn key)) ,form))))
-         (otherwise () (and default `((otherwise ,default)))))
+  (flet ((branch (key) (cdr (assoc key branches :test #'equal))))
     (let ((keys (mapcar #'car branches)))
       (cond
         ((and (null default) (null (rest branches))) (cdr (first branches)))
@@ -1650,15 +1691,10 @@ VALUE, or DEFAULT (NIL when the keys are all of the type's)."
          `(if (consp ,value) ,(branch '(:cons)) ,(or (branch '(:const nil)) default)))
         ((eq (first (first keys)) :const)
          (cond ((null default) `(if ,value ,(branch '(:const t)) ,(branch '(:const nil))))
-               ((stringp (second (first keys)))
-                `(cond ,@(mapcar (lambda (branch)
-                                   `(,(dt-string-test value (second (car branch)))
-                                     ,(cdr branch)))
-                                 branches)
-                       (t ,default)))
-               (t `(case ,value ,@(clauses #'second) ,@(otherwise)))))
+               ((stringp (second (first keys))) (dt-string-switch value branches default))
+               (t (dt-case value 'eql branches default))))
         ((every (lambda (key) (eql (third key) 0)) keys)
-         `(case ,value ,@(clauses #'second) ,@(otherwise)))
+         (dt-case value 'eq branches default))
         ((null (rest branches))
          (let ((tag (second (first keys))))
            `(if ,(ecase (third (first keys))
@@ -1681,15 +1717,14 @@ VALUE, or DEFAULT (NIL when the keys are all of the type's)."
          (let ((kinds (remove-duplicates (mapcar #'third keys))))
            ;; The tag of a value of a constructor of another kind than
            ;; those of KEYS is the value, which is no key.
-           `(case ,(cond ((and (null default) (equal kinds '(:flat))) `(svref ,value 0))
-                         ((and (null default) (equal kinds '(:boxed))) `(car ,value))
-                         (t `(cond ,@(and (member :boxed kinds)
-                                          `(((consp ,value) (car ,value))))
-                                   ,@(and (member :flat kinds)
-                                          `(((simple-vector-p ,value) (svref ,value 0))))
-                                   (t ,value))))
-              ,@(clauses #'second)
-              ,@(otherwise))))))))
+           (dt-case (cond ((and (null default) (equal kinds '(:flat))) `(svref ,value 0))
+                          ((and (null default) (equal kinds '(:boxed))) `(car ,value))
+                          (t `(cond ,@(and (member :boxed kinds)
+                                           `(((consp ,value) (car ,value))))
+                                    ,@(and (member :flat kinds)
+                                           `(((simple-vector-p ,value) (svref ,value 0))))
+                                    (t ,value))))
+                    'eq branches default)))))))
 
 (defun ir-emit-decision-tree (scrutinees rules failure)
   "The CL form matching the values of the CL forms SCRUTINEES against RULES
