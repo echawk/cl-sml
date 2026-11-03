@@ -1157,6 +1157,15 @@ POSITION bound to the scrutinees TEMPS (Coalton symbols)."
             (,(co "LET") ,(mapcar (lambda (r v f) (list r (ce-to-cl (cdr f) v))) raws vars fields)
              ,(ce-lisp raw raws
                        `(vector (sml-record-shape ',(mapcar #'car fields)) ,@raws)))))))
+      ((eq (first type) :arrow)
+       ;; A Lisp function that calls the Coalton one (cl-sml/cml's
+       ;; primitives take SML functions: spawn, wrap, guard, ...).
+       (let ((f (ce-temp "f")) (x (ce-temp "x")) (g (ce-temp "g")))
+         `(,(co "LET") ((,f ,form))
+           (,(co "LET") ((,g (,(co "FN") (,x)
+                              ,(ce-to-cl (third type) `(,f ,(ce-from-cl (second type) x))))))
+            ,(ce-lisp raw (list g)
+                      `(lambda (argument) (coalton:call-coalton-function ,g argument)))))))
       ((equal (ce-type-name-of type) "option")
        (let ((x (ce-temp "x")) (r (ce-temp "r")))
          `(,(co "MATCH") ,form

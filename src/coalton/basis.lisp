@@ -20,9 +20,14 @@ sources call int (*CE-BUILTIN-TYPES*).")
   '(("TextIO" ("type instream   = int" . "type instream   = cl_object")
               ("type outstream  = int" . "type outstream  = cl_object"))
     ("BinIO" ("type instream   = int" . "type instream   = cl_object")
-             ("type outstream  = int" . "type outstream  = cl_object")))
+             ("type outstream  = int" . "type outstream  = cl_object"))
+    ;; cl-sml/cml's run-time objects (threads, channels, events, ...).
+    ("CML" ("type obj = int" . "type obj = cl_object"))
+    ("SyncVar" ("type obj = int" . "type obj = cl_object"))
+    ("Mailbox" ("type obj = int" . "type obj = cl_object")))
   "Changes to the Basis's sources for Coalton: the CL backend represents
-streams as the sources say (int), while Coalton's IFix is a fixnum.
+streams (and cl-sml/cml's objects) as the sources say (int), while
+Coalton's IFix is a fixnum.
 IntInf.int stays Int.int (its operations use int's), so IntInf values
 outside the fixnum range do not work in Coalton.")
 

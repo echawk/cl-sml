@@ -121,6 +121,17 @@
              (unless (uiop:symbol-call '#:cl-sml-cml-tests '#:run-cml-tests)
                (error "cl-sml CML tests failed"))))
 
+;;; CML through the Coalton backend.
+(asdf:defsystem #:cl-sml/cml-coalton-tests
+  :description "Tests of cl-sml's Concurrent ML through the Coalton backend"
+  :depends-on (#:cl-sml/cml-tests #:cl-sml/coalton)
+  :pathname "t/cml/"
+  :components ((:file "cml-coalton-tests"))
+  :perform (test-op (operation component)
+             (declare (ignore operation component))
+             (unless (uiop:symbol-call '#:cl-sml-cml-tests '#:run-cml-coalton-tests)
+               (error "cl-sml CML Coalton tests failed"))))
+
 ;;; The optional Coalton backend (docs/IR.md, "The Coalton backend"): SML
 ;;; programs compiled to Coalton through the typed IR.  Only this system
 ;;; depends on Coalton; cl-sml itself does not.

@@ -186,7 +186,11 @@ initial basis."
     (setf *sml-basis-extension-files*
           (append (remove file *sml-basis-extension-files* :test #'string=)
                   (list file))))
-  (setf (symbol-value (find-symbol "*BASIS-ENV*" '#:cl-sml.types)) nil))
+  (setf (symbol-value (find-symbol "*BASIS-ENV*" '#:cl-sml.types)) nil)
+  ;; The Coalton Basis too, if cl-sml/coalton has built it.
+  (let ((coalton-basis (find-symbol "*COALTON-BASIS*" '#:cl-sml)))
+    (when (and coalton-basis (boundp coalton-basis))
+      (setf (symbol-value coalton-basis) nil))))
 
 (defmacro define-sml-basis-extension (&rest names)
   "The Basis extension of the SML sources NAMES (relative to the cl-sml

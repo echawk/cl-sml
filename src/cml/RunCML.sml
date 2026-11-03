@@ -8,8 +8,10 @@
 
 structure RunCML :> RUN_CML =
 struct
+  (* The run time passes a status as 0 (success) or 1 (failure). *)
   val isRunning   = use{b = "RunCML.isRunning"} : unit -> bool
-  val run         = use{b = "RunCML.doit"} : (unit -> unit) -> OS.Process.status
-  fun doit (f, _) = run f
-  fun shutdown st = (use{b = "RunCML.shutdown"} : OS.Process.status -> 'a) st
+  val run         = use{b = "RunCML.doit"} : (unit -> unit) -> int
+  fun doit (f, _) = if run f = 0 then OS.Process.success else OS.Process.failure
+  fun shutdown st = (use{b = "RunCML.shutdown"} : int -> 'a)
+                      (if OS.Process.isSuccess st then 0 else 1)
 end;

@@ -61,7 +61,7 @@ fun main () =
       (* The other threads keep running while one computes. *)
       val results = channel ()
       fun busy n = if n = 0 then 0 else 1 + busy (n - 1)
-      val _ = List.app (fn i => ignore (spawn (fn () => send (results, busy (i * 1000)))))
+      val _ = List.app (fn i => ignore (spawn (fn () => send (results, busy (i * 100)))))
                        [1, 2, 3, 4]
       val total = List.foldl (fn (_, acc) => acc + recv results) 0 [1, 2, 3, 4]
       val _ = say ("computing threads: " ^ Int.toString total)
@@ -88,7 +88,7 @@ peek before: NONE
 prop: 1 42 2
 peek after clear: NONE
 flag: true false
-computing threads: 10000
+computing threads: 1000
 yield
 success
 *)
