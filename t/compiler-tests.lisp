@@ -81,18 +81,28 @@
            (cl-sml:compile-sml-expression-string
             "case code of 1 => \"one\" | 2 => \"two\" | _ => \"other\""
             :package "SML.COMPILER-TEST")))
-    ;; A decision tree (ROADMAP item 11) with its actions inline, and
-    ;; without decision trees, actions as thunks.
-    (dolist (trees '(t nil))
-      (let ((form (let ((cl-sml:*sml-decision-trees* trees)) (compiled))))
-        (is (eq 'case (first form)))
-        (is (string= "code" (symbol-name (second form))))
-        (is (equal '(1) (first (third form))))
-        (is (equal '(2) (first (fourth form))))
-        (is (eq 'otherwise (first (fifth form))))
-        (is (eq (not trees)
-                (not (not (search "INVOKE-SML-CASE-ACTION"
-                                  (write-to-string form :pretty nil))))))))))
+    ;; Without decision trees, a CASE whose actions are thunks.
+    (let ((form (let ((cl-sml:*sml-decision-trees* nil)) (compiled))))
+      (is (eq 'case (first form)))
+      (is (string= "code" (symbol-name (second form))))
+      (is (equal '(1) (first (third form))))
+      (is (equal '(2) (first (fourth form))))
+      (is (eq 'otherwise (first (fifth form))))
+      (is (search "INVOKE-SML-CASE-ACTION" (write-to-string form :pretty nil))))
+    ;; A decision tree (ROADMAP item 11) tests `code' itself, with its
+    ;; actions inline.
+    (let ((form (compiled)))
+      (labels ((tests-p (key x)
+                 (and (consp x)
+                      (or (and (eq (first x) 'eql)
+                               (symbolp (second x))
+                               (string= "code" (symbol-name (second x)))
+                               (equal (third x) `',key))
+                          (tests-p key (car x))
+                          (tests-p key (cdr x))))))
+        (is (tests-p 1 form))
+        (is (tests-p 2 form)))
+      (is (not (search "INVOKE-SML-CASE-ACTION" (write-to-string form :pretty nil)))))))
 
 (test compile-self-tail-calls-as-jumps
   (flet ((compiled (source)
