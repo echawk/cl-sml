@@ -1410,6 +1410,11 @@ matched against FORM."
     (:p-exn (fifth pattern))
     (:p-con (sixth pattern))))
 
+(defmacro ir-known (type form)
+  "FORM, whose value is known to be of TYPE."
+  #+sbcl `(sb-ext:truly-the ,type ,form)
+  #-sbcl `(the ,type ,form))
+
 (defun dt-subforms (key value payloadp)
   "The forms of the subterms of VALUE, a variable, when it matches KEY."
   (ecase (first key)
@@ -1418,7 +1423,10 @@ matched against FORM."
     (:tag (ecase (third key)
             ((0) nil)
             (:boxed (list `(cdr ,value)))
-            (:flat (loop for i from 1 to (fourth key) collect `(svref ,value ,i)))))
+            ;; A simple-vector, known from the test of the tag, or from
+            ;; the type when no tag is tested; SVREF still checks the index.
+            (:flat (loop for i from 1 to (fourth key)
+                         collect `(svref (ir-known simple-vector ,value) ,i)))))
     (:exn (and payloadp (list `(cdr ,value))))
     (:con (and payloadp
                (list (if (eq (second key) :functor-tag)
