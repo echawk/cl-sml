@@ -1722,7 +1722,8 @@ names LEXICAL-ENV binds, which they shadow."
     ;; A structure declared by `local' or `let' is a module like any other;
     ;; the scope of its name is the compiler's business.
     ((member (car dec) '(:structure :structure-alias :structure-app :functor))
-     `(progn ,(compile-decl dec local-exceptions lexical-env)
+     `(progn ,(ir-compile-nested-structure
+               dec (lambda () (compile-decl dec local-exceptions lexical-env)))
              ,body))
     ((eq (car dec) :exception)
      (let* ((name (local-binding-symbol
