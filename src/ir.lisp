@@ -1724,15 +1724,15 @@ when the tree would be too large."
                                     (declare (ignorable ,@(mapcar #'first bindings)))
                                     ,form))
                        (t form))))
-                 (fill (form)
+                 (fill-leaves (form)
                    (cond ((atom form) form)
                          ((eq (first form) *dt-leaf-marker*) (leaf (second form) (third form)))
-                         (t (let ((head (fill (car form)))
-                                  (tail (fill (cdr form))))
+                         (t (let ((head (fill-leaves (car form)))
+                                  (tail (fill-leaves (cdr form))))
                               (if (and (eq head (car form)) (eq tail (cdr form)))
                                   form
                                   (cons head tail)))))))
-          (let ((body (fill tree)))
+          (let ((body (fill-leaves tree)))
             (loop for entry across actions
                   when (and entry (first entry))
                     do (destructuring-bind (name parameters . form) entry
@@ -1830,12 +1830,21 @@ when the tree would be too large."
        `(handler-case ,(ir-emit (third node))
           (sml-raised-exception (,condition-var)
             (let ((value (sml-exception-value ,condition-var)))
-              (trivia:match value
-                ,@(mapcar (lambda (rule)
-                            (list (ir-emit-pattern (first rule))
-                                  (ir-emit-rule-body (list (first rule)) (second rule))))
-                          (fourth node))
-                (_ (sml-raise value))))))))
+              ,(or (and *sml-decision-trees*
+                        (let ((value (gensym "VALUE")))
+                          (let ((tree (ir-emit-decision-tree
+                                       (list value)
+                                       (mapcar (lambda (rule)
+                                                 (list (list (first rule)) (second rule)))
+                                               (fourth node))
+                                       `(sml-raise ,value))))
+                            (and tree `(let ((,value value)) ,tree)))))
+                   `(trivia:match value
+                      ,@(mapcar (lambda (rule)
+                                  (list (ir-emit-pattern (first rule))
+                                        (ir-emit-rule-body (list (first rule)) (second rule))))
+                                (fourth node))
+                      (_ (sml-raise value)))))))))
     (:match (ir-emit-match node))
     (:loop (destructuring-bind (tag variables inits body) (cddr node)
              (let ((block (gensym "SELF")))

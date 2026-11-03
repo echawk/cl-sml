@@ -673,3 +673,73 @@ val _ = print (Bool.toString ((String.sub (\"abc\", 5); false) handle Subscript 
                 "val _ = print ((Int.toString (4611686018427387903 + 1)) handle Overflow => \"Overflow \")
 val _ = print ((Int.toString (~4611686018427387904 - 1 * 1)) handle Overflow => \"Overflow \")
 val _ = print (\"0w\" ^ Word.toString (0w4611686018427387903 + 0w4))"))))
+
+;;; Decision trees (ROADMAP item 11) must match as trivia did.
+
+(defun run-sml-with-and-without-trees (&rest sources)
+  "What SOURCES print with matches compiled to decision trees, after
+checking that they print the same when compiled by trivia."
+  (let ((trees (apply #'run-sml sources)))
+    (is (string= trees
+                 (let ((cl-sml:*sml-decision-trees* nil)) (apply #'run-sml sources))))
+    trees))
+
+(test decision-trees-nested-and-overlapping-rules
+  (is (string= "R B 3 2 1 0 9 a ok "
+               (run-sml-with-and-without-trees
+                "datatype color = R | B
+datatype tree = E | T of color * tree * int * tree
+fun p s = print (s ^ \" \")
+fun balance (B, T (R, T (R, a, x, b), y, c), z, d) = T (R, T (B, a, x, b), y, T (B, c, z, d))
+  | balance (B, a, x, T (R, b, y, T (R, c, z, d))) = T (R, T (B, a, x, b), y, T (B, c, z, d))
+  | balance (color, a, x, b) = T (color, a, x, b)
+fun col (T (R, _, _, _)) = \"R\" | col _ = \"B\"
+val t = balance (B, T (R, T (R, E, 1, E), 2, E), 3, E)
+val _ = p (col t)
+val _ = p (case t of T (_, l, _, _) => col l | E => \"E\")
+fun f (_, _, 0) = 0 | f (0, _, _) = 1 | f (_, 0, _) = 2 | f _ = 3
+val _ = p (Int.toString (f (1, 1, 1)))
+val _ = p (Int.toString (f (1, 0, 1)))
+val _ = p (Int.toString (f (0, 0, 1)))
+val _ = p (Int.toString (f (0, 0, 0)))
+fun g (x :: _ :: _, _) = x | g ([x], y) = x + y | g ([], y) = y
+val _ = p (Int.toString (g ([4], 5)))
+fun h (#\"a\", \"x\") = \"a\" | h (_, \"y\") = \"y\" | h (c, _) = String.str c
+val _ = p (h (#\"a\", \"x\"))
+fun k {a = 1, b} = b | k {b = \"q\", ...} = \"q\" | k {a, ...} = \"ok\"
+val _ = p (k {a = 2, b = \"r\"})"))))
+
+(test decision-trees-exceptions-refs-and-layers
+  (is (string= "E1 F 2 G other 5 (1,2) Match Bind Match "
+               (run-sml-with-and-without-trees
+                "fun p s = print (s ^ \" \")
+exception E of int
+exception F = E
+fun mk () = let exception G in (G, fn G => \"G\" | _ => \"other\") end
+val (g1, test1) = mk ()
+val (g2, _) = mk ()
+fun e (E 1) = \"E1\" | e (F n) = Int.toString n | e _ = \"?\"
+val _ = p (e (E 1))
+val _ = p ((raise F 3) handle E 1 => \"no\" | F _ => \"F\")
+val _ = p (e (F 2))
+val _ = p (test1 g1)
+val _ = p (test1 g2)
+fun r (ref 0) = 0 | r (ref n) = n
+val _ = p (Int.toString (r (ref 5)))
+fun s (x as (a, b), 0) = x | s (_, n) = (n, n)
+val _ = p (case s ((1, 2), 0) of (a, b) => \"(\" ^ Int.toString a ^ \",\" ^ Int.toString b ^ \")\")
+val _ = p ((case SOME 3 of NONE => \"none\") handle Match => \"Match\")
+val _ = p ((let val [x] = [1, 2] in \"one\" end) handle Bind => \"Bind\")
+val _ = p (((fn (\"a\", #\"b\") => 1) (\"a\", #\"c\") ; \"no\") handle Match => \"Match\")"))))
+
+(test decision-trees-local-and-functor-constructors
+  (is (string= "a b c d "
+               (run-sml-with-and-without-trees
+                "fun p s = print (s ^ \" \")
+fun f n = let datatype t = A | B of int | C of int * int
+              fun g A = \"a\" | g (B 0) = \"b\" | g (B _) = \"x\" | g (C (_, 1)) = \"c\" | g _ = \"y\"
+          in g (case n of 0 => A | 1 => B 0 | _ => C (1, 1)) end
+val _ = p (f 0)  val _ = p (f 1)  val _ = p (f 2)
+functor M (type u) = struct datatype t = X | Y of u * u fun h (Y (_, _)) = \"d\" | h X = \"e\" end
+structure N = M (type u = int)
+val _ = p (N.h (N.Y (1, 2)))"))))
