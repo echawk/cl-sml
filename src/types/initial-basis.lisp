@@ -75,7 +75,7 @@ structure's name in lower case, e.g. \"intinf\" or \"word32\".")
   (or (cdr (assoc tyname *instance-names*))
       (tyname-name tyname)))
 
-(defun elaborate-basis (&optional (files (cl-sml::sml-basis-source-files)))
+(defun elaborate-basis (&optional (files (cl-sml::sml-initial-source-files)))
   "Elaborate the Basis Library sources FILES; set *BASIS-ENV* and
 *BASIS-SCOPES*.  Then the integer, word and real types of the Basis's
 structures (IntInf.int, Int32.int, Word8.word, ...) join the overloading

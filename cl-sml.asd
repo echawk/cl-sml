@@ -1,7 +1,10 @@
 ;;; src/basis.lisp compiles the Basis Library's SML sources, src/basis/,
 ;;; into its FASL; they are inputs of its compilation, so that ASDF
 ;;; recompiles the basis when one changes.
-(defclass cl-sml-basis-file (asdf:cl-source-file) ())
+(defclass cl-sml-basis-file (asdf:cl-source-file)
+  ((sml-sources :initarg :sml-sources :initform "basis/*.sml"
+                :reader cl-sml-basis-file-sml-sources
+                :documentation "The SML sources, relative to the file.")))
 
 ;;; The Lisp generated from SML draws full warnings from the compiler (e.g.
 ;;; trivia's on patterns it cannot type), which do not make it unusable;
@@ -14,7 +17,7 @@
 (defmethod asdf:input-files ((operation asdf:compile-op)
                              (component cl-sml-basis-file))
   (append (call-next-method)
-          (directory (merge-pathnames "basis/*.sml"
+          (directory (merge-pathnames (cl-sml-basis-file-sml-sources component)
                                       (asdf:component-pathname component)))))
 
 (asdf:defsystem #:cl-sml
@@ -89,6 +92,34 @@
              (declare (ignore operation component))
              (unless (uiop:symbol-call '#:cl-sml-test-runner '#:run-tests)
                (error "cl-sml tests failed"))))
+
+;;; Concurrent ML (docs/DESIGN-CML.md): the structures CML, SyncVar, Mailbox,
+;;; Multicast and RunCML, on OS threads.  Only this system depends on
+;;; bordeaux-threads; cl-sml itself does not.  Its basis.lisp compiles the
+;;; SML sources of src/cml/ into its FASL, as src/basis.lisp does the Basis's.
+
+(asdf:defsystem #:cl-sml/cml
+  :description "Concurrent ML for cl-sml"
+  :license "See LICENSE"
+  :depends-on (#:cl-sml #:bordeaux-threads)
+  :pathname "src/cml/"
+  :serial t
+  :components ((:file "package")
+               (:file "scheduler")
+               (:file "core")
+               (:file "primitives")
+               (:cl-sml-basis-file "basis" :sml-sources "*.sml"))
+  :in-order-to ((test-op (test-op #:cl-sml/cml-tests))))
+
+(asdf:defsystem #:cl-sml/cml-tests
+  :description "Tests of cl-sml's Concurrent ML"
+  :depends-on (#:cl-sml/cml #:fiveam)
+  :pathname "t/cml/"
+  :components ((:file "cml-tests"))
+  :perform (test-op (operation component)
+             (declare (ignore operation component))
+             (unless (uiop:symbol-call '#:cl-sml-cml-tests '#:run-cml-tests)
+               (error "cl-sml CML tests failed"))))
 
 ;;; The optional Coalton backend (docs/IR.md, "The Coalton backend"): SML
 ;;; programs compiled to Coalton through the typed IR.  Only this system

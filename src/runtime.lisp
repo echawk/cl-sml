@@ -134,6 +134,38 @@ src/type-checker.lisp.")
   `(let ((*sml-type-checker* ,checker))
      ,@body))
 
+;;; Threads.  cl-sml runs SML on one thread; the optional system cl-sml/cml
+;;; (Concurrent ML, docs/DESIGN-CML.md) runs it on several.  That system
+;;; sets the two hooks below, and makes the global hash tables written at
+;;; run time synchronized; while they are NIL (cl-sml/cml not loaded) the
+;;; run time takes no lock, and checking them is all it costs.
+
+(defvar *sml-runtime-lock-hook* nil
+  "NIL, or a function that calls a thunk holding the run time's (recursive)
+lock, which guards the interning of record and tuple shapes and of the
+initial exceptions.")
+
+(defvar *sml-stream-lock-hook* nil
+  "NIL, or a function of a Lisp stream and a thunk that calls the thunk
+holding that stream's lock.  Every TextIO and BinIO primitive and `print'
+take it, so that threads do not interleave inside one operation.")
+
+(defmacro with-sml-runtime-lock (() &body body)
+  (let ((thunk (gensym "THUNK"))
+        (hook (gensym "HOOK")))
+    `(flet ((,thunk () ,@body))
+       (declare (dynamic-extent #',thunk))
+       (let ((,hook *sml-runtime-lock-hook*))
+         (if ,hook (funcall ,hook #',thunk) (,thunk))))))
+
+(defmacro with-sml-stream-lock ((stream) &body body)
+  (let ((thunk (gensym "THUNK"))
+        (hook (gensym "HOOK")))
+    `(flet ((,thunk () ,@body))
+       (declare (dynamic-extent #',thunk))
+       (let ((,hook *sml-stream-lock-hook*))
+         (if ,hook (funcall ,hook ,stream #',thunk) (,thunk))))))
+
 (defparameter *sml-binding-types* (make-hash-table :test #'eq))
 
 (defparameter *sml-constructor-symbols* (make-hash-table :test #'eq))
@@ -920,23 +952,32 @@ order, then alphanumeric ones."
 (defun sml-record-shape (labels)
   "The interned shape of the records with LABELS (strings, any order)."
   (let ((labels (sort (mapcar #'sml-label-string labels) #'sml-label<)))
-    (or (gethash labels *sml-record-shapes*)
-        (setf (gethash labels *sml-record-shapes*)
-              (%make-sml-record-shape (coerce labels 'simple-vector))))))
+    (with-sml-runtime-lock ()
+      (or (gethash labels *sml-record-shapes*)
+          (setf (gethash labels *sml-record-shapes*)
+                (%make-sml-record-shape (coerce labels 'simple-vector)))))))
 
 (defmethod make-load-form ((shape sml-record-shape) &optional environment)
   (declare (ignore environment))
   `(sml-record-shape ',(coerce (sml-record-shape-labels shape) 'list)))
 
-(defvar *sml-tuple-shapes* (make-array 16 :initial-element nil :adjustable t))
+(defvar *sml-tuple-shapes* (make-array 16 :initial-element nil)
+  "The tuple shapes made so far, by size.  Growing it replaces the vector,
+so that a thread reading it without the lock sees the old or the new one.")
 
 (defun sml-tuple-shape (n)
   "The shape of N-tuples."
-  (when (>= n (length *sml-tuple-shapes*))
-    (adjust-array *sml-tuple-shapes* (* 2 (1+ n)) :initial-element nil))
-  (or (aref *sml-tuple-shapes* n)
-      (setf (aref *sml-tuple-shapes* n)
-            (sml-record-shape (loop for i from 1 to n collect i)))))
+  (let ((shapes *sml-tuple-shapes*))
+    (or (and (< n (length shapes)) (svref shapes n))
+        (with-sml-runtime-lock ()
+          (let ((shapes *sml-tuple-shapes*))
+            (when (>= n (length shapes))
+              (setf shapes (replace (make-array (* 2 (1+ n)) :initial-element nil)
+                                    shapes)
+                    *sml-tuple-shapes* shapes))
+            (or (svref shapes n)
+                (setf (svref shapes n)
+                      (sml-record-shape (loop for i from 1 to n collect i)))))))))
 
 (defvar *sml-unit* (vector (sml-tuple-shape 0)))
 
@@ -1535,11 +1576,12 @@ time raises the basis' exceptions, so that a program's handlers catch them.")
          (symbol (and basis (find-symbol basis-name basis))))
     (if (and symbol (boundp symbol))
         (symbol-value symbol)
-        (or (gethash name *sml-initial-exceptions*)
-            (setf (gethash name *sml-initial-exceptions*)
-                  (if (member name *sml-exceptions-with-payload* :test #'string=)
-                      (make-sml-exception-function name)
-                      (make-sml-exception-constructor name)))))))
+        (with-sml-runtime-lock ()
+          (or (gethash name *sml-initial-exceptions*)
+              (setf (gethash name *sml-initial-exceptions*)
+                    (if (member name *sml-exceptions-with-payload* :test #'string=)
+                        (make-sml-exception-function name)
+                        (make-sml-exception-constructor name))))))))
 
 (defun sml-raise-named-exception (name)
   "Raise the initial basis' exception NAME.  A program that binds the name to
@@ -1585,7 +1627,9 @@ POSITION is the source offset of the match, when known."
   (sml-unit))
 
 (defun sml-print (value)
-  (princ value)
+  (let ((stream *standard-output*))
+    (with-sml-stream-lock (stream)
+      (princ value stream)))
   (sml-unit))
 
 (defun sml-exn-name-primitive (value)
@@ -1687,28 +1731,35 @@ when the file cannot be opened."
                  :if-exists :append :if-does-not-exist :create))
 
 (defun sml-text-io-close-in (stream)
-  (close (sml-text-io-stream stream))
+  (let ((stream (sml-text-io-stream stream)))
+    (with-sml-stream-lock (stream)
+      (close stream)))
   (sml-unit))
 
 (defun sml-text-io-close-out (stream)
-  (close (sml-text-io-stream stream))
+  (let ((stream (sml-text-io-stream stream)))
+    (with-sml-stream-lock (stream)
+      (close stream)))
   (sml-unit))
 
 (defun sml-text-io-read-n (stream count)
   (when (minusp count)
     (error "TextIO.inputN called with a negative count: ~D" count))
   (let ((input (sml-text-io-stream stream)))
-    (with-output-to-string (output)
-      (loop repeat count
-            for char = (read-char input nil nil)
-            while char
-            do (write-char char output)))))
+    (with-sml-stream-lock (input)
+      (with-output-to-string (output)
+        (loop repeat count
+              for char = (read-char input nil nil)
+              while char
+              do (write-char char output))))))
 
 (defun sml-text-io-input (stream)
   (sml-text-io-read-n stream 4096))
 
 (defun sml-text-io-input1 (stream)
-  (let ((char (read-char (sml-text-io-stream stream) nil nil)))
+  (let ((char (let ((input (sml-text-io-stream stream)))
+                (with-sml-stream-lock (input)
+                  (read-char input nil nil)))))
     (if char
         (sml-some-value char)
         (sml-none-value))))
@@ -1718,44 +1769,54 @@ when the file cannot be opened."
 
 (defun sml-text-io-input-all (stream)
   (let ((input (sml-text-io-stream stream)))
-    (with-output-to-string (output)
-      (loop for char = (read-char input nil nil)
-            while char
-            do (write-char char output)))))
+    (with-sml-stream-lock (input)
+      (with-output-to-string (output)
+        (loop for char = (read-char input nil nil)
+              while char
+              do (write-char char output))))))
 
 (defun sml-text-io-input-line (stream)
   "TextIO.inputLine: the next line with its newline, which is supplied when
 the stream ends without one; NONE at the end of the stream."
   (let ((input (sml-text-io-stream stream)))
-    (if (null (peek-char nil input nil nil))
-        (sml-none-value)
-        (sml-some-value
-         (with-output-to-string (output)
-           (loop for char = (read-char input nil nil)
-                 do (write-char (or char #\Newline) output)
-                 until (or (null char) (char= char #\Newline))))))))
+    (with-sml-stream-lock (input)
+      (if (null (peek-char nil input nil nil))
+          (sml-none-value)
+          (sml-some-value
+           (with-output-to-string (output)
+             (loop for char = (read-char input nil nil)
+                   do (write-char (or char #\Newline) output)
+                   until (or (null char) (char= char #\Newline)))))))))
 
 (defun sml-text-io-lookahead (stream)
-  (let ((char (peek-char nil (sml-text-io-stream stream) nil nil)))
+  (let ((char (let ((input (sml-text-io-stream stream)))
+                (with-sml-stream-lock (input)
+                  (peek-char nil input nil nil)))))
     (if char
         (sml-some-value char)
         (sml-none-value))))
 
 (defun sml-text-io-end-of-stream (stream)
-  (null (peek-char nil (sml-text-io-stream stream) nil nil)))
+  (let ((input (sml-text-io-stream stream)))
+    (with-sml-stream-lock (input)
+      (null (peek-char nil input nil nil)))))
 
 (defun sml-text-io-output (tuple)
-  (write-string (sml-tuple-second tuple)
-                (sml-text-io-stream (sml-tuple-first tuple)))
+  (let ((output (sml-text-io-stream (sml-tuple-first tuple))))
+    (with-sml-stream-lock (output)
+      (write-string (sml-tuple-second tuple) output)))
   (sml-unit))
 
 (defun sml-text-io-output1 (tuple)
-  (write-char (sml-tuple-second tuple)
-              (sml-text-io-stream (sml-tuple-first tuple)))
+  (let ((output (sml-text-io-stream (sml-tuple-first tuple))))
+    (with-sml-stream-lock (output)
+      (write-char (sml-tuple-second tuple) output)))
   (sml-unit))
 
 (defun sml-text-io-flush-out (stream)
-  (finish-output (sml-text-io-stream stream))
+  (let ((output (sml-text-io-stream stream)))
+    (with-sml-stream-lock (output)
+      (finish-output output)))
   (sml-unit))
 
 ;;; BinIO.  An input stream is an SML-BIN-INSTREAM: CL has no PEEK-BYTE, so
@@ -1783,15 +1844,17 @@ the stream ends without one; NONE at the end of the stream."
 
 (defun sml-bin-io-read-byte (in)
   "The next byte of IN, an SML-BIN-INSTREAM, or NIL at its end."
-  (let ((pending (sml-bin-instream-pending in)))
-    (if pending
-        (progn (setf (sml-bin-instream-pending in) nil) pending)
-        (read-byte (sml-bin-instream-stream in) nil nil))))
+  (with-sml-stream-lock (in)
+    (let ((pending (sml-bin-instream-pending in)))
+      (if pending
+          (progn (setf (sml-bin-instream-pending in) nil) pending)
+          (read-byte (sml-bin-instream-stream in) nil nil)))))
 
 (defun sml-bin-io-peek-byte (in)
-  (or (sml-bin-instream-pending in)
-      (setf (sml-bin-instream-pending in)
-            (read-byte (sml-bin-instream-stream in) nil nil))))
+  (with-sml-stream-lock (in)
+    (or (sml-bin-instream-pending in)
+        (setf (sml-bin-instream-pending in)
+              (read-byte (sml-bin-instream-stream in) nil nil)))))
 
 (defun sml-bin-io-read-n (in count)
   "A Word8Vector.vector of the next COUNT bytes of IN, or of fewer at its
@@ -1812,8 +1875,9 @@ end."
 
 (defun sml-bin-io-output (tuple)
   (let ((out (sml-tuple-first tuple)))
-    (loop for byte across (sml-tuple-second tuple)
-          do (write-byte (ldb (byte 8 0) byte) out))
+    (with-sml-stream-lock (out)
+      (loop for byte across (sml-tuple-second tuple)
+            do (write-byte (ldb (byte 8 0) byte) out)))
     (sml-unit)))
 
 ;;; Time and Timer: times are integer nanoseconds.
@@ -2283,8 +2347,19 @@ is NIL; results beyond the range raise Overflow."
   '(("IntInf") ("Int64" . 64) ("Int32" . 32) ("Int16" . 16) ("Int8" . 8))
   "The integer structures whose primitives SML-INTEGER-PRIMITIVES makes.")
 
+(defvar *sml-basis-extension-files* nil
+  "The SML sources (namestrings) of the systems that extend the Basis
+(cl-sml/cml), which the native checker and the Coalton Basis take after
+the Basis's own (REGISTER-SML-BASIS-EXTENSION in src/basis.lisp).")
+
+(defvar *sml-extension-primitives* (make-hash-table :test #'equal)
+  "The primitives of the systems that extend the Basis (cl-sml/cml), by
+name, for `use{b = NAME}'.")
+
 (defun sml-basis-primitive (name)
-  (or (let* ((dot (position #\. name :from-end t))
+  (or (and (plusp (hash-table-count *sml-extension-primitives*))
+           (gethash name *sml-extension-primitives*))
+      (let* ((dot (position #\. name :from-end t))
              (structure (and dot (subseq name 0 dot)))
              (word (assoc structure *sml-word-structures* :test #'equal))
              (integer (assoc structure *sml-integer-structures* :test #'equal)))

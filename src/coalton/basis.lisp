@@ -29,7 +29,7 @@ outside the fixnum range do not work in Coalton.")
 (defun coalton-basis-source ()
   (with-output-to-string (out)
     (write-string *coalton-basis-prefix* out)
-    (dolist (file (sml-basis-source-files))
+    (dolist (file (sml-initial-source-files))
       (let ((text (uiop:read-file-string file :external-format *sml-external-format*)))
         (loop for (old . new) in (cdr (assoc (pathname-name file) *coalton-basis-patches*
                                              :test #'string=))

@@ -64,6 +64,16 @@
                (setf start name-end)))
     (nreverse files)))
 
+(defun sml-initial-source-files ()
+  "The Basis's sources and then its extensions' (*SML-BASIS-EXTENSION-FILES*),
+which come before values.sml: it rebinds `use' to string -> unit, and the
+extensions bind their primitives with `use{b = NAME}' too."
+  (let* ((files (sml-basis-source-files))
+         (last (car (last files))))
+    (if (and *sml-basis-extension-files* (string= (pathname-name last) "values"))
+        (append (butlast files) (mapcar #'pathname *sml-basis-extension-files*) (list last))
+        (append files (mapcar #'pathname *sml-basis-extension-files*)))))
+
 (defun sml-basis-signature-expressions (package-name)
   (loop for key being the hash-keys of *sml-signature-expressions*
           using (hash-value sigexp)
@@ -131,7 +141,57 @@ package.  Returns a form that recreates the basis in a fresh image."
         ',(sml-package-parse-scopes package)
         ',(sml-basis-signature-expressions (package-name package))))))
 
+(defun compile-sml-basis-extension (names)
+  "Compile and run the SML sources NAMES (relative to the cl-sml system's
+directory), which extend the Basis (cl-sml/cml's structures), in the basis
+package, after the Basis.  Returns a form that recreates them in an image
+with the Basis loaded and makes the native checker elaborate them after the
+Basis (*SML-BASIS-EXTENSION-FILES*)."
+  (let* ((files (mapcar (lambda (name) (asdf:system-relative-pathname "cl-sml" name))
+                        names))
+         (package (ensure-sml-package *sml-basis-package-name*))
+         (*sml-type-checker* nil)
+         (*record-sml-lisp-source* nil)
+         (hoisted-forms nil)
+         (declaration-forms nil))
+    (with-sml-cell-reservations
+      (dolist (file files)
+        (let ((form (compile-sml-file file :package package))
+              (*sml-package* package)
+              (*sml-current-directory* (uiop:pathname-directory-pathname file)))
+          (eval form)
+          (multiple-value-bind (hoisted program) (split-hoisted-sml-forms form)
+            (setf hoisted-forms (append hoisted-forms hoisted))
+            (push program declaration-forms)))))
+    `(progn
+       ,@hoisted-forms
+       ,@(mapcar (lambda (form)
+                   `(let ((*sml-package* (ensure-sml-package ,*sml-basis-package-name*)))
+                      ,form))
+                 (nreverse declaration-forms))
+       (restore-sml-basis-compile-time-state
+        ',(sml-package-parse-scopes package)
+        ',(sml-basis-signature-expressions (package-name package)))
+       (register-sml-basis-extension
+        (mapcar (lambda (name) (namestring (asdf:system-relative-pathname "cl-sml" name)))
+                ',names)))))
+
 )
+
+(defun register-sml-basis-extension (files)
+  "Make the native checker (and the Coalton Basis) see FILES after the
+Basis: they are elaborated again the next time the checker needs its
+initial basis."
+  (dolist (file files)
+    (setf *sml-basis-extension-files*
+          (append (remove file *sml-basis-extension-files* :test #'string=)
+                  (list file))))
+  (setf (symbol-value (find-symbol "*BASIS-ENV*" '#:cl-sml.types)) nil))
+
+(defmacro define-sml-basis-extension (&rest names)
+  "The Basis extension of the SML sources NAMES (relative to the cl-sml
+system's directory), compiled at macroexpansion time."
+  (compile-sml-basis-extension names))
 
 (defmacro define-sml-basis ()
   "The basis, compiled from its SML sources at macroexpansion time."
