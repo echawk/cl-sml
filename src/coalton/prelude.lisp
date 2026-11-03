@@ -143,7 +143,14 @@
                       (result (cl:if (cl:member op '("<" ">" "<=" ">=") :test #'cl:string=)
                                      'Boolean type))
                       (name (cl:intern (cl:concatenate 'cl:string tyname op))))
-              (cl:when form
+              ;; char and string are overloaded only for the comparisons
+              ;; (Appendix E); their arithmetic forms would be dead code
+              ;; that SBCL reports as full warnings, which fails ASDF.
+              (cl:when (cl:and form
+                               (cl:or (cl:not (cl:member tyname '("char" "string")
+                                                         :test #'cl:string=))
+                                      (cl:member op '("<" ">" "<=" ">=")
+                                                 :test #'cl:string=)))
                 (cl:push `(inline) forms)
                 (cl:push `(declare ,name ,(cl:if unary
                                                  `(,type -> ,result)
