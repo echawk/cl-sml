@@ -7,14 +7,16 @@
     57/57 with `--native`.
   - HaMLet's conformance programs (`hamlet/test/*.sml`, judged by
     `hamlet/test/CONFORMANCE.txt`), default pipeline, 2026-11:
-    - Must be accepted and run: 19/23 (was 17/23).  Fixed: `exhaustive`
+    - Must be accepted and run: 20/23 (was 17/23).  Fixed: `exhaustive`
       (a match on all 256 chars is exhaustive), `id` (symbolic type
-      constructors such as `&`).  Failing: `abstype` and `fun-case` (notes
-      4 and 5: infeasible together with `abstype2` / in general; HaMLet
-      fails them too), `functor-poly` (HaMLet fails it too), `valrec`
-      (parses now; `val rec LESS = fn ...` is rejected, "val rec cannot
-      rebind constructor", where the Definition accepts it and raises Bind
-      at run time, see its note 3).
+      constructors such as `&`), `valrec` (`val rec` may rebind a
+      constructor other than `true`, `false`, `nil`, `::` and `ref`: the
+      name is a variable afterwards (rule 26), and the binding raises Bind
+      because rule 126 matches the constructor against the function, as
+      HaMLet does; `fun` rebinding a constructor is still rejected).
+      Failing: `abstype` and `fun-case` (notes 4 and 5: infeasible together
+      with `abstype2` / in general; HaMLet fails them too), `functor-poly`
+      (HaMLet fails it too).
     - Must be rejected or warned: 9/9.  `dec-strdec`: overloading is
       resolved per value declaration, so cases A to C are rejected like
       HaMLet does (allowed) and B'' and C' are rejected (required).
@@ -40,13 +42,18 @@
     - Time-outs (performance, 120 s): count-graphs, fft, id-ray,
       mandelbrot, mc-ray, simple; aobench takes 27 s alone and can time out
       when six programs run in parallel.
+  - [x] A structure declared by `let` (or by `local` inside one) is
+    evaluated each time the expression is, with members of its own: they
+    are lexical variables (`lexical-structure-form` in `src/ir.lisp`), so
+    `fun mk n = let structure S = struct val k = n end in fn () => S.k end`
+    no longer shares `k` between calls.  Exceptions are fresh per
+    evaluation; datatype constructors and the members a functor instance
+    binds only at run time are still global (same tags each time).
   - Remaining, in priority order:
-    1. `val rec` rebinding a constructor (HaMLet `valrec`): accept, and
-       raise Bind at run time (Definition rules 26 and 126).
-    2. Performance of the time-outs above (real arithmetic, arrays).
-    3. Optional Basis structures (Posix subset, WideChar/WideString) if
+    1. Performance of the time-outs above (real arithmetic, arrays).
+    2. Optional Basis structures (Posix subset, WideChar/WideString) if
        programs need them.
-    4. A word as wide as int (63 bits) to match other compilers.
+    3. A word as wide as int (63 bits) to match other compilers.
   - [x] Core tuples, unit, patterns, records, exceptions, local declarations,
     type annotations/metadata, file loading, package namespaces, and REPL.
   - [x] Load all files in `hamlet/basis/all.sml` and `hamlet/hamlet.sml`.

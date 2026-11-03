@@ -221,6 +221,64 @@ val _ = p ((let val (a, 0) = (1, 1) in \"no\" end) handle Bind => \"bind2\")")))
                    (cl-sml::sml-exception-name
                     (cl-sml::sml-exception-value condition)))))))
 
+(test val-rec-rebinding-a-constructor-raises-bind
+  ;; Rule 26 makes the names variables; rule 126 matches the pattern in the
+  ;; outer environment, where the constructor does not match the function
+  ;; (HaMLet test valrec).
+  (is (string= (lines "7" "bind" "bind" "bind" "5")
+               (run-sml "fun p s = print (s ^ \"\\n\")
+val rec NONE as f = fn x => x
+val _ = p (Int.toString (f 3 + NONE 4))
+val _ = p ((let val rec LESS = fn x => x in \"no\" end) handle Bind => \"bind\")
+val _ = p ((let val rec g = fn x => x and GREATER = fn x => x in \"no\" end)
+           handle Bind => \"bind\")
+exception E
+fun h () = let val rec E = fn x => x in \"no\" end
+val _ = p (h () handle Bind => \"bind\")
+val x = (let val rec SOME = fn x => x val SOME = 5 in SOME end) handle Bind => 5
+val _ = p (Int.toString x)")))
+  (signals error (run-sml "val rec nil = fn x => x"))
+  (signals cl-sml::sml-raised-exception (run-sml "val rec LESS = fn x => x")))
+
+;;; A structure declared inside an expression is evaluated each time the
+;;; expression is: its members belong to that evaluation.
+
+(test let-structures-are-evaluated-afresh
+  (is (string= (lines "1 2" "3 21 0 ~1" "1 2 6 8 10 12 14 16 9 10 11 12 27 29 7")
+               (run-sml "fun mkc n = let structure S = struct val k = n fun get () = k end in S.get end
+val a = mkc 1  val b = mkc 2
+val _ = print (Int.toString (a ()) ^ \" \" ^ Int.toString (b ()) ^ \"\\n\")
+fun mko n = let structure S = struct val k = n structure T = struct val j = k + 1 end
+                                     exception E end
+                open S
+            in (fn () => k + T.j, fn () => (raise E) : int, fn f => (f () handle S.E => 0)) end
+val (a, ra, ha) = mko 1
+val (b, rb, hb) = mko 10
+val _ = print (Int.toString (a ()) ^ \" \" ^ Int.toString (b ()) ^ \" \"
+               ^ Int.toString (ha ra) ^ \" \" ^ Int.toString ((hb ra) handle _ => ~1) ^ \"\\n\")
+signature SIG = sig val get : unit -> int val add : int * int -> int end
+functor F (X : sig val k : int end) = struct val k2 = X.k * 2 fun get () = k2 end
+fun opq n = let structure S :> SIG = struct val k = n fun get () = k fun add (a, b) = a + b + k end
+            in S.get end
+fun trn n = let structure S : SIG = struct val k = n fun get () = k fun add (a, b) = a + b + k end
+            in fn () => S.add (S.get (), 0) end
+fun app n = let structure A = struct val k = n end
+                structure R = F (A)
+            in R.get end
+fun app2 n = let structure R = F (struct val k = n end) in R.get end
+fun loc n = let local structure S = struct val k = n end in fun g () = S.k end in g end
+fun dt n = let structure D = struct datatype t = A of int | B fun mk () = A n
+                                    fun un (A x) = x | un B = 0 end
+           in fn () => D.un (D.mk ()) end
+fun nest n = let structure S = struct structure T = struct val v = n end val w = T.v + 1 end
+                 structure U = S.T
+             in fn () => U.v + S.w end
+local structure L = struct val z = 7 end in val lz = L.z end
+val r = [opq 1, opq 2, trn 3, trn 4, app 5, app 6, app2 7, app2 8, loc 9, loc 10,
+         dt 11, dt 12, nest 13, nest 14]
+val _ = print (String.concatWith \" \" (map (fn f => Int.toString (f ())) r)
+               ^ \" \" ^ Int.toString lz ^ \"\\n\")"))))
+
 (test unhandled-exception-propagates-through-handle
   (is (string= (lines "outer")
                (run-sml "exception A
