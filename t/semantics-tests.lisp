@@ -89,6 +89,26 @@ val _ = print (Int.toString (U.Array.sub (a, 1)) ^ \"\\n\")"))))
 
 ;;; Functors are generative: each application evaluates the body afresh.
 
+(test functor-applied-in-functor-body-to-parameter-substructure
+  ;; MkCore's result reaches Grammar through its argument's substructure
+  ;; (SML-SUBSTRUCTURE of a name inside a named substructure); from
+  ;; mlyacc's mkMakeLrTable.
+  (let ((program "signature G = sig datatype term = T of int end
+signature IG = sig structure Grammar : G end
+signature C = sig structure Grammar : G end
+structure IntGrammar : IG = struct structure Grammar = struct datatype term = T of int end end
+functor MkCore (structure IntGrammar : IG) : C =
+  struct open IntGrammar structure Grammar = Grammar end
+functor F (structure IntGrammar : IG) =
+  struct
+    structure Core = MkCore (structure IntGrammar = IntGrammar)
+    structure Grammar = Core.Grammar
+  end
+structure M = F (structure IntGrammar = IntGrammar)
+val _ = case M.Grammar.T 3 of M.Grammar.T n => print (Int.toString n ^ \"\\n\")"))
+    (is (string= (lines "3") (run-sml program)))
+    (is (string= (lines "3") (load-sml program)))))
+
 (test functor-exceptions-are-generative-and-aliases-keep-identity
   ;; Each application declares new exceptions (rule 54); `exception Y = P.X'
   ;; denotes the argument's exception (rule 31).
