@@ -105,8 +105,10 @@ forms of the subterms left to test):
   on the value or on its tag (`car` of a boxed value, slot 0 of a flat
   one) or an `if`, whose branch for each key keeps the rows that may match
   it; when the keys are all the constructors of the datatype (from the
-  pattern's type), there is no default branch.  Strings are compared as
-  trivia did (type and length, then characters);
+  pattern's type), there is no default branch.  A dispatch on up to 12
+  keys is a chain of tests (on SBCL under `(sb-c:jump-table 0)`: a `case`
+  on a few sparse keys becomes a perfect hash, which is slower); strings
+  are tested by type and length once, then by characters, as trivia did;
 - exceptions and the constructors known only at run time (the other
   `how`s) may denote the same value under different forms (`exception F =
   E`, functor instances), so each is tested alone (comparing tags as

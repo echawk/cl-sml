@@ -277,19 +277,40 @@ tag, or as structs. Keep these working: polymorphic equality, the rule
 that `{1=a, 2=b}` is the same value as `(a, b)`, and the CL interop
 functions (`sml-value`, `call-sml`).
 
-### 11. Pattern matching as decision trees (M)
+### 11. Pattern matching as decision trees (M) — done
 
-**Do:** compile `case`, `fn` and `fun` clauses into decision trees
-(Maranget, "Compiling pattern matching to good decision trees", ML
-Workshop 2008), so each subterm is tested once, with a `case` on
-constructor tags. First check how much `trivia` already gives after
-items 2 and 10.
+**Done (2026-11-03):** `case`, `fn`, `fun` clauses, pattern bindings and
+the rules of `handle` are compiled to decision trees (Maranget,
+"Compiling pattern matching to good decision trees", ML Workshop 2008) by
+`ir-emit-decision-tree` (docs/IR.md, Emission).  Each subterm is let-bound
+and tested once; tuples, records and refs are taken apart without tests;
+the column tested is one where the first row is refutable, with the
+longest run of refutable rows (heuristics f then p).  Constants and
+constructors with static tags exclude each other: one dispatch on the
+value or its tag, with no default when the keys are all the
+constructors of the type.  Exceptions and constructors known only at run
+time are tested one at a time, keeping the other rows' tests, since two
+names may denote one constructor.  Rules reached from several leaves are
+`flet` functions when larger than 8 nodes.  Trees over 64 + 16 per rule
+tests fall back to trivia.  `cl-sml:*sml-decision-trees*` (default `t`)
+set to `nil` compiles every match the old way, for comparison.
 
-**Status (2026-11-02):** not done.  Patterns are now IR data (item 19),
-so a decision-tree pass can be written on `:match` nodes; the simplifier
-already resolves matches on known values (case-of-known-constructor, for
-every datatype).  Matching is still compiled by trivia rule by rule; no
-benchmark here is dominated by matching, so the gain was not measured.
+What trivia already gave after items 2 and 10 was most of it.  On SBCL a
+`case` on a few sparse keys becomes a perfect hash, slower than trivia's
+chain of tests, so switches of up to 12 keys are chains (under
+`(sb-c:jump-table 0)`), and strings are tested by type and length once.
+Before that the trees lost 10-20% on the lexer below.  Measured with
+`t/bench/run.lisp native`, best of three runs, trivia (the flag off) and
+trees alternating three times on the same build, best of the three
+(differences under about 10% are noise; `match`, new, is red-black
+insertion with Okasaki's balance and a lexer on characters, strings and
+tokens):
+
+MEASURED
+
+Not done: a dispatch on string lengths before the characters for large
+string matches, and decision trees inside the hoisted groups of large
+tuple dispatches (`ir-emit-dispatch-match`), which still use trivia.
 
 ### 12. Inlining and simplification (M) — done
 
