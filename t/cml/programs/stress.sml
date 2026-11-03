@@ -20,7 +20,9 @@ fun ring () =
           in
             loop ()
           end
-      val _ = List.app (fn i => ignore (spawn (fn () => node i))) (List.tabulate (threads - 1, fn i => i + 1))
+      fun spawnNodes i = if i < threads then (ignore (spawn (fn () => node i)); spawnNodes (i + 1))
+                         else ()
+      val _ = spawnNodes 1
       val first = Vector.sub (chans, 1)
       val last = Vector.sub (chans, 0)
       fun lap (0, token) = token
@@ -32,8 +34,10 @@ fun ring () =
 fun printers () =
     let
       val done = channel ()
-      fun printer s = spawn (fn () => (List.app (fn _ => print s) (List.tabulate (10000, fn i => i));
-                                       send (done, ())))
+      (* A loop, not List.app over a list: ECL's threads have small stacks. *)
+      fun lines (s, 0) = ()
+        | lines (s, n) = (print s; lines (s, n - 1))
+      fun printer s = spawn (fn () => (lines (s, 10000); send (done, ())))
     in
       printer "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
       printer "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n";

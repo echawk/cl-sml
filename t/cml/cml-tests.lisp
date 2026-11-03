@@ -80,11 +80,25 @@ error output."
 (defun program-source (name)
   (uiop:read-file-string (merge-pathnames (format nil "~A.sml" name) *programs*)))
 
+(defvar *ring-threads*
+  #+ecl 50 #-ecl 1000
+  "The threads of stress.sml's ring.  ECL runs out of memory with a few
+hundred threads (its default heap and per-thread stacks).")
+
+(defun adapt-source (name source)
+  (if (string= name "stress")
+      (let* ((old "val threads = 1000")
+             (start (search old source)))
+        (concatenate 'string (subseq source 0 start)
+                     (format nil "val threads = ~D" *ring-threads*)
+                     (subseq source (+ start (length old)))))
+      source))
+
 (defmacro test-program (name &body checks)
   "Run program NAME of programs/ and compare its output with its EXPECT
 comment; CHECKS may also examine OUTPUT and ERRORS."
   `(test ,(intern (string-upcase (format nil "program-~A" name)))
-     (let ((source (program-source ,name)))
+     (let ((source (adapt-source ,name (program-source ,name))))
        (multiple-value-bind (output errors) (run-sml source)
          (declare (ignorable errors))
          (let ((expected (expected-output source)))
@@ -114,7 +128,7 @@ comment; CHECKS may also examine OUTPUT and ERRORS."
                                   :separator '(#\Newline)))
         (a (make-string 64 :initial-element #\a))
         (b (make-string 64 :initial-element #\b)))
-    (is (string= "ring: 100000" (first lines)))
+    (is (string= (format nil "ring: ~D" (* 100 *ring-threads*)) (first lines)))
     (is (string= "success" (car (last lines))))
     (is (= 10000 (count a lines :test #'string=)))
     (is (= 10000 (count b lines :test #'string=)))
