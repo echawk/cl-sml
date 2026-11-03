@@ -48,6 +48,7 @@ syntax, its prelude, or the backend's prelude)."
   (workers (make-hash-table :test #'equal))     ; path -> worker symbol
   (types (make-hash-table :test #'equal))       ; path -> type entry
   (exceptions (make-hash-table :test #'equal))  ; path -> tag symbol
+  (primitives (make-hash-table :test #'equal))  ; path -> run-time primitive name
   (blocked nil))                                ; ((path . reason) ...)
 
 (defvar *coalton-basis* nil
@@ -564,6 +565,7 @@ generalize replaced by unit, or NIL when there are none."
     (ecase (ir-kind node)
       (:const (ce-literal (third node) type))
       (:unit (co "UNIT"))
+      (:coalton-form (third node))
       (:var (ce-var (third node)))
       (:ref (ce-ref node))
       (:prim (ce-primitive (third node) (fourth node) type))
@@ -582,9 +584,9 @@ generalize replaced by unit, or NIL when there are none."
       (:con (ce-construct type (fourth node) (fifth node)))
       (:app
        (let ((name (ce-primitive-use-p node)))
-         (if name
-             (ce-basis-primitive name type)
-             (ce-list (cddr node)))))
+         (cond (name (ce-basis-primitive name type))
+               ((ce-open-primitive node))
+               (t (ce-list (cddr node))))))
       (:call (destructuring-bind (worker args cell) (cddr node)
                (declare (ignore worker))
                (cons (or (gethash cell *ce-workers*)
@@ -851,6 +853,34 @@ generalize replaced by unit, or NIL when there are none."
   "The Coalton form matching the SCRUTINEES forms against RULES ((patterns
 body) ...), FAILURE when none matches."
   (declare (ignore scrutinee-types))
+  ;; Several scrutinees (curried or tupled clauses): when only one position
+  ;; has patterns that test, match on it alone, binding the others, rather
+  ;; than allocating a tuple of them.
+  (let* ((k (length scrutinees))
+         (testing (and (> k 1)
+                       (loop for i below k
+                             when (some (lambda (rule)
+                                          (not (member (ir-kind (nth i (first rule)))
+                                                       '(:p-var :p-wild))))
+                                        rules)
+                               collect i))))
+    (when (and (> k 1) (<= (length testing) 1))
+      (let* ((position (or (first testing) 0))
+             (temps (loop for form in scrutinees
+                          collect (if (symbolp form) form (ce-temp "s"))))
+             (inner (ce-match
+                     (list (nth position temps)) nil
+                     (mapcar (lambda (rule)
+                               (destructuring-bind (patterns body) rule
+                                 (list (list (nth position patterns))
+                                       (ce-bind-trivial-patterns patterns temps position body))))
+                             rules)
+                     failure)))
+        (return-from ce-match
+          (let ((bindings (loop for form in scrutinees
+                                for temp in temps
+                                unless (eq form temp) collect (list temp form))))
+            (if bindings `(,(co "LET") ,bindings ,inner) inner))))))
   (let* ((k (length scrutinees))
          (scrutinee (if (= k 1)
                         (first scrutinees)
@@ -896,6 +926,18 @@ body) ...), FAILURE when none matches."
        (let ((s (ce-temp "s")))
          `(,(co "LET") ((,s ,scrutinee))
            ,(ce-match-chain s translated failure)))))))
+
+(defun ce-bind-trivial-patterns (patterns temps position body)
+  "BODY (an IR term) with the variables of PATTERNS other than the one at
+POSITION bound to the scrutinees TEMPS (Coalton symbols)."
+  (loop for pattern in (reverse patterns)
+        for temp in (reverse temps)
+        for i downfrom (1- (length patterns))
+        do (when (and (/= i position) (eq (ir-kind pattern) :p-var))
+             (setf body (list :let (second body) (third pattern)
+                              (list :coalton-form (second pattern) temp)
+                              body))))
+  body)
 
 (defun ce-match-chain (s translated failure)
   (if (null translated)
@@ -1043,6 +1085,32 @@ body) ...), FAILURE when none matches."
                     :from-end t
                     :initial-value (first (ce-constructor type (car (last names))))))))
       (t (coalton-unsupported "a primitive's result of type ~A" (ir-type-string type))))))
+
+(defun ce-open-primitive (node)
+  "The open code of an application NODE of a Basis function that is one of
+the run time's primitives the IR opens (Word.xorb, String.sub, ...), as the
+CL backend's simplifier does, or NIL."
+  (let* ((function (third node))
+         (arg (fourth node))
+         (cell (and (eq (ir-kind function) :ref) (symbolp (third function))
+                    (third function)))
+         (name (and cell *coalton-basis* (not *ce-basis-mode*)
+                    (not (eq (symbol-package cell) *ce-package*))
+                    (gethash (cell-path cell) (coalton-registry-primitives *coalton-basis*))))
+         (arity (and name (ir-basis-primitive-arity name))))
+    (when (and arity
+               (ce-identity-representation-p (second node))
+               (if (= arity 2)
+                   (and (eq (ir-kind arg) :tuple) (= (length (third arg)) 2)
+                        (every (lambda (a) (ce-identity-representation-p (second a)))
+                               (third arg)))
+                   (ce-identity-representation-p (second arg))))
+      (let* ((args (if (= arity 2) (third arg) (list arg)))
+             (vars (loop repeat (length args) collect (ce-temp "p")))
+             (form (ir-emit-basis-primitive name vars)))
+        (when form
+          `(,(co "LET") ,(mapcar (lambda (v a) (list v (ce a))) vars args)
+            ,(ce-lisp (ce-type (second node)) vars form)))))))
 
 (defun ce-basis-primitive (name type)
   (unless (sml-basis-primitive name)

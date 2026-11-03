@@ -107,7 +107,11 @@ outside the fixnum range do not work in Coalton.")
        (destructuring-bind (path cell type) binding
          (declare (ignore type))
          (let ((symbol (gethash cell *ce-globals*))
-               (worker (gethash cell *ce-workers*)))
+               (worker (gethash cell *ce-workers*))
+               (term (and (= (length (second declaration)) 1) (first (third declaration)))))
+           (let ((primitive (and term (ce-primitive-use-p term))))
+             (when primitive
+               (setf (gethash path (coalton-registry-primitives registry)) primitive)))
            (when symbol (setf (gethash path (coalton-registry-values registry)) symbol))
            (when worker (setf (gethash path (coalton-registry-workers registry)) worker))))))
     ((:exception :exception-alias)
