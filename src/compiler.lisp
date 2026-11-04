@@ -1825,6 +1825,7 @@ names LEXICAL-ENV binds, which they shadow."
          `(progn
             (defparameter ,cell ,compiled-expr)
             ,@(ir-note-basis-primitive cell expr)
+            ,@(ir-note-constant cell compiled-expr)
             ,@(compile-binding-publication cell expr-type))))
       ((eq pat :wild)
        (compile-expr expr local-exceptions lexical-env))

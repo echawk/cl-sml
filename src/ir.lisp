@@ -2072,7 +2072,7 @@ whole body when it does real arithmetic (see SML-IEEE)."
     (:var (let ((entry (ir-local-function (third node))))
             (if entry `#',(fourth entry) (third node))))
     (:ref (third node))
-    (:prim (ir-emit-primitive (third node) (ir-emit-list (fourth node))))
+    (:prim (ir-emit-primitive (third node) (ir-emit-list (fourth node)) (ir-type node)))
     (:tuple `(sml-tuple ,@(ir-emit-list (third node))))
     (:record (record-construction-form (third node) (ir-emit-list (fourth node))))
     (:select `(svref ,(ir-emit (fourth node)) ,(third node)))
@@ -2219,7 +2219,10 @@ name -> number of arguments (2 means a pair).")
           ((string= name "Char.ord") `(sml-ord ,@args))
           ((string= name "Char.chr") `(sml-chr ,@args))))))
 
-(defun ir-emit-primitive (op args)
+(defun ir-emit-primitive (op args &optional typed)
+  "The CL form of primitive OP applied to the forms ARGS.  In a typed term
+(TYPED, the node's type), a ref is known to be one, so `!' and `:=' access
+its cell directly."
   (ecase (first op)
     (:overloaded (compile-overloaded-operation (second op) (third op) args))
     (:equality
@@ -2228,11 +2231,13 @@ name -> number of arguments (2 means a pair).")
          (cond (negated `(not ,form))
                ((eq test 'string=) `(if ,form t nil))
                (t form)))))
-    (:binary `(,(second op) ,@args))
+    (:binary (if (and typed (eq (second op) 'sml-assign))
+                 `(progn (setf (svref ,(first args) 1) ,(second args)) (sml-unit))
+                 `(,(second op) ,@args)))
     (:word-binary `(ldb (byte +sml-word-size+ 0) (,(second op) ,@args)))
     (:basis (ir-emit-basis-primitive (second op) args))
     (:not `(not ,@args))
-    (:deref `(funcall #'sml-deref ,@args))
+    (:deref (if typed `(svref ,@args 1) `(funcall #'sml-deref ,@args)))
     (:list `(list ,@args))))
 
 (defun sml-basis-primitive-use-name (ast)
@@ -2246,6 +2251,17 @@ name -> number of arguments (2 means a pair).")
        (equal (first (second (third ast))) "b")
        (stringp (second (second (third ast))))
        (second (second (third ast)))))
+
+(defun ir-note-constant (cell form)
+  "Forms recording that CELL, bound to the value of the CL form FORM, holds
+a number or a character, when FORM is one (and recording it now): the
+simplifier puts the constant in place of the cell's uses."
+  (cond
+    ((or (numberp form) (characterp form))
+     (setf (get cell 'sml-ir-constant) (list form))
+     `((setf (get ',cell 'sml-ir-constant) '(,form))))
+    (t (remprop cell 'sml-ir-constant)
+       nil)))
 
 (defun ir-note-basis-primitive (cell expr)
   "Forms recording that CELL, bound to the value of EXPR, holds a Basis
@@ -2646,7 +2662,15 @@ it was a variable bound to it (to be copied)."
 values (tuples, constructors, functions) or to a term to substitute."
   (macrolet ((simp (x) `(ir-simplify-node ,x env)))
     (case (ir-kind node)
-      ((:const :unit :ref) node)
+      ((:const :unit) node)
+      (:ref
+       (let* ((form (third node))
+              (constant (and (symbolp form) (symbol-package form)
+                             (get form 'sml-ir-constant))))
+         (if constant
+             (ir :const (or (ir-type node) (ir-constant-type (first constant)))
+                 (first constant))
+             node)))
       (:var
        (let ((known (gethash (third node) env)))
          (if (and known (eq (car known) :substitute))
