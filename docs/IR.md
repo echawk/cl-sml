@@ -126,6 +126,44 @@ match on literals, `trivia:match` (or `trivia:match*` for several
 scrutinees) otherwise.  `cl-sml:*sml-decision-trees*` (default `t`) set to
 `nil` compiles every match the old way, for comparison.
 
+Functions and values (2026-11-03, `cl-sml:*sml-local-workers*`; the
+Coalton backend turns it off):
+
+- **Local functions.**  A `letrec` of functions (`fun` in `let` or `local`)
+  is a CL `labels`.  A function whose clauses all take a tuple of the same
+  width is lowered as a function of the fields (`ir-lower-local-fun`, like
+  the top-level workers), and a curried chain of `:fn` nodes takes all its
+  parameters at once; an application to a tuple, or to all the curried
+  arguments, is a direct local call (`ir-emit-application`), and a use as
+  a value is a wrapper of one argument (`*ir-local-functions*`).  Code
+  compiled apart from the term (a structure in a `let`, a hoisted match)
+  sees the function as a variable bound to its wrapper.
+- **Curried top-level workers.**  A top-level `fun` without a tupled worker
+  has a global worker of all its curried parameters (`|f;k/cN|`,
+  `note-curried-fun-worker`): its term is the `:fn` chain flattened
+  (`ir-flatten-curried`), and an application that supplies all the
+  arguments is a `:call` (`ir-lower-curried-call`).  A worker that calls
+  itself has its body as a local function (`worker-defun`).
+- **Declarations.**  Parameters and `let`, pattern and loop variables of
+  type real are declared `double-float`, of type int `fixnum` (SBCL), of a
+  ref or vector type `simple-vector` (`ir-representation-type`); only the
+  Basis's types (by stamp; `:base` in inline templates) qualify.
+- **Reals.**  Each real operation is `(sml-ieee form)`; a function whose
+  body does real arithmetic masks the float traps once, if they are not
+  masked already (`with-sml-ieee-floats`), and inside it `sml-ieee` is the
+  bare operation (src/portability.lisp).  Setting the floating-point modes
+  costs about 50 ns on arm64, reading them a few.
+- **Exceptions.**  A `handle` is `with-sml-handler`: while it is active,
+  `raise` throws the value to it instead of signalling a condition
+  (src/runtime.lisp, `*sml-handler-active*`).
+- **Primitives.**  `!` and `:=` in typed code are `svref` and its `setf`;
+  `use{b = NAME}` is `(:prim (:basis-value NAME))`, the primitive looked up
+  at load time; Array, Vector, Math and the String, Char and Int
+  comparisons are opened like `String.sub` (`ir-emit-basis-primitive`).
+  An array is a simple-vector after the marker `:array`, or, when its
+  elements are reals, a `(simple-array double-float (*))`; `Array.sub`
+  tests which unless the element type is known not to be real.
+
 ## Types
 
 IR types do not refer to the checker's objects (`src/ir-types.lisp`
@@ -301,6 +339,16 @@ takes a census of the uses of each variable, then rewrites the term once:
   that raise (`Char.chr`, `String.sub`) are never folded.
 - **Known conditions.**  `if` on a constant takes its branch; `if not c`
   swaps the branches.
+- **Constants and types.**  A cell bound by a top-level `val` to a number
+  or a character is replaced by the constant (`ir-note-constant`).  In code
+  inlined from the untyped Basis, or from a polymorphic template, a
+  variable takes the type of what its `let` binds, an inlined call keeps
+  the call's type (`ir-with-type`), and the generic operators whose
+  operands' types are now known are specialised like resolved overloading,
+  `=` at a type of `eql`/string fields becoming open code
+  (`ir-specialize-generic-primitive`, `:typed-equality`).
+- **Records** bound by `let` are taken apart like tuples, so a record only
+  selected from is not built.
 
 Pure means without effects and without exceptions: constants, variables,
 cells, functions, tuples, records and constructors of pure terms, and the
