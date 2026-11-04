@@ -1623,6 +1623,7 @@ Returns a list of (declaration forms) or, with ON-ERROR :COLLECT, of
 (defun sml-program-ir-for-coalton (source package-name)
   (let ((*sml-ir-simplify* nil)
         (*sml-tupled-workers* t)
+        (*sml-local-workers* nil)
         (*sml-defunctorize* t))
     (sml-ir-program source :package package-name)))
 

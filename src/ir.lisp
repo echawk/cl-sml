@@ -661,8 +661,7 @@ returns, as COMPILE-LOCAL-DECL compiles it."
               (functions
                 (mapcar (lambda (fun-dec)
                           (list (local-binding-symbol (second fun-dec) bindings)
-                                (ir-lower-fn-clauses (third fun-dec) local-exceptions
-                                                     (second fun-dec) env)))
+                                (ir-lower-local-fun fun-dec local-exceptions env)))
                         funs))
               (body (funcall body-thunk)))
          (ir :letrec (ir-type body) functions body)))
@@ -758,6 +757,22 @@ returns, as COMPILE-LOCAL-DECL compiles it."
                                         *sml-local-structure-prefixes*)
                        outer
                      (funcall body-thunk)))))))))))))
+
+(defun ir-lower-local-fun (fun-dec local-exceptions lexical-env)
+  "The term of the function a `fun' of a `let' or `local' declares: like a
+top-level one's worker (COMPILE-TUPLED-TOP-LEVEL-FUN), a function of the
+fields of its argument when its clauses all take a tuple of the same
+width (the :fn then has several parameters; IR-EMIT-LOCAL-FUNCTIONS)."
+  (let ((arity (and *sml-local-workers* *sml-tupled-workers*
+                    (tupled-fun-arity (third fun-dec)))))
+    (if arity
+        (let ((*ir-fun-type-node* (third fun-dec)))
+          (ir-lower-fn-clauses (mapcar (lambda (clause)
+                                         (cons (tuple-pattern-subpatterns (first (first clause)))
+                                               (rest clause)))
+                                       (third fun-dec))
+                               local-exceptions (second fun-dec) lexical-env t))
+        (ir-lower-fn-clauses (third fun-dec) local-exceptions (second fun-dec) lexical-env))))
 
 ;;; Functions of clauses (`fun', and `fn' through IR-LOWER)
 
@@ -1266,7 +1281,10 @@ whose groups of rules are hoisted functions (COMPILE-TUPLE-DISPATCH-CASE)."
            (otherwise (funcall ,fallback)))))))
 
 (defun ir-emit-dispatch-group (rules value fallback)
-  (let ((clauses
+  (let* (;; Hoisted functions are global: they see the local functions in
+         ;; scope as variables, which they take as parameters.
+         (*ir-local-functions* (if *sml-hoisting-enabled* nil *ir-local-functions*))
+         (clauses
           (mapcar (lambda (rule)
                     (destructuring-bind ((pattern) body) rule
                       (list (ir-emit-pattern pattern)
@@ -1862,12 +1880,180 @@ when the tree would be too large."
     ((:exception :exception-alias) (list (second declaration)))
     (:module (lexical-structure-cells (second declaration)))))
 
+;;; Representation types: what the code may declare about the values of an
+;;; IR type.  Reals are always double-floats; on SBCL, Int.int is exactly
+;;; the fixnums.  Only the Basis's own types qualify (compared by stamp, so
+;;; a program's `datatype real' does not), and only in typed terms.
+
+(defun ir-base-type-p (type name)
+  (and (consp type) (eq (first type) :con)
+       (let ((base (ir-base-type name)))
+         (and base
+              (eql (ir-tycon-stamp (second type)) (ir-tycon-stamp (second base)))
+              (string= (ir-tycon-name (second type)) (ir-tycon-name (second base)))))))
+
+(defun ir-representation-type (type)
+  "The CL type of every value of IR type TYPE that is worth declaring, or NIL."
+  (cond ((null type) nil)
+        ((ir-base-type-p type "real") 'double-float)
+        #+sbcl ((ir-base-type-p type "int") 'fixnum)))
+
+(defun ir-type-declarations (variables types)
+  "Declarations of VARIABLES, of IR types TYPES, for the CL compiler."
+  (let ((declarations (loop for variable in variables
+                            for type in types
+                            for cl-type = (ir-representation-type type)
+                            when cl-type collect `(type ,cl-type ,variable))))
+    (and declarations `((declare ,@declarations)))))
+
+;;; Local functions (*SML-LOCAL-WORKERS*): the functions of a `letrec' are
+;;; CL local functions (LABELS), so that their calls are known calls the CL
+;;; compiler can make directly, with unboxed arguments.  A function of
+;;; several parameters (a tuple's fields, IR-LOWER-LOCAL-FUN) or of curried
+;;; parameters (`fun f a b', a chain of :fn) takes them all at once; its
+;;; applications to a tuple, or to all its curried arguments, call it
+;;; directly, and its uses as a value are a wrapper of one argument.  An
+;;; entry of *IR-LOCAL-FUNCTIONS* is (symbol kind arity wrapper), KIND
+;;; :TUPLED, :CURRIED or :PLAIN (one argument; the wrapper is the function).
+
+(defvar *ir-local-functions* nil
+  "The local functions in scope where the node being emitted will be.")
+
+(defun ir-local-function (symbol)
+  (assoc symbol *ir-local-functions* :test #'eq))
+
+(defun ir-curried-depth (fn)
+  "The number of curried parameters of the chain of :fn nodes FN."
+  (loop for node = fn then (fourth node)
+        while (and (eq (ir-kind node) :fn) (= (length (third node)) 1))
+        count t))
+
+(defun ir-local-function-entry (binding)
+  (destructuring-bind (symbol fn) binding
+    (let ((params (third fn)))
+      (cond ((> (length params) 1)
+             (list symbol :tupled (length params) (gensym "WRAPPER")))
+            ((> (ir-curried-depth fn) 1)
+             (list symbol :curried (ir-curried-depth fn) (gensym "WRAPPER")))
+            (t (list symbol :plain 1 symbol))))))
+
+(defun ir-local-function-definitions (binding entry)
+  "The LABELS definitions of the function of BINDING: the worker, and its
+wrapper unless it is the worker."
+  (destructuring-bind (symbol kind arity wrapper) entry
+    (let* ((fn (second binding))
+           (chain (loop for node = fn then (fourth node)
+                        repeat (if (eq kind :curried) arity 1)
+                        collect node))
+           (params (mapcan (lambda (node) (copy-list (third node))) chain))
+           (types (if (eq kind :tupled)
+                      (ir-tuple-field-types (ir-arrow-domain (ir-type fn)) arity)
+                      (mapcar (lambda (node) (ir-arrow-domain (ir-type node))) chain)))
+           (body (fourth (car (last chain))))
+           (worker `(,symbol ,params
+                             ,@(portable-tail-call-declarations)
+                             ,@(ir-type-declarations params types)
+                             ,(ir-bind-local-function-variables
+                               (with-ir-scope (params) (ir-emit body))))))
+      (ecase kind
+        (:plain (list worker))
+        (:tupled
+         (let ((tuple (gensym "TUPLE")))
+           (list worker
+                 `(,wrapper (,tuple)
+                            (,symbol ,@(loop for i from 1 to arity
+                                             collect `(svref ,tuple ,i)))))))
+        (:curried
+         (let ((args (loop repeat arity collect (gensym "ARG"))))
+           (list worker
+                 `(,wrapper (,(first args))
+                            ,(reduce (lambda (arg body) `(lambda (,arg) ,body))
+                                     (rest args)
+                                     :from-end t
+                                     :initial-value `(,symbol ,@args))))))))))
+
+(defun ir-mentions-symbol-p (form symbol &key (call-position t))
+  "Does SYMBOL occur in the CL form FORM (when not CALL-POSITION, other than
+as the operator of a form; declarations are not looked at)?"
+  (let ((seen (make-hash-table :test #'eq)))
+    (labels ((walk (x)
+               (cond ((eq x symbol) t)
+                     ((and (consp x) (not (gethash x seen)) (not (eq (car x) 'declare)))
+                      (setf (gethash x seen) t)
+                      (or (if (eq (car x) symbol) call-position (walk (car x)))
+                          (loop for tail = (cdr x) then (cdr tail)
+                                while (consp tail)
+                                thereis (walk (car tail))))))))
+      (walk form))))
+
+(defun ir-bind-local-function-variables (form)
+  "FORM, with the local functions in scope that it refers to as variables
+bound to their wrappers.  Code compiled apart from the term (a structure
+declared in a `let', a hoisted match) refers to the function by its
+variable."
+  (let ((bindings (loop for (symbol nil nil wrapper) in *ir-local-functions*
+                        when (ir-mentions-symbol-p form symbol :call-position nil)
+                          collect `(,symbol #',wrapper))))
+    (if bindings
+        `(let ,bindings
+           (declare (ignorable ,@(mapcar #'first bindings)))
+           ,form)
+        form)))
+
+(defun ir-emit-local-functions (bindings body)
+  "A `letrec' of functions BINDINGS around BODY, as LABELS."
+  (let* ((entries (mapcar #'ir-local-function-entry bindings))
+         (*ir-local-functions* (append entries *ir-local-functions*)))
+    ;; In scope as variables too, for hoisted code (IR-EMIT-DISPATCH-GROUP).
+    (with-ir-scope ((mapcar #'first bindings))
+      (let ((definitions (loop for binding in bindings
+                               for entry in entries
+                               append (ir-local-function-definitions binding entry))))
+        `(labels ,definitions
+           (declare (ignorable ,@(mapcar (lambda (definition) `#',(first definition))
+                                         definitions)))
+           ,(ir-bind-local-function-variables (ir-emit body)))))))
+
+(defun ir-emit-application (node)
+  "The CL form of the application NODE: a direct call when it applies a
+local function to all of its arguments."
+  (let ((args nil) (head node))
+    (loop while (eq (ir-kind head) :app)
+          do (push (fourth head) args)
+             (setf head (third head)))
+    (let ((entry (and (eq (ir-kind head) :var) (ir-local-function (third head)))))
+      (flet ((apply-rest (call rest)
+               (reduce (lambda (form arg) `(funcall ,form ,(ir-emit arg)))
+                       rest :initial-value call)))
+        (if (null entry)
+            `(funcall ,(ir-emit (third node)) ,(ir-emit (fourth node)))
+            (destructuring-bind (symbol kind arity wrapper) entry
+              (declare (ignore wrapper))
+              (ecase kind
+                (:plain (apply-rest `(,symbol ,(ir-emit (first args))) (rest args)))
+                (:tupled
+                 (let ((arg (first args)))
+                   (apply-rest
+                    (if (and (eq (ir-kind arg) :tuple) (= (length (third arg)) arity))
+                        `(,symbol ,@(ir-emit-list (third arg)))
+                        (let ((tuple (gensym "TUPLE")))
+                          `(let ((,tuple ,(ir-emit arg)))
+                             (,symbol ,@(loop for i from 1 to arity
+                                              collect `(svref ,tuple ,i))))))
+                    (rest args))))
+                (:curried
+                 (if (>= (length args) arity)
+                     (apply-rest `(,symbol ,@(ir-emit-list (subseq args 0 arity)))
+                                 (nthcdr arity args))
+                     `(funcall ,(ir-emit (third node)) ,(ir-emit (fourth node))))))))))))
+
 (defun ir-emit (node)
   "The CL form of IR term NODE."
   (ecase (ir-kind node)
     (:const (third node))
     (:unit '(sml-unit))
-    (:var (third node))
+    (:var (let ((entry (ir-local-function (third node))))
+            (if entry `#',(fourth entry) (third node))))
     (:ref (third node))
     (:prim (ir-emit-primitive (third node) (ir-emit-list (fourth node))))
     (:tuple `(sml-tuple ,@(ir-emit-list (third node))))
@@ -1881,7 +2067,7 @@ when the tree would be too large."
                 (:boxed `(cons ',tag ,@args))
                 (:flat `(vector ',tag ,@args))
                 (:flat-construct `(sml-construct-flat ',tag ,@args))))))
-    (:app `(funcall ,(ir-emit (third node)) ,(ir-emit (fourth node))))
+    (:app (ir-emit-application node))
     (:call `(,(third node) ,@(ir-emit-list (fourth node))))
     (:fn (destructuring-bind (params body name) (cddr node)
            (let ((body (with-ir-scope (params) (ir-emit body))))
@@ -1893,12 +2079,16 @@ when the tree would be too large."
                (declare (ignorable ,symbol))
                ,(with-ir-scope ((list symbol)) (ir-emit body)))))
     (:letrec (destructuring-bind (bindings body) (cddr node)
-               (with-ir-scope ((mapcar #'first bindings))
-                 `(let ,(mapcar (lambda (binding) `(,(first binding) nil)) bindings)
-                    ,@(mapcar (lambda (binding)
-                                `(setf ,(first binding) ,(ir-emit (second binding))))
-                              bindings)
-                    ,(ir-emit body)))))
+               (if (and *sml-local-workers*
+                        (every (lambda (binding) (eq (ir-kind (second binding)) :fn))
+                               bindings))
+                   (ir-emit-local-functions bindings body)
+                   (with-ir-scope ((mapcar #'first bindings))
+                     `(let ,(mapcar (lambda (binding) `(,(first binding) nil)) bindings)
+                        ,@(mapcar (lambda (binding)
+                                    `(setf ,(first binding) ,(ir-emit (second binding))))
+                                  bindings)
+                        ,(ir-emit body))))))
     (:seq `(progn ,@(ir-emit-list (third node))))
     (:if `(if ,(ir-emit (third node)) ,(ir-emit (fourth node)) ,(ir-emit (fifth node))))
     (:while `(progn (loop while ,(ir-emit (third node)) do ,(ir-emit (fourth node)))
@@ -1928,6 +2118,7 @@ when the tree would be too large."
     (:loop (destructuring-bind (tag variables inits body) (cddr node)
              (let ((block (gensym "SELF")))
                `(let ,(mapcar #'list variables (ir-emit-list inits))
+                  ,@(ir-type-declarations variables (mapcar #'ir-type inits))
                   (block ,block
                     (tagbody
                        ,tag

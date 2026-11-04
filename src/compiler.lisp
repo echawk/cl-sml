@@ -443,6 +443,13 @@ onto its car (see SHOW-SML-IR).")
 function of the tuple's fields plus a wrapper, and its calls with a tuple
 expression as direct calls (ROADMAP item 9).")
 
+(defvar *sml-local-workers* t
+  "Compile the functions a `let' or `local' declares with `fun' as local
+CL functions (LABELS): a tuple argument becomes several parameters, as for
+top-level functions, curried parameters become one function of all of
+them, and calls that supply them call it directly (IR-EMIT-LOCAL-FUNCTIONS).
+The Coalton backend, which emits from the IR itself, turns it off.")
+
 (defvar *sml-tupled-worker-max-clauses* 16
   "The most clauses a tuple-taking function compiled with a worker may
 have (TUPLED-FUN-ARITY).")
