@@ -2385,11 +2385,8 @@ subexpressions go through COMPILE-EXPR."
              (_ ,(compile-match-failure "Match" "case" (first (first branches)))))))))
 
     ((and (listp ast) (eq (car ast) :handle))
-     (let ((branches (third ast))
-           (condition-var (gensym "EXN")))
-       `(handler-case ,(compile-expr (second ast) local-exceptions lexical-env)
-          (sml-raised-exception (,condition-var)
-            (let ((value (sml-exception-value ,condition-var)))
+     (let ((branches (third ast)))
+       `(with-sml-handler (value) ,(compile-expr (second ast) local-exceptions lexical-env)
               (trivia:match value
                 ,@(mapcar (lambda (branch)
 	                            (let* ((var-map (pattern-variable-map (first branch)
@@ -2398,7 +2395,7 @@ subexpressions go through COMPILE-EXPR."
                               `(,(compile-pat (first branch) local-exceptions branch-env)
                                 ,(compile-expr (second branch) local-exceptions branch-env))))
                           branches)
-                (_ (sml-raise value))))))))
+                (_ (sml-raise value))))))
 
     ;; --- Control Flow & Short-Circuiting ---
     ((and (listp ast) (eq (car ast) :if))

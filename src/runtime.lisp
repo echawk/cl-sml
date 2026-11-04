@@ -561,7 +561,12 @@ by functor FUNCTOR-NAME, that the compiled code did not bind itself
   (cond
     ((sml-exception-tag-p constructor) constructor)
     ((functionp constructor)
-     (or (gethash constructor *sml-exception-function-tags*)
+     ;; On SBCL the tag is the closure's one closed-over value (see
+     ;; MAKE-SML-EXCEPTION-FUNCTION), cheaper than the table.
+     (or #+sbcl (and (sb-kernel:closurep constructor)
+                     (let ((tag (sb-kernel:%closure-index-ref constructor 0)))
+                       (and (sml-exception-tag-p tag) tag)))
+         (gethash constructor *sml-exception-function-tags*)
          (error "Unknown SML exception constructor function: ~S" constructor)))
     ((and (consp constructor) (sml-exception-tag-p (car constructor)))
      (car constructor))
@@ -1159,8 +1164,40 @@ for (tag . argument) or nullary, NIL when unknown."
              (funcall 'sml-value->string (sml-exception-payload value))))
     (t (princ-to-string value))))
 
+;;; Raising.  An SML exception is the Lisp condition SML-RAISED-EXCEPTION,
+;;; which Lisp code, the REPL and the Coalton backend handle.  But making
+;;; and signalling a condition is slow (programs raise exceptions for
+;;; control flow), so while an SML `handle' compiled by the CL backend is
+;;; active, *SML-HANDLER-ACTIVE* is true and the value is thrown to it
+;;; instead (WITH-SML-HANDLER).  Lisp code that handles the condition
+;;; around SML code binds it to NIL (WITH-SML-EXCEPTIONS-AS-CONDITIONS).
+
+(defvar *sml-handler-active* nil
+  "True while the innermost handler of SML exceptions is an SML `handle'.")
+
+(defmacro with-sml-exceptions-as-conditions (&body body)
+  "BODY, whose SML exceptions are signalled as conditions."
+  `(let ((*sml-handler-active* nil)) ,@body))
+
+(defmacro with-sml-handler ((value) form &body handler)
+  "FORM's value, or when FORM raises an SML exception, HANDLER's with VALUE
+bound to the exception value."
+  (let ((block (gensym "HANDLE")) (condition (gensym "CONDITION")))
+    `(block ,block
+       (let ((,value
+               (catch '%sml-exception
+                 (return-from ,block
+                   (handler-case (let ((*sml-handler-active* t)) ,form)
+                     ;; Raised as a condition all the same (by code that
+                     ;; makes one itself).
+                     (sml-raised-exception (,condition)
+                       (throw '%sml-exception (sml-exception-value ,condition))))))))
+         ,@handler))))
+
 (defun sml-raise (value)
-  (error 'sml-raised-exception :value value))
+  (if *sml-handler-active*
+      (throw '%sml-exception value)
+      (error 'sml-raised-exception :value value)))
 
 (defun make-sml-adt (tag &optional payload)
   (cons tag payload))
@@ -1459,7 +1496,7 @@ equal to themselves."
                     (if (or (floatp a) (floatp b))
                         (sml-ieee (= a b))
                         (= a b)))))
-      ((stringp a) (return (and (stringp b) (string= a b))))
+      ((stringp a) (return (and (stringp b) (sml-string= a b))))
       ((simple-vector-p a)
        (return (and (simple-vector-p b)
                     (not (sml-ref-p a))
@@ -1469,6 +1506,19 @@ equal to themselves."
                     (= (length a) (length b))
                     (every #'sml-equal a b))))
       (t (return nil)))))
+
+(declaim (inline sml-string=))
+(defun sml-string= (a b)
+  "Equality of the strings A and B, which are mostly short and often
+differ in length: STRING= takes a general path first."
+  (or (eq a b)
+      (let ((n (length a)))
+        (and (= n (length b))
+             (if (and (typep a '(simple-array character (*)))
+                      (typep b '(simple-array character (*))))
+                 (loop for i of-type fixnum below n
+                       always (char= (schar a i) (schar b i)))
+                 (string= a b))))))
 
 (define-sml-binary-primitive sml-= sml-op-= (a b) (sml-equal a b))
 (define-sml-binary-primitive sml-<> sml-op-<> (a b) (not (sml-equal a b)))
@@ -1604,9 +1654,11 @@ another exception does not change what the primitives raise."
   "Raise `Match` or `Bind` (EXCEPTION-NAME) because no rule of a match
 applied.  WHERE names the function, or is \"fn\", \"case\" or \"val\";
 POSITION is the source offset of the match, when known."
-  (error 'sml-raised-exception
-         :value (sml-initial-exception exception-name)
-         :context (and where (list where position))))
+  (if *sml-handler-active*
+      (throw '%sml-exception (sml-initial-exception exception-name))
+      (error 'sml-raised-exception
+             :value (sml-initial-exception exception-name)
+             :context (and where (list where position)))))
 
 (defun sml-sequence-sub (sequence index)
   (if (and (integerp index)

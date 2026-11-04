@@ -2157,10 +2157,7 @@ whole body when it does real arithmetic (see SML-IEEE)."
                     (sml-unit)))
     (:raise `(sml-raise ,(ir-emit (third node))))
     (:handle
-     (let ((condition-var (gensym "EXN")))
-       `(handler-case ,(ir-emit (third node))
-          (sml-raised-exception (,condition-var)
-            (let ((value (sml-exception-value ,condition-var)))
+     `(with-sml-handler (value) ,(ir-emit (third node))
               ,(or (and *sml-decision-trees*
                         (let ((value (gensym "VALUE")))
                           (let ((tree (ir-emit-decision-tree
@@ -2175,7 +2172,7 @@ whole body when it does real arithmetic (see SML-IEEE)."
                                   (list (ir-emit-pattern (first rule))
                                         (ir-emit-rule-body (list (first rule)) (second rule))))
                                 (fourth node))
-                      (_ (sml-raise value)))))))))
+                      (_ (sml-raise value))))))
     (:match (ir-emit-match node))
     (:loop (destructuring-bind (tag variables inits body) (cddr node)
              (let ((block (gensym "SELF")))
@@ -2311,10 +2308,8 @@ its cell directly."
     (:overloaded (compile-overloaded-operation (second op) (third op) args))
     (:equality
      (destructuring-bind (test negated) (rest op)
-       (let ((form `(,test ,@args)))
-         (cond (negated `(not ,form))
-               ((eq test 'string=) `(if ,form t nil))
-               (t form)))))
+       (let ((form `(,(if (eq test 'string=) 'sml-string= test) ,@args)))
+         (if negated `(not ,form) form))))
     (:binary (if (and typed (eq (second op) 'sml-assign))
                  `(progn (setf (svref ,(first args) 1) ,(second args)) (sml-unit))
                  `(,(second op) ,@args)))

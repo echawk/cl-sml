@@ -155,7 +155,8 @@ In the atomic region."
 (defun run-thread (thread function)
   (unwind-protect
        (catch 'thread-exit
-         (handler-case (funcall function (sml-unit))
+         (handler-case (cl-sml::with-sml-exceptions-as-conditions
+                         (funcall function (sml-unit)))
            (cl-sml::sml-raised-exception (condition)
              (report-uncaught thread condition))
            (serious-condition (condition)
@@ -296,7 +297,8 @@ CVARs of the withNacks go to the cdr of NACKS."
            (when post
              (setf (branch-post branch)
                    (lambda (value)
-                     (handler-case (funcall post value)
+                     (handler-case (cl-sml::with-sml-exceptions-as-conditions
+                                     (funcall post value))
                        (cl-sml::sml-raised-exception (condition)
                          (funcall handler (cl-sml::sml-exception-value condition)))))))))))
     (choose-event
