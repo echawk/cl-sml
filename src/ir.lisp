@@ -995,7 +995,11 @@ follows case by case)."
                          (list* (ir-kind node) type (cddr node))
                          node)))
            (:selector (ir-lower-selector-function ast type))
-           (:deref (ir :prim type '(:deref) (list (sub (second ast)))))
+           (:deref (let ((cell (sub (second ast))))
+                     ;; The checker may not annotate `!e' itself.
+                     (ir :prim (or type (and (ir-type-named-p (ir-type cell) "ref")
+                                             (third (ir-type cell))))
+                         '(:deref) (list cell))))
            (:infix-app
             (let ((left (sub (third ast)))
                   (right (sub (fourth ast))))
@@ -3035,6 +3039,9 @@ NIL."
        (destructuring-bind (symbol value body) (cddr function)
          (ir :let (ir-type node) symbol value
              (ir-simplify-application (ir :app (ir-type node) body arg) env))))
+      ;; !e, `!' applied as an identifier
+      ((and (eq (ir-kind function) :ref) (equal (third function) '(function sml-deref)))
+       (ir :prim (ir-type node) '(:deref) (list arg)))
       ;; not e
       ((and (eq (ir-kind function) :ref) (equal (third function) '(function sml-not)))
        (or (ir-fold-primitive '(:not) (list arg) (ir-type node))
