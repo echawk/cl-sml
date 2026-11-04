@@ -316,6 +316,32 @@ lowered.")
             (t (ir :con type :flat-construct symbol
                    (list (ir-lower arg local-exceptions lexical-env)))))))))
 
+(defun ir-lower-curried-call (ast local-exceptions lexical-env)
+  "The application AST, `f a1 ... an', as a direct call of the worker of
+the curried top-level function f (NOTE-CURRIED-FUN-WORKER) when it supplies
+all its parameters, or NIL."
+  (let ((nodes nil) (node ast))
+    (loop while (and (consp node) (eq (car node) :app))
+          do (push node nodes)
+             (setf node (second node)))
+    ;; NODES: the applications, innermost first; NODE: the head.
+    (when (and (consp node) (eq (car node) :var))
+      (let* ((symbol (resolved-sml-symbol (second node) lexical-env))
+             (worker (and (symbolp symbol) (symbol-package symbol)
+                          (get symbol 'sml-curried-worker))))
+        (when (and worker (<= (cdr worker) (length nodes)))
+          (let* ((arity (cdr worker))
+                 (call-node (nth (1- arity) nodes))
+                 (call (ir :call (ir-node-type call-node) (car worker)
+                           (mapcar (lambda (app) (ir-lower (third app) local-exceptions
+                                                           lexical-env))
+                                   (subseq nodes 0 arity))
+                           symbol)))
+            (loop for app in (nthcdr arity nodes)
+                  do (setf call (ir :app (ir-node-type app) call
+                                    (ir-lower (third app) local-exceptions lexical-env))))
+            call))))))
+
 (defun ir-lower-tupled-call (head arg local-exceptions lexical-env type)
   "Like COMPILE-TUPLED-CALL, or NIL."
   (when (and (consp head) (eq (car head) :var)
@@ -1032,6 +1058,7 @@ follows case by case)."
                 (known-data-constructor-application-p (second head) lexical-env)))
        (ir-lower-constructor-application head arg local-exceptions lexical-env type))
       ((ir-lower-tupled-call head arg local-exceptions lexical-env type))
+      ((ir-lower-curried-call ast local-exceptions lexical-env))
       (t (ir :app type (ir-lower head local-exceptions lexical-env)
              (ir-lower arg local-exceptions lexical-env))))))
 
@@ -2133,8 +2160,13 @@ whole body when it does real arithmetic (see SML-IEEE)."
     (:fn (destructuring-bind (params body name) (cddr node)
            (let ((body (ir-ieee-body (with-ir-scope (params) (ir-emit body)))))
              (if (= (length params) 1)
-                 (sml-lambda-form name (first params) body)
-                 `(lambda ,params ,@(portable-tail-call-declarations) ,body)))))
+                 (sml-lambda-form name (first params)
+                                  (let ((declarations (ir-type-declarations
+                                                       params (ir-fn-parameter-types node))))
+                                    (if declarations `(locally ,@declarations ,body) body)))
+                 `(lambda ,params ,@(portable-tail-call-declarations)
+                    ,@(ir-type-declarations params (ir-fn-parameter-types node))
+                    ,body)))))
     (:let (destructuring-bind (symbol value body) (cddr node)
             `(let ((,symbol ,(ir-emit value)))
                (declare (ignorable ,symbol))
@@ -2743,6 +2775,16 @@ it was a variable bound to it (to be copied)."
             (mapcar #'cons (third fn) args)
             :from-end t :initial-value body)))
 
+(defun ir-beta-curried (fn args)
+  "The application of function term FN to ARGS: all at once when FN has as
+many parameters, else one at a time down a chain of :fn nodes."
+  (if (= (length (third fn)) (length args))
+      (ir-beta fn args)
+      (ir-beta (list :fn (ir-type fn) (third fn)
+                     (ir-beta-curried (fourth fn) (rest args))
+                     (fifth fn))
+               (list (first args)))))
+
 (defun ir-simplify-node (node env)
   "One simplification of NODE.  ENV maps let-bound variables to known
 values (tuples, constructors, functions) or to a term to substitute."
@@ -2979,8 +3021,12 @@ NIL."
   (destructuring-bind (worker args cell) (cddr node)
     (let ((args (mapcar (lambda (a) (ir-simplify-node a env)) args))
           (template (and (symbolp cell) (get cell 'sml-ir-inline))))
-      (if (and template (= (length (third template)) (length args)))
-          (ir-with-type (ir-simplify-node (ir-beta (ir-instantiate template) args) env)
+      (if (and template
+               (or (= (length (third template)) (length args))
+                   (and (get cell 'sml-curried-worker)
+                        (= (ir-curried-depth template) (length args)))))
+          (ir-with-type (ir-simplify-node (ir-beta-curried (ir-instantiate template) args)
+                                          env)
                         (ir-type node))
           (ir :call (ir-type node) worker args cell)))))
 
@@ -3272,7 +3318,7 @@ signature opaquely sees the representation of an abstract type."
 
 ;;; Compiling
 
-(defun ir-compile-term (lowered lexical-env)
+(defun ir-compile-term (lowered lexical-env &optional flatten)
   "The CL form of the term LOWERED, simplified, compiled where LEXICAL-ENV
 is in scope."
   (let ((simplified (if (and *sml-ir-simplify* (not (ir-trivial-term-p lowered)))
@@ -3287,7 +3333,28 @@ is in scope."
     (when (and *sml-ir-log* (or *sml-ir-program* (not (ir-trivial-term-p lowered))))
       (push (cons lowered simplified) (car *sml-ir-log*)))
     (let ((*ir-emit-scope* (lexical-environment-symbols lexical-env)))
-      (ir-emit simplified))))
+      (ir-emit (if flatten (ir-flatten-curried simplified) simplified)))))
+
+(defun ir-flatten-curried (fn)
+  "The chain of one-parameter :fn nodes FN as one :fn of all the parameters
+(the worker of a curried top-level function, NOTE-CURRIED-FUN-WORKER)."
+  (let ((params nil) (node fn))
+    (loop while (and (eq (ir-kind node) :fn) (= (length (third node)) 1))
+          do (push (first (third node)) params)
+             (setf node (fourth node)))
+    ;; Its name marks it for IR-FN-PARAMETER-TYPES.
+    (ir :fn (ir-type fn) (nreverse params) node (list :curried (fifth fn)))))
+
+(defun ir-fn-parameter-types (fn)
+  "The types of the parameters of the :fn node FN: its domain, the fields
+of its tuple domain (a worker), or its curried domains (IR-FLATTEN-CURRIED)."
+  (let ((params (third fn)) (type (ir-type fn)))
+    (cond ((= (length params) 1) (list (ir-arrow-domain type)))
+          ((and (consp (fifth fn)) (eq (first (fifth fn)) :curried))
+           (loop repeat (length params)
+                 for arrow = type then (ir-arrow-range arrow)
+                 collect (ir-arrow-domain arrow)))
+          (t (ir-tuple-field-types (ir-arrow-domain type) (length params))))))
 
 (defun ir-compile-expression (ast local-exceptions lexical-env)
   "The CL form of expression AST, compiled through the IR."
@@ -3297,9 +3364,13 @@ is in scope."
                               &optional tupled)
   "The CL form of the function CLAUSES define (COMPILE-FN-CLAUSES-OF-ARITY),
 compiled through the IR."
-  (ir-compile-term (ir-lower-fn-clauses clauses local-exceptions function-name
-                                        outer-lexical-env tupled)
-                   outer-lexical-env))
+  (let* ((flatten *ir-flatten-curried*)
+         ;; Only this function's term, not those compiled while it is
+         ;; lowered (a structure declared in a `let').
+         (lowered (let ((*ir-flatten-curried* nil))
+                    (ir-lower-fn-clauses clauses local-exceptions function-name
+                                         outer-lexical-env tupled))))
+    (ir-compile-term lowered outer-lexical-env flatten)))
 
 ;;; Showing the IR
 

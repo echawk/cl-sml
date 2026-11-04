@@ -450,6 +450,11 @@ top-level functions, curried parameters become one function of all of
 them, and calls that supply them call it directly (IR-EMIT-LOCAL-FUNCTIONS).
 The Coalton backend, which emits from the IR itself, turns it off.")
 
+(defvar *ir-flatten-curried* nil
+  "True while the worker of a curried top-level function is compiled: its
+term, a chain of one-parameter :fn nodes, becomes one :fn of all of them
+(IR-COMPILE-TERM).")
+
 (defvar *sml-tupled-worker-max-clauses* 16
   "The most clauses a tuple-taking function compiled with a worker may
 have (TUPLED-FUN-ARITY).")
@@ -2522,13 +2527,27 @@ match keeps the code that ECL compiles small."
 compiled next) that CELL's function has a worker taking the tuple's fields,
 and return the worker's name and arity."
   (let ((arity (and *sml-tupled-workers* (tupled-fun-arity (third ast)))))
+    (remprop cell 'sml-curried-worker)
     (if arity
         (let ((worker (intern (format nil "~A/~D" (symbol-name cell) arity)
                               (symbol-package cell))))
           (setf (get cell 'sml-tupled-worker) (cons worker arity))
           (values worker arity))
         (progn (remprop cell 'sml-tupled-worker)
+               (note-curried-fun-worker ast cell)
                nil))))
+
+(defun note-curried-fun-worker (ast cell)
+  "When `fun' AST, bound to CELL, has no tupled worker, record that it has
+a worker taking all its curried parameters (a global function: a call that
+supplies them all calls it directly), and return its name and arity."
+  (when (and *sml-tupled-workers* *sml-local-workers*
+             *sml-ir* (not *sml-debug-applications*))
+    (let ((arity (length (first (first (third ast))))))
+      (let ((worker (intern (format nil "~A/c~D" (symbol-name cell) arity)
+                            (symbol-package cell))))
+        (setf (get cell 'sml-curried-worker) (cons worker arity))
+        (values worker arity)))))
 
 (defun compile-tupled-call (head arg local-exceptions lexical-env)
   "A direct call of the worker of the function HEAD names, for the call
@@ -2549,9 +2568,58 @@ and return the worker's name and arity."
       (if (get cell 'sml-tupled-worker)
           (values (car (get cell 'sml-tupled-worker)) (cdr (get cell 'sml-tupled-worker)))
           (note-tupled-fun-worker ast cell))
-    (if worker
-        (compile-tupled-top-level-fun ast cell worker arity local-exceptions lexical-env)
-        (compile-curried-top-level-fun ast cell local-exceptions lexical-env))))
+    (cond (worker
+           (compile-tupled-top-level-fun ast cell worker arity local-exceptions lexical-env))
+          ((get cell 'sml-curried-worker)
+           (compile-curried-worker-top-level-fun ast cell local-exceptions lexical-env))
+          (t (compile-curried-top-level-fun ast cell local-exceptions lexical-env)))))
+
+(defun worker-defun (worker lambda)
+  "The DEFUN of the worker WORKER of a top-level function, LAMBDA its
+lambda list and body.  When it calls itself, the body is a local function,
+whose calls of itself are local calls, cheaper than full calls."
+  (destructuring-bind (lambda-list &rest body) lambda
+    (let ((self (make-symbol (symbol-name worker))))
+      (if (tree-calls-p body worker)
+          `(defun ,worker ,lambda-list
+             ,@(portable-tail-call-declarations)
+             (labels ((,self ,lambda-list ,@(subst self worker body)))
+               (,self ,@lambda-list)))
+          `(defun ,worker ,lambda-list ,@body)))))
+
+(defun tree-calls-p (tree symbol)
+  (and (consp tree)
+       (or (eq (car tree) symbol)
+           (loop for tail = tree then (cdr tail)
+                 while (consp tail)
+                 thereis (tree-calls-p (car tail) symbol)))))
+
+(defun compile-curried-worker-top-level-fun (ast cell local-exceptions lexical-env)
+  "Bind CELL to the curried function `fun' AST declares, whose worker (see
+NOTE-CURRIED-FUN-WORKER) is a global function of all its parameters."
+  (destructuring-bind (worker . arity) (get cell 'sml-curried-worker)
+    (let* ((lambda-form (let ((*sml-binding-symbol-env*
+                                (acons (second ast) cell *sml-binding-symbol-env*))
+                              (*ir-flatten-curried* t))
+                          (compile-fn-clauses (third ast) local-exceptions (second ast)
+                                              (acons (second ast) cell lexical-env))))
+           (args (loop repeat arity collect (gensym "ARG"))))
+      `(progn
+         (declaim (special ,cell))
+         (setf (get ',cell 'sml-curried-worker) (cons ',worker ,arity))
+         ,(worker-defun worker (if (eq (first lambda-form) 'lambda)
+                                   (rest lambda-form)
+                                   ;; (named-lambda name lambda-list . body)
+                                   (cddr lambda-form)))
+         (defparameter ,cell
+           ,(if (= arity 1)
+                `#',worker
+                (sml-lambda-form (second ast) (first args)
+                                 (reduce (lambda (arg body) `(lambda (,arg) ,body))
+                                         (rest args) :from-end t
+                                         :initial-value `(,worker ,@args)))))
+         ,@(ir-note-inline-template ast cell nil local-exceptions lexical-env)
+         ,@(compile-binding-publication cell :unknown)))))
 
 (defun compile-tupled-top-level-fun (ast cell worker arity local-exceptions lexical-env)
   "Bind CELL to the function `fun' AST declares, which takes a tuple of
@@ -2572,7 +2640,7 @@ calls it with the fields of its argument."
     `(progn
        (declaim (special ,cell))
        (setf (get ',cell 'sml-tupled-worker) '(,worker . ,arity))
-       (defun ,worker ,@(rest lambda-form))
+       ,(worker-defun worker (rest lambda-form))
        (defparameter ,cell
          ,(sml-lambda-form (second ast) tuple
                            `(,worker ,@(loop for i from 1 to arity
