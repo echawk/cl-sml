@@ -3245,6 +3245,38 @@ Basis, in a typed program)."
            (ir :let type symbol value (ir-with-type body type))))
         (t (list* (ir-kind node) type (cddr node)))))
 
+(defun ir-destructuring-pattern-p (pattern)
+  "Does PATTERN only bind variables and take tuples and records (of known
+layout) apart, with at least one of these?"
+  (labels ((ok (p)
+             (case (ir-kind p)
+               (:p-wild t)
+               (:p-var (ir-variable-p (third p)))
+               (:p-tuple (every #'ok (third p)))
+               (:p-record (every (lambda (field) (ok (third field))) (fourth p))))))
+    (and (member (ir-kind pattern) '(:p-tuple :p-record))
+         (ok pattern))))
+
+(defun ir-destructure (pattern term)
+  "((symbol . term) ...): the lets binding PATTERN's variables to the parts
+of TERM, in order (a NIL symbol: evaluated for its effect)."
+  (case (ir-kind pattern)
+    (:p-wild (list (cons nil term)))
+    (:p-var (list (cons (third pattern) term)))
+    (t (let* ((temporary (unless (ir-trivial-p term) (gensym "TUPLE")))
+              (value (if temporary (ir :var (ir-type term) temporary) term))
+              (fields (if (eq (ir-kind pattern) :p-tuple)
+                          (loop for p in (third pattern)
+                                for i from 1
+                                collect (cons i p))
+                          (mapcar (lambda (field) (cons (first field) (third field)))
+                                  (fourth pattern)))))
+         (append (and temporary (list (cons temporary term)))
+                 (loop for (index . p) in fields
+                       unless (eq (ir-kind p) :p-wild)
+                         append (ir-destructure
+                                 p (ir :select (ir-type p) index value))))))))
+
 (defun ir-bind (bindings body)
   (reduce (lambda (binding body) (ir :let (ir-type body) (car binding) (cdr binding) body))
           bindings :from-end t :initial-value body))
@@ -3274,6 +3306,22 @@ Basis, in a typed program)."
                   (mapcar #'cons first-patterns scrutinees)
                   :from-end t :initial-value (second (first rules)))
           env))
+        ;; The first rule's patterns only take tuples and records apart:
+        ;; lets of the fields, so that a tuple built for the match (an
+        ;; inlined function's argument) need not be.
+        ((and rules (every #'ir-destructuring-pattern-p first-patterns))
+         (let ((bindings (loop for pattern in first-patterns
+                               for scrutinee in scrutinees
+                               append (ir-destructure pattern scrutinee))))
+           (ir-simplify-node
+            (reduce (lambda (binding body)
+                      (if (car binding)
+                          (ir :let type (car binding) (cdr binding) body)
+                          (if (ir-pure-p (cdr binding))
+                              body
+                              (ir :seq type (list (cdr binding) body)))))
+                    bindings :from-end t :initial-value (second (first rules)))
+            env)))
         ;; Every scrutinee is known: the rules that cannot match are
         ;; dropped, and the first that must match is taken.
         ((every (lambda (s) (ir-static-scrutinee-p s env)) scrutinees)
