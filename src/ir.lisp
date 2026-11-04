@@ -2557,9 +2557,20 @@ letrec and loop variables, local declarations and pattern variables."
   (cond ((and (consp pat) (member (car pat) '(:pat-var :var))) (second pat))
         ((eq pat :wild) :wild)))
 
+(defun ir-tuple-pattern-p (pat)
+  "Is PAT (AST) made of variables, wildcards and tuples only, so that it
+cannot fail?"
+  (loop while (and (consp pat) (eq (car pat) :pat-typed))
+        do (setf pat (second pat)))
+  (or (ir-variable-pattern-name pat)
+      (and (consp pat) (eq (car pat) :pat-tuple)
+           (every #'ir-tuple-pattern-p (cdr pat)))))
+
 (defun ir-note-inline-template (ast cell worker-arity local-exceptions lexical-env)
   "Forms recording the inline template of the function `fun' AST binds to
-CELL, if it has one (and recording it now)."
+CELL, if it has one (and recording it now).  Its parameters are variables
+(or a tuple of variables), or patterns of variables and tuples: then the
+template is the function's lowered term, which takes them apart."
   (remprop cell 'sml-ir-inline)
   (let ((clauses (third ast)))
     (when (and *sml-ir* *sml-ir-simplify*
@@ -2568,41 +2579,71 @@ CELL, if it has one (and recording it now)."
       (let* ((params (if worker-arity
                          (tuple-pattern-subpatterns (first (first (first clauses))))
                          (first (first clauses))))
-             (names (mapcar #'ir-variable-pattern-name params)))
-        (when (and params (every #'identity names)
-                   (let ((vars (remove :wild names)))
-                     (= (length vars) (length (remove-duplicates vars :test #'equal)))))
-          (let* ((symbols (mapcar (lambda (name)
-                                    (gensym (if (stringp name) (string-upcase name) "IGNORED")))
-                                  names))
-                 (env (loop for name in names
-                            for symbol in symbols
-                            unless (eq name :wild) collect (cons name symbol)))
-                 (fun-type (ir-node-type clauses))
-                 (body (catch 'ir-no-template
-                         (let ((*ir-template-mode* t)
-                               (*sml-hoisting-enabled* nil)
-                               (*sml-binding-symbol-env*
-                                 (acons (second ast) cell *sml-binding-symbol-env*)))
-                           (ir-lower (second (first clauses)) local-exceptions env)))))
-            (when body
-              (let* ((body (ir-simplify body))
-                     (template
-                       (if worker-arity
-                           (ir :fn fun-type symbols body nil)
-                           (let ((types (loop repeat (length symbols)
-                                              for type = fun-type then (ir-arrow-range type)
-                                              collect type)))
-                             (reduce (lambda (pair body)
-                                       (ir :fn (cdr pair) (list (car pair)) body nil))
-                                     (mapcar #'cons symbols types)
-                                     :from-end t :initial-value body)))))
-                (when (and (<= (ir-size template) *sml-ir-inline-size*)
-                           (not (ir-mentions-p template cell))
-                           (null (ir-free-variables template)))
-                  (setf template (ir-portable-types template))
-                  (setf (get cell 'sml-ir-inline) template)
-                  `((setf (get ',cell 'sml-ir-inline) ',template)))))))))))
+             (names (mapcar #'ir-variable-pattern-name params))
+             (fun-type (ir-node-type clauses))
+             (template
+               (cond
+                 ((and params (every #'identity names)
+                       (let ((vars (remove :wild names)))
+                         (= (length vars) (length (remove-duplicates vars :test #'equal)))))
+                  (let* ((symbols (mapcar (lambda (name)
+                                            (gensym (if (stringp name)
+                                                        (string-upcase name)
+                                                        "IGNORED")))
+                                          names))
+                         (env (loop for name in names
+                                    for symbol in symbols
+                                    unless (eq name :wild) collect (cons name symbol)))
+                         (body (catch 'ir-no-template
+                                 (let ((*ir-template-mode* t)
+                                       (*sml-hoisting-enabled* nil)
+                                       (*sml-binding-symbol-env*
+                                         (acons (second ast) cell *sml-binding-symbol-env*)))
+                                   (ir-lower (second (first clauses)) local-exceptions env)))))
+                    (when body
+                      (let ((body (ir-simplify body)))
+                        (if worker-arity
+                            (ir :fn fun-type symbols body nil)
+                            (let ((types (loop repeat (length symbols)
+                                               for type = fun-type then (ir-arrow-range type)
+                                               collect type)))
+                              (reduce (lambda (pair body)
+                                        (ir :fn (cdr pair) (list (car pair)) body nil))
+                                      (mapcar #'cons symbols types)
+                                      :from-end t :initial-value body)))))))
+                 ((and params (every #'ir-tuple-pattern-p params))
+                  (let ((term (catch 'ir-no-template
+                                (let ((*ir-template-mode* t)
+                                      (*sml-hoisting-enabled* nil)
+                                      (*ir-fun-type-node* clauses)
+                                      (*sml-binding-symbol-env*
+                                        (acons (second ast) cell *sml-binding-symbol-env*)))
+                                  (ir-lower-fn-clauses
+                                   (if worker-arity
+                                       (list (cons params (rest (first clauses))))
+                                       clauses)
+                                   local-exceptions (second ast) nil worker-arity)))))
+                    (and term (ir-simplify term)))))))
+        (when (and template
+                   (<= (ir-size template) *sml-ir-inline-size*)
+                   (not (ir-mentions-p template cell))
+                   (not (ir-has-loop-p template))
+                   (null (ir-free-variables template)))
+          (setf template (ir-portable-types template))
+          (setf (get cell 'sml-ir-inline) template)
+          `((setf (get ',cell 'sml-ir-inline) ',template)))))))
+
+(defun ir-has-loop-p (node)
+  "Does NODE have a :loop of its own (a self-recursive function lowered for a
+template), rather than in a local function?"
+  (let ((found nil))
+    (labels ((walk (n)
+               (case (ir-kind n)
+                 (:loop (setf found t))
+                 (:letrec nil)
+                 (t (ir-walk-children #'walk n)))))
+      (walk node))
+    found))
 
 (defun ir-portable-types (term)
   "TERM with its types made independent of the session, so that it can be
