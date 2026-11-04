@@ -234,14 +234,14 @@ recording to commit once the form has been evaluated."
 
 (defun eval-repl-program (form ast recording)
   (with-sml-phase (:eval)
-    (eval form))
+    (with-sml-ieee-floats (eval form)))
   (commit-sml-lisp-recording recording)
   (mapcan #'repl-report-decl (cdr ast)))
 
 (defun eval-repl-expression (form ast)
   (let* ((type (infer-sml-ast-type ast :package *sml-package*))
          (value (with-sml-phase (:eval)
-                  (eval form))))
+                  (with-sml-ieee-floats (eval form)))))
     (setf (symbol-value (repl-it-symbol)) value)
     ;; `it' is now bound to the symbol itself, not to a binding cell.
     (forget-sml-binding-cell (repl-it-symbol))

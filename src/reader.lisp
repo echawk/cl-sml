@@ -402,7 +402,9 @@ is discarded otherwise.")
                       source-pathname *show-lisp-compiler-output*))
              (setf compiled-artifact output))
            (with-sml-phase (:load)
-             (load compiled-artifact)))
+             ;; The program runs with the float traps masked, so that its
+             ;; functions need not mask them (WITH-SML-IEEE-FLOATS).
+             (with-sml-ieee-floats (load compiled-artifact))))
       (when (and compiled-artifact (probe-file compiled-artifact))
         (delete-file compiled-artifact))
       (when (probe-file artifact)
@@ -430,7 +432,7 @@ is discarded otherwise.")
       (let ((*sml-package* target-package)
             (*sml-current-directory* (sml-file-directory pathname)))
         (with-sml-phase (:eval)
-          (eval form)))))
+          (with-sml-ieee-floats (eval form))))))
 
 ;;; A file that `use's others is loaded one program (top-level
 ;;; declarations ended by `;', Definition section 8) at a time, each
