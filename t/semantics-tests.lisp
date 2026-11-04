@@ -866,3 +866,67 @@ val _ = p (Int.toString (count (21, 0)))
 datatype d = X | Y | Z
 fun walk (X, n) = n | walk (Y, n) = walk (X, n + 1) | walk (Z, n) = walk (Y, n + 2)
 val _ = p (Int.toString (walk (Z, 0)))"))))
+
+;;; Optimisations whose semantics must not show (docs/ROADMAP.md,
+;;; "Measured 2026-11-03"): arrays of reals unboxed, Math opened, raising
+;;; by THROW, equality open-coded, integer division inline.
+
+(test real-arrays-keep-ieee-values-and-bounds
+  (is (string= (lines "9.0 Subscript 4 true true true 18.0 ~0.0 nan true")
+               (run-sml "val r = Array.tabulate (4, fn i => real i / 2.0)
+val () = Array.update (r, 3, ~0.0)
+val () = Array.copy {src = Array.fromList [9.0, 8.0], dst = r, di = 0}
+fun sub (a, i) = Array.sub (a, i)
+val x = sub (r, 1) + Vector.sub (Array.vector r, 2)
+val e = (Array.sub (r, 4); \"none\") handle Subscript => \"Subscript\"
+val n = Array.length (Array.fromList ([] : real list)) + Array.length (Array.array (0, 1.0))
+        + Array.length r
+val eq = r = r andalso not (Array.array (1, 0.0) = Array.array (1, 0.0))
+val nan = Array.array (1, 0.0 / 0.0)
+val _ = print (String.concatWith \" \" [Real.toString x, e, Int.toString n, Bool.toString eq,
+  Bool.toString (Real.signBit (Array.sub (r, 3))), Bool.toString (Real.isNan (Array.sub (nan, 0))),
+  Real.toString (Array.foldl (op +) 0.0 r), Real.toString (Math.sqrt ~0.0),
+  Real.toString (Math.sqrt ~1.0), Bool.toString (Real.== (Math.exp 1000.0, Real.posInf))] ^ \"\\n\")"))))
+
+(test arrays-are-equal-only-to-themselves
+  (is (string= (lines "true false false true Subscript Size")
+               (run-sml "val a = Array.array (2, 0)
+fun same (x, y) = x = y
+val _ = print (String.concatWith \" \" [Bool.toString (same (a, a)),
+  Bool.toString (same (a, Array.array (2, 0))), Bool.toString ((a, 1) = (Array.array (2, 0), 1)),
+  Bool.toString ([a] = [a]), (Array.update (a, 2, 1); \"none\") handle Subscript => \"Subscript\",
+  (ignore (Array.array (~1, 0)); \"none\") handle Size => \"Size\"] ^ \"\\n\")"))))
+
+(test exceptions-raised-through-handlers-and-lisp
+  (is (string= (lines "10 7 9 101 1 caught")
+               (run-sml "exception E of int
+fun f 0 = raise E 0 | f n = (f (n - 1) handle E k => raise E (k + 1))
+val a = f 10 handle E k => k
+val b = (1 div 0) handle Div => 7
+val c = (case 3 of 4 => 0) handle Match => 9
+val d = ((raise E 1) handle Fail _ => 0) handle E k => k + 100
+val h = let val r = ref 0 in ((r := 1; raise E 5) handle E _ => !r) end
+val _ = print (String.concatWith \" \" (map Int.toString [a, b, c, d, h]) ^ \" \")
+val _ = print (((List.app (fn x => if x > 1 then raise E x else ()) [1, 2]; \"none\")
+                handle E 2 => \"caught\") ^ \"\\n\")")))
+  (signals cl-sml::sml-raised-exception (run-sml "exception E val _ = (raise E) handle Div => ()")))
+
+(test polymorphic-equality-specialised-at-known-types
+  (is (string= (lines "true false true false true true true true")
+               (run-sml "fun equal a b = (a = b)
+fun neq a b = (a <> b)
+fun member x a = List.exists (equal a) x
+datatype c = R | G
+val _ = print (String.concatWith \" \" (map Bool.toString
+  [member [(1, 2), (3, 4)] (3, 4), member [(1, 2)] (2, 1), equal (\"a\", R) (\"a\", R),
+   equal (\"a\", R) (\"a\", G), neq (1, \"x\") (1, \"y\"), equal () (),
+   equal {a = 1, b = #\"c\"} {a = 1, b = #\"c\"}, equal ((1, 2), \"s\") ((1, 2), \"s\")]) ^ \"\\n\")"))))
+
+(test inline-integer-division-keeps-div-and-overflow
+  (is (string= (lines "~4 2 ~3 ~1 Div Div Overflow Overflow")
+               (run-sml "fun t f = (Int.toString (f ()) handle Div => \"Div\" | Overflow => \"Overflow\")
+val m = valOf Int.minInt
+fun d (a, b) = a div b
+val _ = print (String.concatWith \" \" [t (fn () => d (~7, 2)), t (fn () => ~7 mod 3),
+  t (fn () => Int.quot (~7, 2)), t (fn () => Int.rem (~7, 2)), t (fn () => d (1, 0)),
+  t (fn () => 1 mod 0), t (fn () => d (m, ~1)), t (fn () => Int.quot (m, ~1))] ^ \"\\n\")"))))

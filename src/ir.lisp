@@ -2054,7 +2054,8 @@ as the operator of a form; declarations are not looked at)?"
   (let ((seen (make-hash-table :test #'eq)))
     (labels ((walk (x)
                (cond ((eq x symbol) t)
-                     ((and (consp x) (not (gethash x seen)) (not (eq (car x) 'declare)))
+                     ((and (consp x) (not (gethash x seen))
+                           (not (member (car x) '(declare function))))
                       (setf (gethash x seen) t)
                       (or (if (eq (car x) symbol) call-position (walk (car x)))
                           (loop for tail = (cdr x) then (cdr tail)
@@ -2347,6 +2348,13 @@ its cell directly."
      (destructuring-bind (test negated) (rest op)
        (let ((form `(,(if (eq test 'string=) 'sml-string= test) ,@args)))
          (if negated `(not ,form) form))))
+    (:typed-equality
+     (destructuring-bind (type negated) (rest op)
+       (let ((a (gensym "A")) (b (gensym "B")))
+         `(let ((,a ,(first args)) (,b ,(second args)))
+            ,(if negated
+                 `(not ,(ir-equality-form type a b))
+                 (ir-equality-form type a b))))))
     (:binary (if (and typed (eq (second op) 'sml-assign))
                  `(progn (setf (svref ,(first args) 1) ,(second args)) (sml-unit))
                  `(,(second op) ,@args)))
@@ -2670,7 +2678,7 @@ since the census (by inlining), whose uses are not counted."
 
 (defun ir-pure-primitive-p (op)
   (case (first op)
-    ((:equality :not :list) t)
+    ((:equality :typed-equality :not :list) t)
     (:basis (ir-pure-basis-primitive-p (second op)))
     (:basis-value t)
     (:binary (eq (second op) 'cons))
@@ -2806,7 +2814,7 @@ values (tuples, constructors, functions) or to a term to substitute."
              node)))
       (:var
        (let ((known (gethash (third node) env))
-             (type (and (null (ir-type node))
+             (type (and (or (null (ir-type node)) (eq (first (ir-type node)) :tyvar))
                         (gethash (third node) *ir-variable-types*))))
          (cond ((and known (eq (car known) :substitute)) (cdr known))
                (type (ir :var type (third node)))
@@ -2898,11 +2906,44 @@ values (tuples, constructors, functions) or to a term to substitute."
   (find-if (lambda (name) (ir-base-type-p type name))
            '("int" "real" "word" "char" "string")))
 
+(defun ir-equality-type-p (type &optional (depth 0))
+  "Can the equality of values of TYPE be open code (IR-EQUALITY-FORM): a
+Basis type compared by EQL or as strings, a datatype of nullary
+constructors, or a tuple or record of such?"
+  (and type (< depth 4)
+       (case (first type)
+         (:con (or (some (lambda (name) (ir-base-type-p type name))
+                         '("int" "word" "char" "string"))
+                   (let ((constructors (ir-tycon-constructors (second type))))
+                     (and constructors (notany #'cdr constructors)
+                          (ir-tycon-equality (second type))))))
+         (:record (and (not (third type))
+                       (every (lambda (field) (ir-equality-type-p (cdr field) (1+ depth)))
+                              (second type))))
+         (t nil))))
+
+(defun ir-equality-form (type a b)
+  "The CL form comparing A and B, variables holding values of TYPE (see
+IR-EQUALITY-TYPE-P), by SML's equality."
+  (case (first type)
+    (:con (if (ir-base-type-p type "string") `(sml-string= ,a ,b) `(eql ,a ,b)))
+    (:record
+     `(and ,@(loop for field in (second type)
+                   for i from 1
+                   collect (let ((x (gensym "X")) (y (gensym "Y")))
+                             `(let ((,x (svref ,a ,i)) (,y (svref ,b ,i)))
+                                ,(ir-equality-form (cdr field) x y))))))))
+
 (defun ir-specialize-generic-primitive (op args)
   "OP, the generic operator of plain-mode code (here, a function inlined
 from the Basis, which is compiled without the checker), resolved like the
 checker resolves overloading when its operands' types are now known, or
 NIL."
+  (when (and (eq (first op) :binary) (= (length args) 2)
+             (member (second op) '(sml-= sml-<>))
+             (ir-equality-type-p (ir-type (first args))))
+    (return-from ir-specialize-generic-primitive
+      (list :typed-equality (ir-type (first args)) (eq (second op) 'sml-<>))))
   (when (and (eq (first op) :binary) (= (length args) 2))
     (let ((name (car (rassoc (second op) *sml-binary-primitives*)))
           (tyname (ir-overloading-tyname (ir-type (first args)))))

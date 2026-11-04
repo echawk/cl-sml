@@ -1479,34 +1479,6 @@ are unordered (a NaN is involved)."
        (= (length value) 2)
        (eq (svref value 0) :ref)))
 
-(defun sml-equal (a b)
-  "SML's polymorphic equality: structural on lists, tuples, records,
-constructed values, strings and vectors; references and arrays are only
-equal to themselves."
-  (loop
-    (cond
-      ((eq a b) (return t))
-      ((consp a)
-       (unless (and (consp b) (sml-equal (car a) (car b)))
-         (return nil))
-       (setf a (cdr a)
-             b (cdr b)))
-      ((numberp a)
-       (return (and (numberp b)
-                    (if (or (floatp a) (floatp b))
-                        (sml-ieee (= a b))
-                        (= a b)))))
-      ((stringp a) (return (and (stringp b) (sml-string= a b))))
-      ((simple-vector-p a)
-       (return (and (simple-vector-p b)
-                    (not (sml-ref-p a))
-                    (not (sml-ref-p b))
-                    (not (sml-array-p a))
-                    (not (sml-array-p b))
-                    (= (length a) (length b))
-                    (every #'sml-equal a b))))
-      (t (return nil)))))
-
 (declaim (inline sml-string=))
 (defun sml-string= (a b)
   "Equality of the strings A and B, which are mostly short and often
@@ -1519,6 +1491,45 @@ differ in length: STRING= takes a general path first."
                  (loop for i of-type fixnum below n
                        always (char= (schar a i) (schar b i)))
                  (string= a b))))))
+
+(defun sml-equal (a b)
+  "SML's polymorphic equality: structural on lists, tuples, records,
+constructed values, strings and vectors; references and arrays are only
+equal to themselves."
+  ;; Every type is tested explicitly; this is hot in programs that compare
+  ;; values of polymorphic types.
+  (declare (optimize (speed 3) (safety 0) (debug 0)))
+  (loop
+    (cond
+      ((eq a b) (return t))
+      ((consp a)
+       (unless (and (consp b) (sml-equal (car a) (car b)))
+         (return nil))
+       (setf a (cdr a)
+             b (cdr b)))
+      ((typep a 'fixnum) (return (eql a b)))
+      ((numberp a)
+       (return (and (numberp b)
+                    (if (or (floatp a) (floatp b))
+                        (sml-ieee (= a b))
+                        (= a b)))))
+      ((stringp a) (return (and (stringp b) (sml-string= a b))))
+      ((simple-vector-p a)
+       ;; Tuples, records, vectors, flat constructed values; a ref
+       ;; (#(:ref v)) or an array (#(:array ...)), not EQ to B, differs.
+       (return (let ((n (length a)))
+                 (and (simple-vector-p b)
+                      (= n (length b))
+                      (or (zerop n)
+                          (let ((head (svref a 0)))
+                            (not (or (eq head :ref) (eq head :array)))))
+                      (loop for i of-type fixnum below n
+                            always (let ((x (svref a i)) (y (svref b i)))
+                                     (or (eq x y)
+                                         (and (not (typep x 'fixnum))
+                                              (not (symbolp x))
+                                              (sml-equal x y)))))))))
+      (t (return nil)))))
 
 (define-sml-binary-primitive sml-= sml-op-= (a b) (sml-equal a b))
 (define-sml-binary-primitive sml-<> sml-op-<> (a b) (not (sml-equal a b)))
