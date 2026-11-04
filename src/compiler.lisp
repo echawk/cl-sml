@@ -2078,11 +2078,11 @@ Int's range.")
 
 (defun masked-real-form-p (form)
   (and (consp form)
-       (eq (car form) 'with-portable-float-traps-masked)
+       (eq (car form) 'sml-ieee)
        (= (length form) 2)))
 
 (defun unmasked-real-form (form)
-  "FORM without an outermost WITH-PORTABLE-FLOAT-TRAPS-MASKED: real
+  "FORM without an outermost SML-IEEE: real
 operations nested in one another need only the outermost one, which every
 caller of this puts around the result."
   (if (masked-real-form-p form) (second form) form))
@@ -2112,7 +2112,7 @@ that SBCL compiles them as machine arithmetic."
     (flet ((wrap (form)
              (cond (bits `(ldb (byte ,bits 0) ,form))
                    ;; IEEE results (infinities, NaNs) rather than traps.
-                   (real-p `(with-portable-float-traps-masked ,form))
+                   (real-p `(sml-ieee ,form))
                    (t form)))
            (remask (form)
              ;; Real operands lost their own masking above (one is enough
@@ -2120,7 +2120,7 @@ that SBCL compiles them as machine arithmetic."
              (if (and form real-p
                       (not (masked-real-form-p form))
                       (some #'masked-real-form-p original-args))
-                 `(with-portable-float-traps-masked ,form)
+                 `(sml-ieee ,form)
                  form)))
      (remask
       (cond

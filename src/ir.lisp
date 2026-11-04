@@ -1953,8 +1953,9 @@ wrapper unless it is the worker."
            (worker `(,symbol ,params
                              ,@(portable-tail-call-declarations)
                              ,@(ir-type-declarations params types)
-                             ,(ir-bind-local-function-variables
-                               (with-ir-scope (params) (ir-emit body))))))
+                             ,(ir-ieee-body
+                               (ir-bind-local-function-variables
+                                (with-ir-scope (params) (ir-emit body)))))))
       (ecase kind
         (:plain (list worker))
         (:tupled
@@ -2047,6 +2048,22 @@ local function to all of its arguments."
                                  (nthcdr arity args))
                      `(funcall ,(ir-emit (third node)) ,(ir-emit (fourth node))))))))))))
 
+(defun ir-form-uses-ieee-p (form)
+  "Does the CL form FORM do real arithmetic (SML-IEEE) other than in the
+functions it makes with their own WITH-SML-IEEE-FLOATS?"
+  (and (consp form)
+       (case (car form)
+         (sml-ieee t)
+         (with-sml-ieee-floats nil)
+         (t (loop for tail = form then (cdr tail)
+                  while (consp tail)
+                  thereis (ir-form-uses-ieee-p (car tail)))))))
+
+(defun ir-ieee-body (form)
+  "FORM, the body of a function, with the float traps masked once for the
+whole body when it does real arithmetic (see SML-IEEE)."
+  (if (ir-form-uses-ieee-p form) `(with-sml-ieee-floats ,form) form))
+
 (defun ir-emit (node)
   "The CL form of IR term NODE."
   (ecase (ir-kind node)
@@ -2070,7 +2087,7 @@ local function to all of its arguments."
     (:app (ir-emit-application node))
     (:call `(,(third node) ,@(ir-emit-list (fourth node))))
     (:fn (destructuring-bind (params body name) (cddr node)
-           (let ((body (with-ir-scope (params) (ir-emit body))))
+           (let ((body (ir-ieee-body (with-ir-scope (params) (ir-emit body)))))
              (if (= (length params) 1)
                  (sml-lambda-form name (first params) body)
                  `(lambda ,params ,@(portable-tail-call-declarations) ,body)))))

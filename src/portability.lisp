@@ -62,6 +62,52 @@ compiled.")
                 (sys:float-underflow-mode ,underflow))))
   #-(or sbcl ecl abcl) `(progn ,@body))
 
+;;; Setting the floating-point modes is slow (on arm64 SBCL, masking and
+;;; restoring the traps around one multiplication made it about 70 times
+;;; slower), while reading them is cheap.  So compiled SML masks the traps
+;;; once per function, and only when they are not masked already (they are
+;;; whenever SML calls SML): WITH-SML-IEEE-FLOATS around the body of each
+;;; function that does real arithmetic, and SML-IEEE around each real
+;;; operation, which needs nothing more inside such a body (it sees the
+;;; symbol macro %SML-FLOATS-MASKED bound to T) and tests the modes first
+;;; elsewhere (at top level, in code compiled apart).  A function value
+;;; made inside such a body has a WITH-SML-IEEE-FLOATS of its own, as it
+;;; may be called after the body returns.
+
+(define-symbol-macro %sml-floats-masked nil)
+
+#+sbcl
+(defconstant +sml-float-trap-bits+
+  (dpb (sb-vm::float-trap-mask '(:invalid :divide-by-zero :overflow :inexact))
+       sb-vm:float-traps-byte 0)
+  "The bits of SBCL's floating-point modes that enable the traps SML masks.")
+
+(defmacro sml-float-traps-masked-p ()
+  "Are the traps SML masks masked now?  (Always false where that cannot be
+tested cheaply.)"
+  #+sbcl `(zerop (logand (sb-vm:floating-point-modes) +sml-float-trap-bits+))
+  #-sbcl nil)
+
+(defmacro with-sml-ieee-floats (&body body)
+  "BODY, the body of a compiled SML function, run with the float traps
+masked and with its SML-IEEE forms compiled for that."
+  (let ((function (gensym "IEEE-BODY")))
+    `(flet ((,function ()
+              (symbol-macrolet ((%sml-floats-masked t))
+                ,@body)))
+       (if (sml-float-traps-masked-p)
+           (,function)
+           (with-portable-float-traps-masked (,function))))))
+
+(defmacro sml-ieee (form &environment environment)
+  "FORM, real arithmetic, with IEEE results (infinities and NaNs) rather
+than traps."
+  (if (macroexpand-1 '%sml-floats-masked environment)
+      form
+      `(if (sml-float-traps-masked-p)
+           ,form
+           (with-portable-float-traps-masked ,form))))
+
 (defun portable-float-nan ()
   #+ecl (ext:nan)
   #+sbcl (with-portable-float-traps-masked

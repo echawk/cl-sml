@@ -1279,7 +1279,7 @@ check."
      ((and (typep ,a 'fixnum) (typep ,b 'fixnum))
       (sml-check-int (,operator (the fixnum ,a) (the fixnum ,b))))
      ((or (floatp ,a) (floatp ,b))
-      (with-portable-float-traps-masked (,operator ,a ,b)))
+      (sml-ieee (,operator ,a ,b)))
      (t (sml-check-unchecked-int (,operator ,a ,b) ,a ,b))))
 
 (defun sml-check-unchecked-int (value &rest operands)
@@ -1347,8 +1347,7 @@ NIL if TYNAME is not a word type."
 
 (defun sml-real-quotient (a b)
   "IEEE division: a zero divisor gives an infinity or a NaN."
-  (with-portable-float-traps-masked
-    (/ (float a 1d0) (float b 1d0))))
+  (sml-ieee (/ (float a 1d0) (float b 1d0))))
 
 (define-sml-binary-primitive sml-/ sml-op-/ (a b) (sml-real-quotient a b))
 
@@ -1453,7 +1452,7 @@ made of them) are only equal to themselves."
       ((numberp a)
        (return (and (numberp b)
                     (if (or (floatp a) (floatp b))
-                        (with-portable-float-traps-masked (= a b))
+                        (sml-ieee (= a b))
                         (= a b)))))
       ((stringp a) (return (and (stringp b) (string= a b))))
       ((simple-vector-p a)
@@ -1957,7 +1956,7 @@ internal real time."
 ;;; Real, Math, command-line and file-system primitives used by the Basis.
 
 (defmacro with-sml-float-traps-masked (&body body)
-  `(with-portable-float-traps-masked ,@body))
+  `(sml-ieee (progn ,@body)))
 
 (defun sml-nan ()
   (portable-float-nan))
