@@ -16,6 +16,10 @@ datatype cl_object = CL_OBJECT
 cl_object stands for the run time's objects (streams), which the Basis's
 sources call int (*CE-BUILTIN-TYPES*).")
 
+(defparameter *coalton-source-directory*
+  (asdf:system-relative-pathname :cl-sml "src/coalton/")
+  "src/coalton/, which holds the Coalton backend's Array.sml.")
+
 (defparameter *coalton-basis-patches*
   '(("TextIO" ("type instream   = int" . "type instream   = cl_object")
               ("type outstream  = int" . "type outstream  = cl_object"))
@@ -35,7 +39,13 @@ outside the fixnum range do not work in Coalton.")
   (with-output-to-string (out)
     (write-string *coalton-basis-prefix* out)
     (dolist (file (sml-initial-source-files))
-      (let ((text (uiop:read-file-string file :external-format *sml-external-format*)))
+      (let ((text (uiop:read-file-string
+                   ;; The CL backend's Array is the run time's; Coalton's
+                   ;; is HaMLet's, on refs.
+                   (if (string= (pathname-name file) "Array")
+                       (merge-pathnames "Array.sml" *coalton-source-directory*)
+                       file)
+                   :external-format *sml-external-format*)))
         (loop for (old . new) in (cdr (assoc (pathname-name file) *coalton-basis-patches*
                                              :test #'string=))
               do (let ((start (search old text)))

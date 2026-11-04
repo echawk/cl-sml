@@ -1240,32 +1240,37 @@ LAMBDA-LIST, inline, with the result checked against Int's range."
 (define-sml-int-operation sml-int-negate (a) (- a))
 (define-sml-int-operation sml-int-abs (a) (abs a))
 
-(defun sml-int-div (a b)
+(defmacro define-sml-int-division (name lambda-list documentation form)
+  "Define NAME, a division of integers raising Div for a zero divisor,
+inline, with a fast path for fixnum operands."
+  (destructuring-bind (a b) lambda-list
+    `(progn
+       (declaim (inline ,name))
+       (defun ,name ,lambda-list
+         ,documentation
+         (cond ((eql ,b 0) (sml-raise-named-exception "Div"))
+               ((and (typep ,a 'fixnum) (typep ,b 'fixnum))
+                (let ((,a ,a) (,b ,b))
+                  (declare (fixnum ,a ,b))
+                  ,form))
+               (t ,form))))))
+
+(define-sml-int-division sml-int-div (a b)
   "SML `div`: quotient rounded towards negative infinity."
-  (if (zerop b)
-      (sml-raise-named-exception "Div")
-      (sml-check-int (values (floor a b)))))
-(defun sml-integer-div (a b)
+  (sml-check-int (values (floor a b))))
+(define-sml-int-division sml-integer-div (a b)
   "`div' on IntInf.int and the word types: SML-INT-DIV without the range
 check."
-  (if (zerop b)
-      (sml-raise-named-exception "Div")
-      (values (floor a b))))
-(defun sml-int-mod (a b)
+  (values (floor a b)))
+(define-sml-int-division sml-int-mod (a b)
   "SML `mod`: remainder with the sign of the divisor."
-  (if (zerop b)
-      (sml-raise-named-exception "Div")
-      (mod a b)))
-(defun sml-int-quot (a b)
+  (mod a b))
+(define-sml-int-division sml-int-quot (a b)
   "Int.quot: quotient rounded towards zero."
-  (if (zerop b)
-      (sml-raise-named-exception "Div")
-      (sml-check-int (values (truncate a b)))))
-(defun sml-int-rem (a b)
+  (sml-check-int (values (truncate a b))))
+(define-sml-int-division sml-int-rem (a b)
   "Int.rem: remainder with the sign of the dividend."
-  (if (zerop b)
-      (sml-raise-named-exception "Div")
-      (rem a b)))
+  (rem a b))
 
 ;;; Without the static checker's resolution of overloading, `+' and friends
 ;;; are applied to values of any numeric type.  Reals follow IEEE; integers
@@ -1439,8 +1444,8 @@ are unordered (a NaN is involved)."
 
 (defun sml-equal (a b)
   "SML's polymorphic equality: structural on lists, tuples, records,
-constructed values, strings and vectors; references (and arrays, which are
-made of them) are only equal to themselves."
+constructed values, strings and vectors; references and arrays are only
+equal to themselves."
   (loop
     (cond
       ((eq a b) (return t))
@@ -1459,6 +1464,8 @@ made of them) are only equal to themselves."
        (return (and (simple-vector-p b)
                     (not (sml-ref-p a))
                     (not (sml-ref-p b))
+                    (not (sml-array-p a))
+                    (not (sml-array-p b))
                     (= (length a) (length b))
                     (every #'sml-equal a b))))
       (t (return nil)))))
@@ -1602,6 +1609,79 @@ POSITION is the source offset of the match, when known."
            (< index (length sequence)))
       (elt sequence index)
       (sml-raise-named-exception "Subscript")))
+
+;;; Vectors are simple-vectors of their elements.  An array is a
+;;; simple-vector whose slot 0 holds :ARRAY and slots 1..n the elements:
+;;; like a ref (#(:ref value)), it is equal only to itself (SML-EQUAL).
+;;; Its type in the Basis is still 'a ref vector ref (src/basis/Array.sml),
+;;; for its equality.  The compiler opens SUB, UPDATE and LENGTH
+;;; (IR-EMIT-BASIS-PRIMITIVE).
+
+(declaim (inline sml-vector-sub sml-array-sub sml-array-update sml-array-length
+                 sml-array-p))
+(defun sml-vector-sub (vector index)
+  (declare (simple-vector vector))
+  (if (and (typep index 'fixnum) (< -1 index (length vector)))
+      (svref vector index)
+      (sml-raise-named-exception "Subscript")))
+
+(defun sml-array-p (value)
+  (and (simple-vector-p value)
+       (plusp (length value))
+       (eq (svref value 0) :array)))
+
+(defun sml-array-length (array)
+  (declare (simple-vector array))
+  (1- (length array)))
+
+(defun sml-array-sub (array index)
+  (declare (simple-vector array))
+  (if (and (typep index 'fixnum) (< -1 index (1- (length array))))
+      (svref array (1+ index))
+      (sml-raise-named-exception "Subscript")))
+
+(defun sml-array-update (array index value)
+  (declare (simple-vector array))
+  (if (and (typep index 'fixnum) (< -1 index (1- (length array))))
+      (setf (svref array (1+ index)) value)
+      (sml-raise-named-exception "Subscript"))
+  (sml-unit))
+
+(defconstant +sml-array-max-length+ (- array-dimension-limit 2)
+  "Array.maxLen: one slot of the simple-vector holds :ARRAY.")
+
+(defun make-sml-array (length initial)
+  (unless (and (integerp length) (<= 0 length +sml-array-max-length+))
+    (sml-raise-named-exception "Size"))
+  (let ((array (make-array (1+ length) :initial-element initial)))
+    (setf (svref array 0) :array)
+    array))
+
+(defun sml-array-from-list (list)
+  (let ((array (make-sml-array (length list) nil)))
+    (loop for item in list
+          for i from 1
+          do (setf (svref array i) item))
+    array))
+
+(defun sml-array-vector (array)
+  (subseq array 1))
+
+(defun sml-array-copy (src dst di)
+  "Array.copy {src, dst, di}; also right when SRC is DST."
+  (declare (simple-vector src dst))
+  (if (and (typep di 'fixnum) (<= 0 di) (<= (+ di (1- (length src))) (1- (length dst))))
+      (replace dst src :start1 (1+ di) :start2 1)
+      (sml-raise-named-exception "Subscript"))
+  (sml-unit))
+
+(defun sml-array-copy-vector (src dst di)
+  "Array.copyVec {src, dst, di}."
+  (declare (simple-vector src dst))
+  (if (and (typep di 'fixnum) (<= 0 di) (<= (+ di (length src)) (1- (length dst))))
+      (replace dst src :start1 (1+ di))
+      (sml-raise-named-exception "Subscript"))
+  (sml-unit))
 
 (define-sml-binary-primitive sml-compose sml-o (f g)
   (lambda (x)
@@ -2386,10 +2466,28 @@ name, for `use{b = NAME}'.")
                     ("Vector.maxLen" . ,(sml-constant-primitive (1- array-dimension-limit)))
                     ("Vector.length" . ,#'length)
                     ("Vector.sub" . ,(lambda (tuple)
-                                       (sml-sequence-sub (sml-tuple-first tuple)
-                                                         (sml-tuple-second tuple))))
+                                       (sml-vector-sub (sml-tuple-first tuple)
+                                                       (sml-tuple-second tuple))))
                     ("Vector.fromList" . ,(lambda (list)
                                             (coerce list 'vector)))
+                    ("Array.maxLen" . ,(sml-constant-primitive +sml-array-max-length+))
+                    ("Array.array" . ,(lambda (tuple)
+                                        (make-sml-array (sml-tuple-first tuple)
+                                                        (sml-tuple-second tuple))))
+                    ("Array.fromList" . ,#'sml-array-from-list)
+                    ("Array.length" . ,#'sml-array-length)
+                    ("Array.sub" . ,(lambda (tuple)
+                                      (sml-array-sub (svref tuple 1) (svref tuple 2))))
+                    ("Array.update" . ,(lambda (tuple)
+                                         (sml-array-update (svref tuple 1) (svref tuple 2)
+                                                           (svref tuple 3))))
+                    ("Array.vector" . ,#'sml-array-vector)
+                    ("Array.copy" . ,(lambda (tuple)
+                                       (sml-array-copy (svref tuple 1) (svref tuple 2)
+                                                       (svref tuple 3))))
+                    ("Array.copyVec" . ,(lambda (tuple)
+                                          (sml-array-copy-vector (svref tuple 1) (svref tuple 2)
+                                                                 (svref tuple 3))))
                     ("CharVector.fromList" . ,(lambda (list)
                                                 (coerce list 'string)))
 	                    ("TextIO.stdIn" . ,(sml-constant-primitive :text-io-stdin))

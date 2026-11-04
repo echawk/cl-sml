@@ -477,6 +477,24 @@ the checker gave PAT no type of its own)."
         ;; Resolved at run time (a member of a functor instance).
         (t (con :runtime ctor))))))
 
+(defun ir-pattern-binder-types (pattern)
+  "((variable . type) ...) for the variables PATTERN binds."
+  (let ((types nil))
+    (labels ((walk (p)
+               (case (ir-kind p)
+                 ((:p-var :p-as)
+                  (when (ir-variable-p (third p)) (push (cons (third p) (ir-type p)) types))
+                  (when (eq (ir-kind p) :p-as) (walk (fourth p))))
+                 (:p-tuple (mapc #'walk (third p)))
+                 (:p-record (dolist (field (fourth p)) (walk (third field))))
+                 (:p-record-lookup (dolist (field (third p)) (walk (second field))))
+                 (:p-cons (walk (third p)) (walk (fourth p)))
+                 (:p-ref (walk (third p)))
+                 (:p-exn (when (fifth p) (walk (fifth p))))
+                 (:p-con (when (sixth p) (walk (sixth p)))))))
+      (walk pattern))
+    types))
+
 (defun ir-pattern-binders (pattern)
   "The variables PATTERN binds (uninterned symbols)."
   (let ((binders nil))
@@ -978,8 +996,8 @@ follows case by case)."
            (:tuple (let ((items (mapcar #'sub (cdr ast))))
                      (ir :tuple (or type (ir-tuple-type (mapcar #'ir-type items))) items)))
            (:self-tail-call
-            (when *ir-template-mode*
-              (throw 'ir-no-template nil))
+            ;; In an inline template, the loop of a local function (the
+            ;; template's own body is not marked: it is not recursive).
             (ir :tail-call (or type *ir-tail-call-type*) (second ast)
                 (mapcar #'sub (cddr ast))))
            (:fn
@@ -996,6 +1014,10 @@ follows case by case)."
 (defun ir-lower-application (ast local-exceptions lexical-env type)
   (destructuring-bind (head arg) (cdr ast)
     (cond
+      ;; `use{b = NAME}' (in the Basis): the run time's primitive NAME,
+      ;; looked up once.
+      ((and *sml-local-workers* (sml-basis-primitive-use-name ast))
+       (ir :prim type (list :basis-value (sml-basis-primitive-use-name ast)) nil))
       ;; `~' applied to a word literal is modular negation.
       ((and (equal head '(:var "~")) (consp arg) (eq (car arg) :word))
        (ir :const (or type (ir-base-type "word")) (logand +sml-word-mask+ (- (second arg)))))
@@ -1202,9 +1224,15 @@ unboxed."
                                                        temporaries)
                                                  temporary))))
                                  (ir-irrefutable-bindings pattern form))))
-                (bindings (append (nreverse temporaries) bindings)))
+                (bindings (append (nreverse temporaries) bindings))
+                (types (mapcan #'ir-pattern-binder-types patterns)))
            `(let* ,bindings
               (declare (ignorable ,@(mapcar #'first bindings)))
+              ,@(let ((variables (remove-if-not (lambda (v) (assoc v types))
+                                                (mapcar #'first bindings))))
+                  (ir-type-declarations variables
+                                        (mapcar (lambda (v) (cdr (assoc v types)))
+                                                variables)))
               ,(ir-emit-rule-body patterns body)))))
       ((ir-dispatch-match-p scrutinees rules) (ir-emit-dispatch-match node))
       ((and *sml-decision-trees*
@@ -1885,18 +1913,29 @@ when the tree would be too large."
 ;;; the fixnums.  Only the Basis's own types qualify (compared by stamp, so
 ;;; a program's `datatype real' does not), and only in typed terms.
 
+(defparameter *ir-representation-types*
+  '(("real" . double-float) #+sbcl ("int" . fixnum)
+    ;; A ref is #(:ref value); a vector, a simple-vector of its elements;
+    ;; an array's type is 'a ref vector ref (src/basis/Array.sml).
+    ("ref" . simple-vector) ("vector" . simple-vector))
+  "The Basis's types whose values the code may declare: name -> CL type.")
+
 (defun ir-base-type-p (type name)
+  "Is TYPE the Basis's type NAME (not a program's type of the same name)?
+In an inline template, whose types have lost their stamps
+(IR-PORTABLE-TYPES), the Basis's types are marked :BASE instead."
   (and (consp type) (eq (first type) :con)
        (let ((base (ir-base-type name)))
          (and base
-              (eql (ir-tycon-stamp (second type)) (ir-tycon-stamp (second base)))
-              (string= (ir-tycon-name (second type)) (ir-tycon-name (second base)))))))
+              (string= (ir-tycon-name (second type)) (ir-tycon-name (second base)))
+              (or (eql (ir-tycon-stamp (second type)) (ir-tycon-stamp (second base)))
+                  (eq (ir-tycon-stamp (second type)) :base))))))
 
 (defun ir-representation-type (type)
   "The CL type of every value of IR type TYPE that is worth declaring, or NIL."
-  (cond ((null type) nil)
-        ((ir-base-type-p type "real") 'double-float)
-        #+sbcl ((ir-base-type-p type "int") 'fixnum)))
+  (and type
+       (cdr (find-if (lambda (entry) (ir-base-type-p type (car entry)))
+                     *ir-representation-types*))))
 
 (defun ir-type-declarations (variables types)
   "Declarations of VARIABLES, of IR types TYPES, for the CL compiler."
@@ -2094,6 +2133,7 @@ whole body when it does real arithmetic (see SML-IEEE)."
     (:let (destructuring-bind (symbol value body) (cddr node)
             `(let ((,symbol ,(ir-emit value)))
                (declare (ignorable ,symbol))
+               ,@(ir-type-declarations (list symbol) (list (ir-type value)))
                ,(with-ir-scope ((list symbol)) (ir-emit body)))))
     (:letrec (destructuring-bind (bindings body) (cddr node)
                (if (and *sml-local-workers*
@@ -2165,9 +2205,11 @@ whole body when it does real arithmetic (see SML-IEEE)."
     (and word (values (cdr word) (subseq name (1+ dot))))))
 
 (defparameter *ir-basis-primitive-arities*
-  '(("String.sub" . 2) ("String.size" . 1) ("Char.ord" . 1) ("Char.chr" . 1))
+  '(("String.sub" . 2) ("String.size" . 1) ("Char.ord" . 1) ("Char.chr" . 1)
+    ("Vector.sub" . 2) ("Vector.length" . 1)
+    ("Array.sub" . 2) ("Array.update" . 3) ("Array.length" . 1))
   "Primitives besides the word structures' (IR-WORD-OPERATION-ARITY):
-name -> number of arguments (2 means a pair).")
+name -> number of arguments (N > 1 means an N-tuple).")
 
 (defun ir-word-operation-arity (operation)
   (cond ((member operation '("xorb" "orb" "andb" "<<" ">>" "~>>") :test #'string=) 2)
@@ -2186,7 +2228,8 @@ name -> number of arguments (2 means a pair).")
     (if bits
         (member operation '("xorb" "orb" "andb" "<<" ">>" "~>>" "notb" "fromInt")
                 :test #'string=)
-        (member name '("String.size" "Char.ord") :test #'string=))))
+        (member name '("String.size" "Char.ord" "Vector.length" "Array.length")
+                :test #'string=))))
 
 (defun ir-emit-basis-primitive (name args)
   (multiple-value-bind (bits operation) (ir-word-structure-bits name)
@@ -2217,7 +2260,12 @@ name -> number of arguments (2 means a pair).")
           ((string= name "String.sub") `(sml-sequence-sub ,@args))
           ((string= name "String.size") `(sml-size ,@args))
           ((string= name "Char.ord") `(sml-ord ,@args))
-          ((string= name "Char.chr") `(sml-chr ,@args))))))
+          ((string= name "Char.chr") `(sml-chr ,@args))
+          ((string= name "Vector.sub") `(sml-vector-sub ,@args))
+          ((string= name "Vector.length") `(length (the simple-vector ,@args)))
+          ((string= name "Array.sub") `(sml-array-sub ,@args))
+          ((string= name "Array.update") `(sml-array-update ,@args))
+          ((string= name "Array.length") `(sml-array-length ,@args))))))
 
 (defun ir-emit-primitive (op args &optional typed)
   "The CL form of primitive OP applied to the forms ARGS.  In a typed term
@@ -2236,6 +2284,7 @@ its cell directly."
                  `(,(second op) ,@args)))
     (:word-binary `(ldb (byte +sml-word-size+ 0) (,(second op) ,@args)))
     (:basis (ir-emit-basis-primitive (second op) args))
+    (:basis-value `(load-time-value (sml-basis-primitive ,(second op)) t))
     (:not `(not ,@args))
     (:deref (if typed `(svref ,@args 1) `(funcall #'sml-deref ,@args)))
     (:list `(list ,@args))))
@@ -2472,7 +2521,12 @@ order of appearance and type constructors lose their stamps."
                       (or (gethash x tycons)
                           (setf (gethash x tycons)
                                 (let ((copy (copy-ir-tycon x)))
-                                  (setf (ir-tycon-stamp copy) 0)
+                                  (setf (ir-tycon-stamp copy)
+                                        (if (some (lambda (entry)
+                                                    (ir-base-type-p (list :con x) (car entry)))
+                                                  *ir-representation-types*)
+                                            :base
+                                            0))
                                   copy))))
                      ((and (consp x) (eq (first x) :tyvar) (integerp (second x)))
                       (list* :tyvar
@@ -2550,6 +2604,7 @@ since the census (by inlining), whose uses are not counted."
   (case (first op)
     ((:equality :not :list) t)
     (:basis (ir-pure-basis-primitive-p (second op)))
+    (:basis-value t)
     (:binary (eq (second op) 'cons))
     (:word-binary t)
     (:overloaded
@@ -2672,13 +2727,16 @@ values (tuples, constructors, functions) or to a term to substitute."
                  (first constant))
              node)))
       (:var
-       (let ((known (gethash (third node) env)))
-         (if (and known (eq (car known) :substitute))
-             (cdr known)
-             node)))
+       (let ((known (gethash (third node) env))
+             (type (and (null (ir-type node))
+                        (gethash (third node) *ir-variable-types*))))
+         (cond ((and known (eq (car known) :substitute)) (cdr known))
+               (type (ir :var type (third node)))
+               (t node))))
       (:prim
-       (let* ((op (third node))
-              (args (mapcar (lambda (a) (simp a)) (fourth node))))
+       (let* ((args (mapcar (lambda (a) (simp a)) (fourth node)))
+              (op (or (ir-specialize-generic-primitive (third node) args)
+                      (third node))))
          (or (ir-fold-primitive op args (ir-type node))
              (ir :prim (ir-type node) op args))))
       (:tuple (ir :tuple (ir-type node) (mapcar (lambda (a) (simp a)) (third node))))
@@ -2753,9 +2811,37 @@ values (tuples, constructors, functions) or to a term to substitute."
                       (mapcar (lambda (a) (simp a)) (fourth node))))
       (:decl (ir :decl (ir-type node) (third node) (simp (fourth node)))))))
 
+(defun ir-overloading-tyname (type)
+  "The name of the overloading instance of TYPE, a Basis type, or NIL."
+  (find-if (lambda (name) (ir-base-type-p type name))
+           '("int" "real" "word" "char" "string")))
+
+(defun ir-specialize-generic-primitive (op args)
+  "OP, the generic operator of plain-mode code (here, a function inlined
+from the Basis, which is compiled without the checker), resolved like the
+checker resolves overloading when its operands' types are now known, or
+NIL."
+  (when (and (eq (first op) :binary) (= (length args) 2))
+    (let ((name (car (rassoc (second op) *sml-binary-primitives*)))
+          (tyname (ir-overloading-tyname (ir-type (first args)))))
+      (when (and name tyname
+                 (equal tyname (ir-overloading-tyname (ir-type (second args)))))
+        (cond
+          ((member name '("=" "<>") :test #'string=)
+           (let ((test (cond ((string= tyname "string") 'string=)
+                             ((string= tyname "real") nil)
+                             (t 'eql))))
+             (and test (list :equality test (string= name "<>")))))
+          ((and (member name '("+" "-" "*" "/" "div" "mod" "<" ">" "<=" ">=")
+                        :test #'string=)
+                (compile-overloaded-operation name tyname (list (gensym) (gensym))))
+           (list :overloaded name tyname)))))))
+
 (defun ir-simplify-let (node env)
   (destructuring-bind (symbol value body) (cddr node)
     (let ((value (ir-simplify-node value env)))
+      (when (and (ir-type value) *ir-variable-types*)
+        (setf (gethash symbol *ir-variable-types*) (ir-type value)))
       (cond
         ;; let x = (let y = a in b) in c  =>  let y = a in let x = b in c
         ((eq (ir-kind value) :let)
@@ -2805,6 +2891,14 @@ values (tuples, constructors, functions) or to a term to substitute."
            (setf (gethash symbol env) value))
          (ir :let (ir-type node) symbol value (ir-simplify-node body env)))))))
 
+(defun ir-primitive-function-name (function)
+  "The name of the Basis primitive the term FUNCTION is, or NIL."
+  (case (ir-kind function)
+    (:ref (and (symbolp (third function)) (symbol-package (third function))
+               (get (third function) 'sml-ir-primitive)))
+    (:prim (and (eq (first (third function)) :basis-value)
+                (second (third function))))))
+
 (defun ir-simplify-application (node env)
   (let ((function (ir-simplify-node (third node) env))
         (arg (ir-simplify-node (fourth node) env)))
@@ -2825,23 +2919,29 @@ values (tuples, constructors, functions) or to a term to substitute."
        (destructuring-bind (f g) (fourth function)
          (ir-simplify-application
           (ir :app (ir-type node) f (ir :app (ir-arrow-range (ir-type g)) g arg)) env)))
-      ;; A Basis primitive the IR opens.
-      ((and (eq (ir-kind function) :ref)
-            (symbolp (third function)) (symbol-package (third function))
-            (get (third function) 'sml-ir-primitive)
-            (let ((arity (ir-basis-primitive-arity (get (third function) 'sml-ir-primitive))))
-              (or (eql arity 1)
-                  (and (eql arity 2) (eq (ir-kind arg) :tuple) (= (length (third arg)) 2)))))
-       (let* ((name (get (third function) 'sml-ir-primitive))
-              (args (if (eql (ir-basis-primitive-arity name) 1) (list arg) (third arg))))
+      ;; A Basis primitive the IR opens: through a cell bound to it, or
+      ;; `use{b = NAME}' itself (inlined from the Basis).
+      ((let ((name (ir-primitive-function-name function))
+             (tuple (ir-known-value arg env)))
+         (and name
+              (let ((arity (ir-basis-primitive-arity name)))
+                (or (eql arity 1)
+                    (and arity (eq (ir-kind tuple) :tuple)
+                         (= (length (third tuple)) arity))))))
+       (let* ((name (ir-primitive-function-name function))
+              (args (if (eql (ir-basis-primitive-arity name) 1)
+                        (list arg)
+                        (third (ir-known-value arg env)))))
          (or (ir-fold-primitive (list :basis name) args (ir-type node))
              (ir :prim (ir-type node) (list :basis name) args))))
       (t
        (multiple-value-bind (known copy) (ir-known-function function env)
          (if (and known (= (length (third known)) 1)
                   (or (not copy) (<= (ir-size known) *sml-ir-inline-size*)))
-             (ir-simplify-node (ir-beta (if copy (ir-instantiate known) known) (list arg))
-                               env)
+             (ir-with-type
+              (ir-simplify-node (ir-beta (if copy (ir-instantiate known) known) (list arg))
+                                env)
+              (ir-type node))
              (ir :app (ir-type node) function arg)))))))
 
 (defun ir-simplify-call (node env)
@@ -2849,7 +2949,8 @@ values (tuples, constructors, functions) or to a term to substitute."
     (let ((args (mapcar (lambda (a) (ir-simplify-node a env)) args))
           (template (and (symbolp cell) (get cell 'sml-ir-inline))))
       (if (and template (= (length (third template)) (length args)))
-          (ir-simplify-node (ir-beta (ir-instantiate template) args) env)
+          (ir-with-type (ir-simplify-node (ir-beta (ir-instantiate template) args) env)
+                        (ir-type node))
           (ir :call (ir-type node) worker args cell)))))
 
 ;;; Matches whose outcome is known (case-of-known-constructor)
@@ -2940,6 +3041,17 @@ constructed value): :YES, with the bindings ((symbol . term) ...) it makes,
       (and (member (ir-kind node) '(:tuple :con))
            (every #'ir-trivial-p (if (eq (ir-kind node) :tuple) (third node) (fifth node))))))
 
+(defun ir-with-type (node type)
+  "NODE, given TYPE when it has none (a term inlined from the untyped
+Basis, in a typed program)."
+  (cond ((or (ir-type node) (null type)) node)
+        ;; The type of the term in tail position, which the simplifier
+        ;; may later take out of the let.
+        ((eq (ir-kind node) :let)
+         (destructuring-bind (symbol value body) (cddr node)
+           (ir :let type symbol value (ir-with-type body type))))
+        (t (list* (ir-kind node) type (cddr node)))))
+
 (defun ir-bind (bindings body)
   (reduce (lambda (binding body) (ir :let (ir-type body) (car binding) (cdr binding) body))
           bindings :from-end t :initial-value body))
@@ -2961,7 +3073,8 @@ constructed value): :YES, with the bindings ((symbol . term) ...) it makes,
           (reduce (lambda (pair body)
                     (destructuring-bind (pattern . scrutinee) pair
                       (if (eq (ir-kind pattern) :p-var)
-                          (ir :let type (third pattern) scrutinee body)
+                          (ir :let type (third pattern)
+                              (ir-with-type scrutinee (ir-type pattern)) body)
                           (if (ir-pure-p scrutinee)
                               body
                               (ir :seq type (list scrutinee body))))))
@@ -3012,9 +3125,14 @@ constructed value): :YES, with the bindings ((symbol . term) ...) it makes,
               rules)
       failure))
 
+(defvar *ir-variable-types* nil
+  "Variable -> the type of the term a `let' binds it to, for the untyped
+uses of the variable in code inlined from the Basis (IR-SIMPLIFY-NODE).")
+
 (defun ir-simplify (node)
   "NODE simplified (see *SML-IR-SIMPLIFY*)."
-  (loop repeat *sml-ir-simplify-rounds*
+  (loop with *ir-variable-types* = (make-hash-table :test #'eq)
+        repeat *sml-ir-simplify-rounds*
         do (let ((before node))
              (multiple-value-bind (*ir-census* *ir-opaque*) (ir-take-census node)
                (setf node (ir-simplify-node node (make-hash-table :test #'eq))))
