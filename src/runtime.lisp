@@ -1494,6 +1494,11 @@ equal to themselves."
 (defun sml-ceil (v) (sml-real-to-integer v #'ceiling))
 (defun sml-round (v) (sml-real-to-integer v #'round))
 (defun sml-trunc (v) (sml-real-to-integer v #'truncate))
+(declaim (inline sml-real-sqrt))
+(defun sml-real-sqrt (x)
+  "Math.sqrt of the double X, opened by the compiler: a NaN below zero."
+  (declare (double-float x))
+  (if (< x 0d0) (sml-nan) (sqrt x)))
 (defun sml-sqrt (v) (sml-math-guarded #'sqrt v))
 (defun sml-sin (v) (sml-math-guarded #'sin v))
 (defun sml-cos (v) (sml-math-guarded #'cos v))
@@ -1610,15 +1615,22 @@ POSITION is the source offset of the match, when known."
       (elt sequence index)
       (sml-raise-named-exception "Subscript")))
 
-;;; Vectors are simple-vectors of their elements.  An array is a
-;;; simple-vector whose slot 0 holds :ARRAY and slots 1..n the elements:
-;;; like a ref (#(:ref value)), it is equal only to itself (SML-EQUAL).
-;;; Its type in the Basis is still 'a ref vector ref (src/basis/Array.sml),
-;;; for its equality.  The compiler opens SUB, UPDATE and LENGTH
-;;; (IR-EMIT-BASIS-PRIMITIVE).
+;;; Vectors are simple-vectors of their elements.  An array of reals with
+;;; elements is a (simple-array double-float (*)), its elements unboxed;
+;;; any other array is a simple-vector whose slot 0 holds :ARRAY and slots
+;;; 1..n the elements.  An array is made of reals when its elements are
+;;; double-floats, which only reals are; an empty array of reals may be
+;;; either, so every operation tests the representation, unless the
+;;; compiler knows the element type is not real (SML-GENERIC-ARRAY-SUB).
+;;; Like a ref (#(:ref value)), an array is equal only to itself
+;;; (SML-EQUAL).  Its type in the Basis is still 'a ref vector ref
+;;; (src/basis/Array.sml), for its equality.  The compiler opens SUB,
+;;; UPDATE and LENGTH (IR-EMIT-BASIS-PRIMITIVE).
 
-(declaim (inline sml-vector-sub sml-array-sub sml-array-update sml-array-length
-                 sml-array-p))
+(deftype sml-real-array () '(simple-array double-float (*)))
+
+(declaim (inline sml-vector-sub sml-array-p sml-array-length
+                 sml-array-sub sml-array-update sml-generic-array-sub sml-generic-array-update))
 (defun sml-vector-sub (vector index)
   (declare (simple-vector vector))
   (if (and (typep index 'fixnum) (< -1 index (length vector)))
@@ -1626,61 +1638,90 @@ POSITION is the source offset of the match, when known."
       (sml-raise-named-exception "Subscript")))
 
 (defun sml-array-p (value)
-  (and (simple-vector-p value)
-       (plusp (length value))
-       (eq (svref value 0) :array)))
+  (or (typep value 'sml-real-array)
+      (and (simple-vector-p value)
+           (plusp (length value))
+           (eq (svref value 0) :array))))
 
 (defun sml-array-length (array)
-  (declare (simple-vector array))
-  (1- (length array)))
+  (if (typep array 'sml-real-array)
+      (length array)
+      (1- (length (the simple-vector array)))))
 
-(defun sml-array-sub (array index)
+(defun sml-generic-array-sub (array index)
   (declare (simple-vector array))
   (if (and (typep index 'fixnum) (< -1 index (1- (length array))))
       (svref array (1+ index))
       (sml-raise-named-exception "Subscript")))
 
-(defun sml-array-update (array index value)
+(defun sml-generic-array-update (array index value)
   (declare (simple-vector array))
   (if (and (typep index 'fixnum) (< -1 index (1- (length array))))
       (setf (svref array (1+ index)) value)
       (sml-raise-named-exception "Subscript"))
   (sml-unit))
 
+(defun sml-array-sub (array index)
+  (if (typep array 'sml-real-array)
+      (if (and (typep index 'fixnum) (< -1 index (length array)))
+          (aref array index)
+          (sml-raise-named-exception "Subscript"))
+      (sml-generic-array-sub array index)))
+
+(defun sml-array-update (array index value)
+  (if (typep array 'sml-real-array)
+      (if (and (typep index 'fixnum) (< -1 index (length array)))
+          (setf (aref array index) (sml-double value))
+          (sml-raise-named-exception "Subscript"))
+      (sml-generic-array-update array index value))
+  (sml-unit))
+
 (defconstant +sml-array-max-length+ (- array-dimension-limit 2)
-  "Array.maxLen: one slot of the simple-vector holds :ARRAY.")
+  "Array.maxLen: one slot of a simple-vector holds :ARRAY.")
 
 (defun make-sml-array (length initial)
   (unless (and (integerp length) (<= 0 length +sml-array-max-length+))
     (sml-raise-named-exception "Size"))
-  (let ((array (make-array (1+ length) :initial-element initial)))
-    (setf (svref array 0) :array)
-    array))
+  (if (typep initial 'double-float)
+      (make-array length :element-type 'double-float :initial-element initial)
+      (let ((array (make-array (1+ length) :initial-element initial)))
+        (setf (svref array 0) :array)
+        array)))
 
 (defun sml-array-from-list (list)
-  (let ((array (make-sml-array (length list) nil)))
+  (let ((array (make-sml-array (length list) (first list))))
     (loop for item in list
-          for i from 1
-          do (setf (svref array i) item))
+          for i from 0
+          do (sml-array-update array i item))
     array))
 
+(defun sml-array-elements (array)
+  "The elements of ARRAY, a simple-vector or a real array, and their start."
+  (if (typep array 'sml-real-array)
+      (values array 0)
+      (values array 1)))
+
 (defun sml-array-vector (array)
-  (subseq array 1))
+  (multiple-value-bind (elements start) (sml-array-elements array)
+    (coerce (subseq elements start) 'simple-vector)))
 
 (defun sml-array-copy (src dst di)
   "Array.copy {src, dst, di}; also right when SRC is DST."
-  (declare (simple-vector src dst))
-  (if (and (typep di 'fixnum) (<= 0 di) (<= (+ di (1- (length src))) (1- (length dst))))
-      (replace dst src :start1 (1+ di) :start2 1)
-      (sml-raise-named-exception "Subscript"))
+  (multiple-value-bind (from from-start) (sml-array-elements src)
+    (multiple-value-bind (to to-start) (sml-array-elements dst)
+      (if (and (typep di 'fixnum) (<= 0 di)
+               (<= (+ di (sml-array-length src)) (sml-array-length dst)))
+          (replace to from :start1 (+ to-start di) :start2 from-start)
+          (sml-raise-named-exception "Subscript"))))
   (sml-unit))
 
 (defun sml-array-copy-vector (src dst di)
   "Array.copyVec {src, dst, di}."
-  (declare (simple-vector src dst))
-  (if (and (typep di 'fixnum) (<= 0 di) (<= (+ di (length src)) (1- (length dst))))
-      (replace dst src :start1 (1+ di))
-      (sml-raise-named-exception "Subscript"))
+  (declare (simple-vector src))
+  (multiple-value-bind (to to-start) (sml-array-elements dst)
+    (if (and (typep di 'fixnum) (<= 0 di) (<= (+ di (length src)) (sml-array-length dst)))
+        (replace to src :start1 (+ to-start di))
+        (sml-raise-named-exception "Subscript")))
   (sml-unit))
 
 (define-sml-binary-primitive sml-compose sml-o (f g)

@@ -1915,8 +1915,8 @@ when the tree would be too large."
 
 (defparameter *ir-representation-types*
   '(("real" . double-float) #+sbcl ("int" . fixnum)
-    ;; A ref is #(:ref value); a vector, a simple-vector of its elements;
-    ;; an array's type is 'a ref vector ref (src/basis/Array.sml).
+    ;; A ref is #(:ref value) and a vector a simple-vector of its
+    ;; elements, but an array's type is 'a ref vector ref (Array.sml).
     ("ref" . simple-vector) ("vector" . simple-vector))
   "The Basis's types whose values the code may declare: name -> CL type.")
 
@@ -1934,6 +1934,10 @@ In an inline template, whose types have lost their stamps
 (defun ir-representation-type (type)
   "The CL type of every value of IR type TYPE that is worth declaring, or NIL."
   (and type
+       ;; 'a ref vector ref is an array, which may be a real array (the
+       ;; Basis's vector is Vector.vector there, an abstract type).
+       (not (and (ir-base-type-p type "ref")
+                 (ir-type-named-p (third type) "vector")))
        (cdr (find-if (lambda (entry) (ir-base-type-p type (car entry)))
                      *ir-representation-types*))))
 
@@ -2111,7 +2115,8 @@ whole body when it does real arithmetic (see SML-IEEE)."
     (:var (let ((entry (ir-local-function (third node))))
             (if entry `#',(fourth entry) (third node))))
     (:ref (third node))
-    (:prim (ir-emit-primitive (third node) (ir-emit-list (fourth node)) (ir-type node)))
+    (:prim (let ((*ir-primitive-node* node))
+             (ir-emit-primitive (third node) (ir-emit-list (fourth node)) (ir-type node))))
     (:tuple `(sml-tuple ,@(ir-emit-list (third node))))
     (:record (record-construction-form (third node) (ir-emit-list (fourth node))))
     (:select `(svref ,(ir-emit (fourth node)) ,(third node)))
@@ -2207,7 +2212,9 @@ whole body when it does real arithmetic (see SML-IEEE)."
 (defparameter *ir-basis-primitive-arities*
   '(("String.sub" . 2) ("String.size" . 1) ("Char.ord" . 1) ("Char.chr" . 1)
     ("Vector.sub" . 2) ("Vector.length" . 1)
-    ("Array.sub" . 2) ("Array.update" . 3) ("Array.length" . 1))
+    ("Array.sub" . 2) ("Array.update" . 3) ("Array.length" . 1)
+    ("Math.sqrt" . 1) ("Math.sin" . 1) ("Math.cos" . 1) ("Math.tan" . 1)
+    ("Math.atan" . 1) ("Math.exp" . 1))
   "Primitives besides the word structures' (IR-WORD-OPERATION-ARITY):
 name -> number of arguments (N > 1 means an N-tuple).")
 
@@ -2228,8 +2235,24 @@ name -> number of arguments (N > 1 means an N-tuple).")
     (if bits
         (member operation '("xorb" "orb" "andb" "<<" ">>" "~>>" "notb" "fromInt")
                 :test #'string=)
-        (member name '("String.size" "Char.ord" "Vector.length" "Array.length")
+        (member name '("String.size" "Char.ord" "Vector.length" "Array.length"
+                       "Math.sqrt" "Math.sin" "Math.cos" "Math.tan" "Math.atan" "Math.exp")
                 :test #'string=))))
+
+(defvar *ir-primitive-node* nil
+  "The :prim node being emitted.")
+
+(defun ir-non-real-type-p (type)
+  "Is TYPE known, and not real?  An array of elements of such a type is
+not a real array (SML-ARRAY-SUB)."
+  (and type
+       (not (eq (first type) :tyvar))
+       (not (ir-base-type-p type "real"))
+       ;; An abstract type may be real.
+       (or (not (eq (first type) :con))
+           (ir-tycon-constructors (second type))
+           (some (lambda (name) (ir-base-type-p type name))
+                 '("int" "word" "char" "string" "bool" "exn" "ref" "vector")))))
 
 (defun ir-emit-basis-primitive (name args)
   (multiple-value-bind (bits operation) (ir-word-structure-bits name)
@@ -2263,9 +2286,22 @@ name -> number of arguments (N > 1 means an N-tuple).")
           ((string= name "Char.chr") `(sml-chr ,@args))
           ((string= name "Vector.sub") `(sml-vector-sub ,@args))
           ((string= name "Vector.length") `(length (the simple-vector ,@args)))
-          ((string= name "Array.sub") `(sml-array-sub ,@args))
-          ((string= name "Array.update") `(sml-array-update ,@args))
-          ((string= name "Array.length") `(sml-array-length ,@args))))))
+          ((string= name "Array.sub")
+           (if (ir-non-real-type-p (ir-type *ir-primitive-node*))
+               `(sml-generic-array-sub ,@args)
+               `(sml-array-sub ,@args)))
+          ((string= name "Array.update")
+           (if (ir-non-real-type-p (ir-type (third (fourth *ir-primitive-node*))))
+               `(sml-generic-array-update ,@args)
+               `(sml-array-update ,@args)))
+          ((string= name "Array.length") `(sml-array-length ,@args))
+          ((member name '("Math.sqrt" "Math.sin" "Math.cos" "Math.tan" "Math.atan" "Math.exp")
+                   :test #'string=)
+           `(sml-ieee (,(cdr (assoc name '(("Math.sqrt" . sml-real-sqrt) ("Math.sin" . sin)
+                                           ("Math.cos" . cos) ("Math.tan" . tan)
+                                           ("Math.atan" . atan) ("Math.exp" . exp))
+                                    :test #'string=))
+                       (sml-double ,@args))))))))
 
 (defun ir-emit-primitive (op args &optional typed)
   "The CL form of primitive OP applied to the forms ARGS.  In a typed term

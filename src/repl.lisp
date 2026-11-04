@@ -112,7 +112,7 @@ the indented continuation lines of long types."
      (format nil "ref ~A" (sml-value->string (aref value 1))))
     ((sml-array-p value)
      (format nil "fromList[~{~A~^, ~}]"
-             (map 'list #'sml-value->string (subseq value 1))))
+             (map 'list #'sml-value->string (sml-array-vector value))))
     ((sml-tuple-p value)
      (if (= (length value) 1)
          "()"
