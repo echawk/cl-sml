@@ -486,9 +486,14 @@ the checker gave PAT no type of its own)."
          (tag (lexical-constructor-tag-form name lexical-env))
          (ctor (constructor-symbol-for-name name lexical-env))
          (payload (ir-lower-pattern (third pat) local-exceptions lexical-env arg-type))
+         (arity (constructor-arity-at-compile-time ctor))
+         ;; A constructor of a structure declared earlier in the same
+         ;; program is registered only when the program is loaded, but its
+         ;; representation is known (as IR-LOWER-CONSTRUCTOR-APPLICATION
+         ;; uses it).
          (known (or (known-constructor-symbol-for-name name)
-                    (sml-constructor-symbol-p ctor)))
-         (arity (and known (constructor-arity-at-compile-time ctor))))
+                    (sml-constructor-symbol-p ctor)
+                    arity)))
     (flet ((con (how data) (ir :p-con type name how data payload)))
       (cond
         ;; A constructor of the functor body being compiled.
@@ -2824,15 +2829,15 @@ values (tuples, constructors, functions) or to a term to substitute."
                          (gethash (third record) env)
                          record)))
          (cond
-           ((and known (eq (ir-kind known) :tuple)
-                 (<= index (length (third known)))
+           ((and known (member (ir-kind known) '(:tuple :record))
+                 (<= index (length (ir-aggregate-fields known)))
                  (eq (ir-kind record) :var)
-                 (ir-trivial-p (nth (1- index) (third known))))
-            (nth (1- index) (third known)))
-           ((and (eq (ir-kind record) :tuple)
-                 (<= index (length (third record)))
-                 (every #'ir-pure-p (third record)))
-            (nth (1- index) (third record)))
+                 (ir-trivial-p (nth (1- index) (ir-aggregate-fields known))))
+            (nth (1- index) (ir-aggregate-fields known)))
+           ((and (member (ir-kind record) '(:tuple :record))
+                 (<= index (length (ir-aggregate-fields record)))
+                 (every #'ir-pure-p (ir-aggregate-fields record)))
+            (nth (1- index) (ir-aggregate-fields record)))
            (t (ir :select (ir-type node) index record)))))
       (:select-label (ir :select-label (ir-type node) (third node) (simp (fourth node))))
       (:app (ir-simplify-application node env))
@@ -2884,6 +2889,10 @@ values (tuples, constructors, functions) or to a term to substitute."
                       (mapcar (lambda (a) (simp a)) (fourth node))))
       (:decl (ir :decl (ir-type node) (third node) (simp (fourth node)))))))
 
+(defun ir-aggregate-fields (node)
+  "The field terms of the :tuple or :record NODE, in slot order."
+  (if (eq (ir-kind node) :tuple) (third node) (fourth node)))
+
 (defun ir-overloading-tyname (type)
   "The name of the overloading instance of TYPE, a Basis type, or NIL."
   (find-if (lambda (name) (ir-base-type-p type name))
@@ -2924,22 +2933,26 @@ NIL."
         ((ir-opaque-p symbol)
          (ir :let (ir-type node) symbol value (ir-simplify-node body env)))
         ;; let x = (a, b) in c  =>  let t1 = a in let t2 = b in let x = (t1, t2)
-        ;; in c, so that x is known (and destructuring it costs nothing).
-        ((and (eq (ir-kind value) :tuple)
-              (notevery #'ir-trivial-p (third value)))
+        ;; in c, so that x is known (and destructuring it costs nothing);
+        ;; records likewise.
+        ((and (member (ir-kind value) '(:tuple :record))
+              (notevery #'ir-trivial-p (ir-aggregate-fields value)))
          (let* ((temporaries (mapcar (lambda (arg)
                                        (if (ir-trivial-p arg)
                                            arg
                                            (ir :var (ir-type arg) (gensym "F"))))
-                                     (third value)))
-                (inner (ir :let (ir-type node) symbol (ir :tuple (ir-type value) temporaries)
+                                     (ir-aggregate-fields value)))
+                (inner (ir :let (ir-type node) symbol
+                           (if (eq (ir-kind value) :tuple)
+                               (ir :tuple (ir-type value) temporaries)
+                               (ir :record (ir-type value) (third value) temporaries))
                            body)))
            (ir-simplify-node
             (reduce (lambda (pair body)
                       (if (eq (car pair) (cdr pair))
                           body
                           (ir :let (ir-type body) (third (car pair)) (cdr pair) body)))
-                    (mapcar #'cons temporaries (third value))
+                    (mapcar #'cons temporaries (ir-aggregate-fields value))
                     :from-end t :initial-value inner)
             env)))
         ((and (zerop (ir-uses symbol)) (ir-pure-p value))
@@ -2954,10 +2967,10 @@ NIL."
          (setf (gethash symbol env) (cons :substitute value))
          (ir-simplify-node body env))
         (t
-         (when (or (and (member (ir-kind value) '(:tuple :con))
-                        (every #'ir-trivial-p (if (eq (ir-kind value) :tuple)
-                                                  (third value)
-                                                  (fifth value))))
+         (when (or (and (member (ir-kind value) '(:tuple :record :con))
+                        (every #'ir-trivial-p (if (eq (ir-kind value) :con)
+                                                  (fifth value)
+                                                  (ir-aggregate-fields value))))
                    (and (eq (ir-kind value) :fn)
                         (or (= (ir-uses symbol) 1)
                             (<= (ir-size value) *sml-ir-inline-size*))))
