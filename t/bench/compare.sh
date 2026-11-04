@@ -9,9 +9,9 @@
 #   tb-NAME   t/bench/NAME.sml: `benchmark ()' run REPS times (its result
 #             is printed once)
 #   bm-NAME   the SML/NJ benchmark suite (RW_BENCHMARKS, assembled as in
-#             t/realworld/bin/assemble.sh): Main.testit (), which writes
-#             the output checked (as t/realworld does; it is Main.doit,
-#             the benchmark proper, with output, for most programs)
+#             t/realworld/bin/assemble.sh): Main.testit () writes the
+#             output checked (untimed), then Main.doit (), the benchmark
+#             proper, is timed
 # The outputs of all implementations are compared with Poly/ML's (MLton's
 # when Poly/ML rejects the program); a mismatch is marked in the table.
 #
@@ -76,8 +76,9 @@ EOF
   done
   for d in "$W"/bm-*/; do
     cat > "$d/timed.sml" <<'EOF'
+val _ = Log.withOutput TextIO.stdOut Main.testit ();
 val _ = let val t0 = Time.now ()
-            val () = Log.withOutput TextIO.stdOut Main.testit ()
+            val () = Main.doit ()
             val t1 = Time.now ()
         in TextIO.output (TextIO.stdErr, "@@TIME " ^ LargeInt.toString
              (Time.toMicroseconds (Time.- (t1, t0))) ^ "\n")
