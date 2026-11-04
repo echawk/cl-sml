@@ -109,10 +109,10 @@ struct
   val toString   = fmt StringCvt.DEC
   val fromString = StringCvt.scanString(scan StringCvt.DEC)
 
-  val op>  = op>  : int * int -> bool
-  val op>= = op>= : int * int -> bool
-  val op<  = op<  : int * int -> bool
-  val op<= = op<= : int * int -> bool
+  val op>  = use{b = "Int.>"}  : int * int -> bool
+  val op>= = use{b = "Int.>="} : int * int -> bool
+  val op<  = use{b = "Int.<"}  : int * int -> bool
+  val op<= = use{b = "Int.<="} : int * int -> bool
 
   fun compare(i, j) =
       if i < j then LESS else if i = j then EQUAL else GREATER

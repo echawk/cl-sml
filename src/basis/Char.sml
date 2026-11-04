@@ -229,10 +229,10 @@ struct
   val fromCString = scanString scanC
 
 
-  val op<  = op<  : (char * char) -> bool
-  val op<= = op<= : (char * char) -> bool
-  val op>  = op>  : (char * char) -> bool
-  val op>= = op>= : (char * char) -> bool
+  val op<  = use{b = "Char.<"}  : (char * char) -> bool
+  val op<= = use{b = "Char.<="} : (char * char) -> bool
+  val op>  = use{b = "Char.>"}  : (char * char) -> bool
+  val op>= = use{b = "Char.>="} : (char * char) -> bool
 
   fun compare(c1, c2) =
       if c1 < c2 then LESS else if c1 = c2 then EQUAL else GREATER

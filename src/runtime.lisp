@@ -1446,10 +1446,51 @@ operands (see SML-REAL-<)."
            (,operator (the fixnum ,x) (the fixnum ,y))
            (,operator ,x ,y)))))
 
+(defun sml-string-compare (a b)
+  "-1, 0 or 1 as the string A is less than, equal to or greater than B, in
+one pass (STRING< and friends parse keyword arguments and dispatch on the
+strings' types, slow for SML's mostly short strings)."
+  (declare (optimize (speed 3) (safety 0) (debug 0)))
+  (if (and (typep a '(simple-array character (*)))
+           (typep b '(simple-array character (*))))
+      (let ((la (length a)) (lb (length b)))
+        (dotimes (i (min la lb) (cond ((< la lb) -1) ((> la lb) 1) (t 0)))
+          (let ((x (schar a i)) (y (schar b i)))
+            (unless (char= x y)
+              (return (if (char< x y) -1 1))))))
+      (let ((i (mismatch (the string a) (the string b))))
+        (cond ((null i) 0)
+              ((>= i (length a)) -1)
+              ((>= i (length b)) 1)
+              ((char< (char a i) (char b i)) -1)
+              (t 1)))))
+
+(defun sml-comparison-primitive (operator tyname)
+  "String.<, Char.<= and the like: OPERATOR at the type TYNAME as a function
+of a pair (the compiler opens their applications, IR-EMIT-BASIS-PRIMITIVE)."
+  (let ((test (cdr (assoc operator
+                          (cdr (assoc tyname
+                                      '(("char" ("<" . char<) ("<=" . char<=)
+                                                (">" . char>) (">=" . char>=))
+                                        ("int" ("<" . <) ("<=" . <=) (">" . >) (">=" . >=)))
+                                      :test #'string=))
+                          :test #'string=)))
+        (comparison (cdr (assoc operator '(("<" . <) ("<=" . <=) (">" . >) (">=" . >=))
+                                :test #'string=))))
+    (if (string= tyname "string")
+        (lambda (pair)
+          (funcall comparison (sml-string-compare (sml-tuple-first pair) (sml-tuple-second pair))
+                   0))
+        (lambda (pair)
+          (and (funcall test (sml-tuple-first pair) (sml-tuple-second pair)) t)))))
+
 (defun sml-ordered-compare (a b)
   "-1, 0 or 1 as A is less than, equal to or greater than B; NIL when they
 are unordered (a NaN is involved)."
   (cond
+    ((and (typep a 'fixnum) (typep b 'fixnum))
+     (cond ((< a b) -1) ((> a b) 1) (t 0)))
+    ((and (stringp a) (stringp b)) (sml-string-compare a b))
     ((and (numberp a) (numberp b))
      (unless (sml-real-unordered-p a b)
        (cond ((< a b) -1)
@@ -1458,10 +1499,6 @@ are unordered (a NaN is involved)."
     ((and (characterp a) (characterp b))
      (cond ((char< a b) -1)
            ((char> a b) 1)
-           (t 0)))
-    ((and (stringp a) (stringp b))
-     (cond ((string< a b) -1)
-           ((string> a b) 1)
            (t 0)))
     (t
      (error "Unsupported SML ordered comparison: ~S and ~S" a b))))
@@ -2574,6 +2611,12 @@ name, for `use{b = NAME}'.")
                                                        (sml-tuple-second tuple))))
                     ("Vector.fromList" . ,(lambda (list)
                                             (coerce list 'vector)))
+                    ,@(loop for (structure tyname) in '(("String" "string") ("Char" "char")
+                                                         ("Int" "int"))
+                            append (loop for operator in '("<" "<=" ">" ">=")
+                                         collect (cons (format nil "~A.~A" structure operator)
+                                                       (sml-comparison-primitive
+                                                        operator tyname))))
                     ("Array.maxLen" . ,(sml-constant-primitive +sml-array-max-length+))
                     ("Array.array" . ,(lambda (tuple)
                                         (make-sml-array (sml-tuple-first tuple)

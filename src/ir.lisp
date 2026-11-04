@@ -325,7 +325,7 @@ all its parameters, or NIL."
           do (push node nodes)
              (setf node (second node)))
     ;; NODES: the applications, innermost first; NODE: the head.
-    (when (and (consp node) (eq (car node) :var))
+    (when (and *sml-local-workers* (consp node) (eq (car node) :var))
       (let* ((symbol (resolved-sml-symbol (second node) lexical-env))
              (worker (and (symbolp symbol) (symbol-package symbol)
                           (get symbol 'sml-curried-worker))))
@@ -2253,7 +2253,10 @@ whole body when it does real arithmetic (see SML-IEEE)."
     ("Vector.sub" . 2) ("Vector.length" . 1)
     ("Array.sub" . 2) ("Array.update" . 3) ("Array.length" . 1)
     ("Math.sqrt" . 1) ("Math.sin" . 1) ("Math.cos" . 1) ("Math.tan" . 1)
-    ("Math.atan" . 1) ("Math.exp" . 1))
+    ("Math.atan" . 1) ("Math.exp" . 1)
+    ("String.<" . 2) ("String.<=" . 2) ("String.>" . 2) ("String.>=" . 2)
+    ("Char.<" . 2) ("Char.<=" . 2) ("Char.>" . 2) ("Char.>=" . 2)
+    ("Int.<" . 2) ("Int.<=" . 2) ("Int.>" . 2) ("Int.>=" . 2))
   "Primitives besides the word structures' (IR-WORD-OPERATION-ARITY):
 name -> number of arguments (N > 1 means an N-tuple).")
 
@@ -2275,6 +2278,9 @@ name -> number of arguments (N > 1 means an N-tuple).")
         (member operation '("xorb" "orb" "andb" "<<" ">>" "~>>" "notb" "fromInt")
                 :test #'string=)
         (member name '("String.size" "Char.ord" "Vector.length" "Array.length"
+                       "String.<" "String.<=" "String.>" "String.>="
+                       "Char.<" "Char.<=" "Char.>" "Char.>="
+                       "Int.<" "Int.<=" "Int.>" "Int.>="
                        "Math.sqrt" "Math.sin" "Math.cos" "Math.tan" "Math.atan" "Math.exp")
                 :test #'string=))))
 
@@ -2323,6 +2329,14 @@ not a real array (SML-ARRAY-SUB)."
           ((string= name "String.size") `(sml-size ,@args))
           ((string= name "Char.ord") `(sml-ord ,@args))
           ((string= name "Char.chr") `(sml-chr ,@args))
+          ((member name '("String.<" "String.<=" "String.>" "String.>="
+                          "Char.<" "Char.<=" "Char.>" "Char.>="
+                          "Int.<" "Int.<=" "Int.>" "Int.>=")
+                   :test #'string=)
+           (let ((dot (position #\. name)))
+             (compile-overloaded-operation (subseq name (1+ dot))
+                                           (string-downcase (subseq name 0 dot))
+                                           args)))
           ((string= name "Vector.sub") `(sml-vector-sub ,@args))
           ((string= name "Vector.length") `(length (the simple-vector ,@args)))
           ((string= name "Array.sub")
