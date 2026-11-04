@@ -2920,10 +2920,18 @@ values (tuples, constructors, functions) or to a term to substitute."
                                            (eq (ir-kind (second binding)) :fn)))
                                     bindings)))
            (if bindings
-               (ir :letrec (ir-type node)
-                   (mapcar (lambda (binding) (list (first binding) (simp (second binding))))
-                           bindings)
-                   (simp body))
+               (let ((bindings (mapcar (lambda (binding)
+                                         (list (first binding) (simp (second binding))))
+                                       bindings)))
+                 ;; A function that does not call itself (one of its own, not
+                 ;; mutually recursive) is known: its calls in BODY may be
+                 ;; inlined like a let-bound function's.
+                 (when (and (null (rest bindings))
+                            (eq (ir-kind (second (first bindings))) :fn)
+                            (not (ir-mentions-p (second (first bindings))
+                                                (first (first bindings)))))
+                   (setf (gethash (first (first bindings)) env) (second (first bindings))))
+                 (ir :letrec (ir-type node) bindings (simp body)))
                (simp body)))))
       (:seq
        (let* ((items (mapcan (lambda (item)
@@ -3125,6 +3133,18 @@ NIL."
              (ir :prim (ir-type node) (list :basis name) args))))
       (t
        (multiple-value-bind (known copy) (ir-known-function function env)
+         (let ((tuple (and known (> (length (third known)) 1) (ir-known-value arg env))))
+           ;; A function of several parameters (a tuple's fields) applied to
+           ;; a tuple it knows.
+           (when (and tuple (eq (ir-kind tuple) :tuple)
+                      (= (length (third tuple)) (length (third known)))
+                      (or (not copy) (<= (ir-size known) *sml-ir-inline-size*)))
+             (return-from ir-simplify-application
+               (ir-with-type
+                (ir-simplify-node (ir-beta (if copy (ir-instantiate known) known)
+                                           (third tuple))
+                                  env)
+                (ir-type node)))))
          (if (and known (= (length (third known)) 1)
                   (or (not copy) (<= (ir-size known) *sml-ir-inline-size*)))
              (ir-with-type
