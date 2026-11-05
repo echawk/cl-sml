@@ -450,6 +450,13 @@ top-level functions, curried parameters become one function of all of
 them, and calls that supply them call it directly (IR-EMIT-LOCAL-FUNCTIONS).
 The Coalton backend, which emits from the IR itself, turns it off.")
 
+;;; docs/IR.md, "Declarations".
+(defvar *sml-type-declarations* t
+  "Declare in the emitted Lisp the representation types of typed values
+(IR-REPRESENTATION-TYPE): parameters, LET and pattern variables, operands
+of primitives (THE), and the parameters of top-level workers (DECLAIM
+FTYPE).  NIL emits no type declarations, for comparison.")
+
 (defvar *ir-flatten-curried* nil
   "True while the worker of a curried top-level function is compiled: its
 term, a chain of one-parameter :fn nodes, becomes one :fn of all of them
@@ -2583,15 +2590,42 @@ supplies them all calls it directly), and return its name and arity."
 (defun worker-defun (worker lambda)
   "The DEFUN of the worker WORKER of a top-level function, LAMBDA its
 lambda list and body.  When it calls itself, the body is a local function,
-whose calls of itself are local calls, cheaper than full calls."
+whose calls of itself are local calls, cheaper than full calls.  Its
+parameters' types are proclaimed (WORKER-FTYPE)."
   (destructuring-bind (lambda-list &rest body) lambda
-    (let ((self (make-symbol (symbol-name worker))))
-      (if (tree-calls-p body worker)
-          `(defun ,worker ,lambda-list
-             ,@(portable-tail-call-declarations)
-             (labels ((,self ,lambda-list ,@(subst self worker body)))
-               (,self ,@lambda-list)))
-          `(defun ,worker ,lambda-list ,@body)))))
+    (let* ((self (make-symbol (symbol-name worker)))
+           (definition (if (tree-calls-p body worker)
+                           `(defun ,worker ,lambda-list
+                              ,@(portable-tail-call-declarations)
+                              (labels ((,self ,lambda-list ,@(subst self worker body)))
+                                (,self ,@lambda-list)))
+                           `(defun ,worker ,lambda-list ,@body)))
+           (ftype (worker-ftype lambda-list body)))
+      (if ftype
+          `(progn (declaim (ftype ,ftype ,worker)) ,definition)
+          definition))))
+
+(defun worker-ftype (lambda-list body)
+  "The FTYPE of a worker of LAMBDA-LIST whose BODY starts with the
+declarations the IR gave its parameters (IR-TYPE-DECLARATIONS), or NIL if
+it declares none.  Only the parameters are declared: a declared result
+type would make SBCL check the value of a call in tail position, which
+would then no longer be a tail call."
+  (let ((types (loop for form in body
+                     while (and (consp form) (eq (first form) 'declare))
+                     append (loop for spec in (rest form)
+                                  when (and (consp spec) (eq (first spec) 'type))
+                                    append (mapcar (lambda (variable)
+                                                     (cons variable (second spec)))
+                                                   (cddr spec))))))
+    (and *sml-type-declarations*
+         (every #'symbolp lambda-list)
+         (notany (lambda (symbol) (member symbol lambda-list-keywords)) lambda-list)
+         (some (lambda (parameter) (assoc parameter types)) lambda-list)
+         `(function ,(mapcar (lambda (parameter)
+                               (or (cdr (assoc parameter types)) t))
+                             lambda-list)
+                    *))))
 
 (defun tree-calls-p (tree symbol)
   (and (consp tree)

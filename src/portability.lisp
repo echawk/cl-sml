@@ -80,6 +80,15 @@ jump table when ENABLE, and that forbid it otherwise; NIL elsewhere."
   #+sbcl `((sb-c:jump-table ,(if enable 1 0)))
   #-sbcl (progn enable nil))
 
+;;; SML strings are made by the run time and the Basis as fresh strings
+;;; (SUBSEQ, CONCATENATE, COERCE, MAKE-STRING, READ-LINE), never with a fill
+;;; pointer or displaced.  SBCL's are then simple; other hosts are not
+;;; assumed to say so.
+(deftype sml-string ()
+  "The CL type of every SML string (declared by the compiler)."
+  #+sbcl 'simple-string
+  #-sbcl 'string)
+
 (defparameter *portable-fixnum-int-p*
   #+sbcl t #-sbcl nil
   "Is SML's Int.int exactly the host's fixnums?  (SBCL's are 63 bits, as
@@ -92,19 +101,27 @@ cl-sml's Int is; other hosts' fixnums are narrower.)")
 ;;; in tail position into jumps on every implementation, and SBCL also
 ;;; merges the other tail calls, but only below DEBUG 3, so no policy here
 ;;; reaches it.
-(defvar *sml-optimize-policy* :default
+(defvar *sml-optimize-policy*
+  (let ((setting (uiop:getenv "CL_SML_POLICY")))
+    (if (member setting '(nil "") :test #'equal)
+        :default
+        (intern (string-upcase setting) :keyword)))
   "The optimize policy of compiled SML: :DEFAULT (safe, and the CL compiler
 may optimize as usual), :DEBUG (full run-time checks and more debugging
-information, still with tail calls merged), :FAST (SPEED 3, SAFETY 0: the
+information, still with tail calls merged), :CHECKED (as :DEFAULT, but
+with SAFETY 3: every type cl-sml declares is checked, which tests that
+the declarations hold), :FAST (SPEED 3, SAFETY 0: the
 CL compiler trusts the types cl-sml declares; SML's own checks, such as
 Overflow, Div and Subscript, stay, so SML semantics do not change), or a
 list of OPTIMIZE
 qualities such as ((SPEED 3) (SAFETY 1) (DEBUG 1)).  Read when SML is
-compiled.")
+compiled.  The environment variable CL_SML_POLICY (\"debug\", \"checked\",
+\"fast\") sets it when cl-sml is loaded.")
 
 (defun sml-optimize-qualities ()
   (case *sml-optimize-policy*
     (:default '((speed 1) (safety 1) (debug 1)))
+    (:checked '((speed 1) (safety 3) (debug 1)))
     (:debug '((speed 0) (safety 3) (debug 2)))
     (:fast '((speed 3) (safety 0) (debug 0)))
     (t *sml-optimize-policy*)))

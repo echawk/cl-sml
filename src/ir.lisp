@@ -1944,15 +1944,33 @@ when the tree would be too large."
     (:module (lexical-structure-cells (second declaration)))))
 
 ;;; Representation types: what the code may declare about the values of an
-;;; IR type.  Reals are always double-floats; on SBCL, Int.int is exactly
-;;; the fixnums.  Only the Basis's own types qualify (compared by stamp, so
-;;; a program's `datatype real' does not), and only in typed terms.
+;;; IR type (*SML-TYPE-DECLARATIONS*), the one mapping from IR types to CL
+;;; types.  Each entry must hold of every value of the type the run time
+;;; makes: the :FAST policy (SAFETY 0) trusts the declarations.
+;;;
+;;; - real: a double-float.  int: on SBCL exactly the fixnums (elsewhere
+;;;   SML-INT is wider than the fixnums, and a range check would cost more
+;;;   than it saves).  char: a character.  string: SML-STRING
+;;;   (src/portability.lisp).  'a list: a list.
+;;; - A ref is #(:ref value), a vector a simple-vector of its elements, a
+;;;   tuple or record a simple-vector with its shape in slot 0; but an
+;;;   array's type is 'a ref vector ref (Array.sml), and an array of reals
+;;;   is a (simple-array double-float (*)), so arrays are not declared.
+;;; - A function is a CL function (constructors and exception constructors
+;;;   used as values are closures too).
+;;; - Not declared: words, whose values the Basis's untyped code may leave
+;;;   unreduced (Word.fromString's decimal digits, SML-ARITHMETIC), so that
+;;;   (unsigned-byte 62) would not hold; bool (no gain); unit; exn;
+;;;   datatypes (several representations); type variables and abstract
+;;;   types, which may stand for any of these.
+;;;
+;;; Only the Basis's own types qualify (compared by stamp, so a program's
+;;; `datatype real' does not), and only in typed terms.
 
 (defparameter *ir-representation-types*
   `(("real" . double-float)
     ,@(and *portable-fixnum-int-p* '(("int" . fixnum)))
-    ;; A ref is #(:ref value) and a vector a simple-vector of its
-    ;; elements, but an array's type is 'a ref vector ref (Array.sml).
+    ("char" . character) ("string" . sml-string) ("list" . list)
     ("ref" . simple-vector) ("vector" . simple-vector))
   "The Basis's types whose values the code may declare: name -> CL type.")
 
@@ -1969,13 +1987,34 @@ In an inline template, whose types have lost their stamps
 
 (defun ir-representation-type (type)
   "The CL type of every value of IR type TYPE that is worth declaring, or NIL."
-  (and type
-       ;; 'a ref vector ref is an array, which may be a real array (the
-       ;; Basis's vector is Vector.vector there, an abstract type).
-       (not (and (ir-base-type-p type "ref")
-                 (ir-type-named-p (third type) "vector")))
-       (cdr (find-if (lambda (entry) (ir-base-type-p type (car entry)))
-                     *ir-representation-types*))))
+  (and *sml-type-declarations*
+       (consp type)
+       (case (first type)
+         (:arrow 'function)
+         ;; A tuple or record (not unit, and not a record type with a row
+         ;; left open).
+         (:record (and (second type) (not (third type)) 'simple-vector))
+         (:con
+          ;; 'a ref vector ref is an array, which may be a real array (the
+          ;; Basis's vector is Vector.vector there, an abstract type).
+          (and (not (and (ir-base-type-p type "ref")
+                         (ir-type-named-p (third type) "vector")))
+               (cdr (find-if (lambda (entry) (ir-base-type-p type (car entry)))
+                             *ir-representation-types*)))))))
+
+(defun ir-operand-form (node form)
+  "FORM, the CL form of NODE, an operand of a primitive, with its
+representation type when that lets the CL compiler pick the operation
+(numbers, characters, strings) and FORM does not show it already.  An
+operand is never in tail position, so THE costs no tail call."
+  (let ((cl-type (and (not (member (ir-kind node) '(:const :var :ref :unit)))
+                      ;; Arithmetic shows its result's type already.
+                      (not (and (eq (ir-kind node) :prim)
+                                (eq (first (third node)) :overloaded)))
+                      (ir-representation-type (ir-type node)))))
+    (if (member cl-type '(fixnum double-float character sml-string))
+        `(the ,cl-type ,form)
+        form)))
 
 (defun ir-type-declarations (variables types)
   "Declarations of VARIABLES, of IR types TYPES, for the CL compiler."
@@ -2153,7 +2192,10 @@ whole body when it does real arithmetic (see SML-IEEE)."
             (if entry `#',(fourth entry) (third node))))
     (:ref (third node))
     (:prim (let ((*ir-primitive-node* node))
-             (ir-emit-primitive (third node) (ir-emit-list (fourth node)) (ir-type node))))
+             (ir-emit-primitive (third node)
+                                (mapcar (lambda (arg) (ir-operand-form arg (ir-emit arg)))
+                                        (fourth node))
+                                (ir-type node))))
     (:tuple `(sml-tuple ,@(ir-emit-list (third node))))
     (:record (record-construction-form (third node) (ir-emit-list (fourth node))))
     (:select `(svref ,(ir-emit (fourth node)) ,(third node)))

@@ -930,3 +930,86 @@ fun d (a, b) = a div b
 val _ = print (String.concatWith \" \" [t (fn () => d (~7, 2)), t (fn () => ~7 mod 3),
   t (fn () => Int.quot (~7, 2)), t (fn () => Int.rem (~7, 2)), t (fn () => d (1, 0)),
   t (fn () => 1 mod 0), t (fn () => d (m, ~1)), t (fn () => Int.quot (m, ~1))] ^ \"\\n\")"))))
+
+;;; Type declarations (docs/IR.md, "Declarations"): what the compiler
+;;; declares of typed values must hold at the edges of their
+;;; representations, whatever the policy.  :CHECKED checks every
+;;; declaration, :FAST trusts them; neither, nor turning the declarations
+;;; off, may change what the program prints.
+
+(defparameter *representation-edges*
+  "fun say s = print (s ^ \"\\n\")
+fun t f = say (f () handle Overflow => \"Overflow\" | Div => \"Div\"
+                         | Subscript => \"Subscript\" | Chr => \"Chr\")
+val mx = valOf Int.maxInt
+val mn = valOf Int.minInt
+fun add (a : int, b : int) = a + b
+fun neg (a : int) = ~a
+fun twice (f : int -> int) (p : int * int) = f (#1 p) + f (#2 p)
+val _ = t (fn () => Int.toString (add (mx, 1)))
+val _ = t (fn () => Int.toString (add (mn, ~1)))
+val _ = t (fn () => Int.toString (neg mn))
+val _ = t (fn () => Int.toString (add (mx, 0) + add (mn, 0)))
+val _ = t (fn () => Int.toString (twice (fn x => x) (mx, 1)))
+val _ = t (fn () => Int.toString (twice (fn x => x div 0) (1, 1)))
+fun addW (a : word, b : word) = a + b
+fun addW8 (a : Word8.word, b : Word8.word) = a + b
+val _ = t (fn () => Word.toString (addW (0wx3FFFFFFFFFFFFFFF, 0w1)))
+val _ = t (fn () => Word.toString (addW (0w0 - 0w1, 0w0)))
+val _ = t (fn () => Word8.toString (addW8 (0wxFF, 0w1)))
+val _ = t (fn () => Word.toString (addW (valOf (Word.fromString \"3FFFFFFFFFFFFFFF\"), 0w0)))
+fun divR (a : real, b : real) = a / b
+fun selfDiv (x : real) = x / x
+fun negR (x : real) = ~x
+val nan = divR (0.0, 0.0)
+val _ = say (String.concatWith \" \" (map Bool.toString
+  [Real.== (nan, nan), nan < nan, Real.isNan nan, Real.== (selfDiv 0.0, 1.0), selfDiv 0.0 < 2.0,
+   Real.signBit (negR 0.0), Real.== (negR 0.0, 0.0), divR (1.0, negR 0.0) < 0.0]))
+val _ = say (Real.toString (divR (1.0, 0.0)) ^ \" \" ^ Real.toString (negR 0.0))
+fun len (s : string) = size s
+fun first (s : string) = String.sub (s, 0)
+val _ = say (String.concatWith \" \" (map (Int.toString o len)
+  [\"\", String.extract (\"abc\", 1, NONE), Substring.string (Substring.full \"abcd\"),
+   implode [], CharVector.tabulate (3, fn _ => #\"x\"), String.map Char.toUpper \"ab\",
+   Int.toString mn, Real.toString nan, \"a\" ^ \"\", concat [], str #\"z\"]))
+val _ = t (fn () => str (first \"\"))
+fun nextC (c : char) = chr (ord c + 1)
+val _ = t (fn () => str (nextC #\"a\"))
+val _ = t (fn () => str (nextC (chr 255)))
+fun sumA (a : real array) = Array.foldl op+ 0.0 a
+fun sizeA (a : int array) = Array.length a
+val _ = say (Real.toString (sumA (Array.fromList [1.0, 2.5])) ^ \" \" ^
+             Real.toString (sumA (Array.array (0, 0.0))) ^ \" \" ^
+             Int.toString (sizeA (Array.fromList [])))
+fun useF (f : string -> exn) = case f \"x\" of Fail s => s | _ => \"?\"
+fun useC (f : int -> int option) = valOf (f 3)
+fun recF ({a, b} : {a : int, b : string}) = a + size b
+fun lst (xs : int list, ys : int list) = length (xs @ ys)
+val _ = say (useF Fail ^ \" \" ^ Int.toString (useC SOME) ^ \" \" ^
+             Int.toString (recF {a = 1, b = \"xy\"}) ^ \" \" ^ Int.toString (lst ([], [1])))
+functor F (X : sig datatype t = A of int val get : t -> int end) =
+struct fun g (f : int -> X.t) = X.get (f 7) val v = g X.A end
+structure S = F (struct datatype t = A of int fun get (A n) = n end)
+val _ = say (Int.toString S.v)"
+  "Values at the edges of their representations, through functions whose
+parameters are declared.")
+
+(defparameter *representation-edge-results*
+  (list "Overflow" "Overflow" "Overflow" "~1" "Overflow" "Div"
+        "0" "3FFFFFFFFFFFFFFF" "0" "3FFFFFFFFFFFFFFF"
+        "false false true false false true true true"
+        "inf ~0.0"
+        "0 2 4 0 3 2 20 3 1 0 1"
+        "Subscript" "b" "Chr"
+        "3.5 0.0 0"
+        "x 3 3 1"
+        "7"))
+
+(test type-declarations-hold-at-representation-edges
+  (dolist (setting '((:default t) (:default nil) (:checked t) (:debug t) (:fast t)))
+    (destructuring-bind (policy declarations) setting
+      (let ((cl-sml:*sml-optimize-policy* policy)
+            (cl-sml:*sml-type-declarations* declarations))
+        (is (string= (apply #'lines *representation-edge-results*)
+                     (run-sml *representation-edges*))
+            "Policy ~S, declarations ~S" policy declarations)))))

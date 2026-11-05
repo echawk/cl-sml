@@ -51,6 +51,7 @@
            #:sml-ir-program
            #:*sml-ir*
            #:*sml-ir-simplify*
+           #:*sml-type-declarations*
            #:*sml-decision-trees*
            #:*sml-defunctorize*
            #:*sml-ir-inline-size*

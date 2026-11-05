@@ -348,7 +348,7 @@ accepts SOURCE (which then points at a gap in our parser)."
     *sml-package* *sml-current-directory* *sml-type-checker*
     *record-sml-lisp-source* *sml-optimize-policy* *sml-ir* *sml-ir-simplify*
     *sml-defunctorize* *sml-decision-trees* *sml-ir-inline-size*
-    *show-lisp-compiler-output*)
+    *sml-type-declarations* *show-lisp-compiler-output*)
   "The special variables whose bindings the REPL's own thread takes over.")
 
 (defun repl-stack-too-small-p ()

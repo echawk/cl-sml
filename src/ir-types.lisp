@@ -60,6 +60,7 @@ unresolved stands for its class's default, as the checker defaults it."
                       ((string= name "char") cl-sml.types::*t-char*)
                       ((string= name "bool") cl-sml.types::*t-bool*)
                       ((string= name "exn") cl-sml.types::*t-exn*)
+                      ((string= name "list") cl-sml.types::*t-list*)
                       ((string= name "ref") cl-sml.types::*t-ref*)
                       ((string= name "vector") cl-sml.types::*t-vector*))))
     (and tyname (list :con (ir-tycon-of-tyname tyname)))))
