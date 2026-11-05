@@ -451,11 +451,13 @@ them, and calls that supply them call it directly (IR-EMIT-LOCAL-FUNCTIONS).
 The Coalton backend, which emits from the IR itself, turns it off.")
 
 ;;; docs/IR.md, "Declarations".
-(defvar *sml-type-declarations* t
+(defvar *sml-type-declarations*
+  (not (equal (uiop:getenv "CL_SML_TYPE_DECLARATIONS") "0"))
   "Declare in the emitted Lisp the representation types of typed values
 (IR-REPRESENTATION-TYPE): parameters, LET and pattern variables, operands
 of primitives (THE), and the parameters of top-level workers (DECLAIM
-FTYPE).  NIL emits no type declarations, for comparison.")
+FTYPE).  NIL emits no type declarations, for comparison; the environment
+variable CL_SML_TYPE_DECLARATIONS=0 sets it so when cl-sml is loaded.")
 
 (defvar *ir-flatten-curried* nil
   "True while the worker of a curried top-level function is compiled: its

@@ -144,10 +144,31 @@ Coalton backend turns it off):
   (`ir-flatten-curried`), and an application that supplies all the
   arguments is a `:call` (`ir-lower-curried-call`).  A worker that calls
   itself has its body as a local function (`worker-defun`).
-- **Declarations.**  Parameters and `let`, pattern and loop variables of
-  type real are declared `double-float`, of type int `fixnum` (SBCL), of a
-  ref or vector type `simple-vector` (`ir-representation-type`); only the
-  Basis's types (by stamp; `:base` in inline templates) qualify.
+- **Declarations** (2026-11-05, `cl-sml:*sml-type-declarations*`, default
+  `t`; `nil`, or `CL_SML_TYPE_DECLARATIONS=0` when cl-sml is loaded,
+  emits none, for comparison).  One mapping from IR types to
+  CL types, `ir-representation-type`, says what every value of a type
+  is: real `double-float`; int `fixnum` (SBCL only, where Int.int is
+  exactly the fixnums); char `character`; string `sml-string`
+  (`simple-string` on SBCL, `string` elsewhere; src/portability.lisp);
+  lists `list`; refs, vectors, tuples and records `simple-vector`;
+  functions `function`.  Only the Basis's types qualify (by stamp; `:base`
+  in inline templates).  Not declared: arrays (an array of reals is a
+  `(simple-array double-float (*))`), words (the untyped Basis code may
+  leave a word unreduced, e.g. `Word.fromString` of a large decimal),
+  bool, unit, exn, datatypes, type variables and abstract types.  It
+  declares parameters (`lambda`, `labels`), `let`, pattern and loop
+  variables; operands of primitives that are calls or selections at
+  int, real, char or string get `(the ...)`; and each top-level worker
+  gets `(declaim (ftype (function (parameter types) *) |f;k/n|))`.
+  Results are never declared: SBCL checks a declared result after a call
+  in tail position, which is then no longer a tail call.  The policy
+  `:checked` (SAFETY 3; also `CL_SML_POLICY=checked` when cl-sml is
+  loaded) checks every declaration; `CL_SML_POLICY=checked ./test.sh`
+  runs the suite so, and the test
+  `type-declarations-hold-at-representation-edges` runs edge values
+  under `:default`, `:checked`, `:debug` and `:fast`, with and without
+  declarations.
 - **Reals.**  Each real operation is `(sml-ieee form)`; a function whose
   body does real arithmetic masks the float traps once, if they are not
   masked already (`with-sml-ieee-floats`), and inside it `sml-ieee` is the
