@@ -5,6 +5,8 @@
 /t/conformance/modules/.cache/
 /t/conformance/modules/results/
 /t/conformance/modules/tmp/
+# t/hamlet-oracle/build-cl-hamlet.sh's default output
+/t/hamlet-oracle/build/
 # The real-world harness lists $R/work (a link to $RW_STATE/work when set)
 /t/realworld/work
 # Untracked third-party corpora (benchmarks, LunarML, cakeml, ...) and specs

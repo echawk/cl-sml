@@ -68,7 +68,11 @@ check, `CL_SML_HAMLET=1` one that checks with the HaMLet oracle):
 ```
 
 Loading HaMLet needs a deep control stack: start SBCL with
-`--control-stack-size 1GB` (the executable has it built in).
+`--control-stack-size 1GB` (the executable has it built in; on a small
+stack, `cl-sml:repl` runs on a thread with a large one where the Lisp
+allows it).  `t/hamlet-oracle/build-cl-hamlet.sh [OUTPUT]` builds
+`cl-hamlet`, HaMLet compiled by cl-sml, which runs SML files with
+HaMLet's interpreter (test-only; default output `t/hamlet-oracle/build/`).
 
 ## The Basis Library
 
