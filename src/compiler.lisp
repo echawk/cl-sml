@@ -2162,7 +2162,14 @@ that SBCL compiles them as machine arithmetic."
            (wrap `(,(intern name :cl) ,x ,y))))
         ((and real-p (string= name "/"))
          (destructuring-bind (x y) args
-           (wrap `(/ ,x ,y))))
+           (destructuring-bind (a b) (mapcar #'unmasked-real-form original-args)
+             ;; SBCL derives x/x = 1 for an X of bounded type (a constant,
+             ;; say) and may fold a NaN test of 0.0/0.0 to false.  Operands
+             ;; that are one form, or both constants, go to the out-of-line
+             ;; division, which it cannot see through.
+             (if (or (equal a b) (and (constantp a) (constantp b)))
+                 `(sml-real-quotient ,a ,b)
+                 (wrap `(/ ,x ,y))))))
         ((string= name "div") `(,(if int-p 'sml-int-div 'sml-integer-div) ,@args))
         ((string= name "mod") `(sml-int-mod ,@args)))))))
 
