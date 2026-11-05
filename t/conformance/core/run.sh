@@ -30,7 +30,9 @@ export TMPDIR="$HERE/build/tmp"
 mkdir -p "$TMPDIR"
 export XDG_CACHE_HOME="$CLSML/.cache"
 cd "$CLSML"
-exec "$LISP" --control-stack-size 1GB --noinform --non-interactive \
+# SBCL gets a bounded heap (other Lisps take no such option).
+case "$(basename "$LISP")" in sbcl*) HEAP="--dynamic-space-size 4GB" ;; *) HEAP= ;; esac
+exec "$LISP" $HEAP --control-stack-size 1GB --noinform --non-interactive \
   --eval '(load "~/.sbclrc")' \
   --load "$HERE/run.lisp" \
   --eval '(uiop:quit (if (conf-core:main) 0 1))' < /dev/null

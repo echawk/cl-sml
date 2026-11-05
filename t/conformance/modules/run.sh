@@ -34,7 +34,7 @@ export TMPDIR="$HERE/tmp/"
 mkdir -p "$TMPDIR"
 cd "$ROOT" || exit 2
 run_lisp() {
-  sbcl --control-stack-size 1GB --noinform --non-interactive \
+  sbcl --dynamic-space-size 4GB --control-stack-size 1GB --noinform --non-interactive \
     --eval '(load "~/.sbclrc")' \
     --eval '(ql:quickload (quote (:cl-sml :cl-sml/hamlet-oracle)) :silent t)' \
     --load "$HERE/run.lisp" \

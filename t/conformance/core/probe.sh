@@ -10,7 +10,7 @@ export TMPDIR="$HERE/build/tmp"; mkdir -p "$TMPDIR"
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$ROOT/.cache}"
 cd "$ROOT"
-sbcl --control-stack-size 1GB --noinform --non-interactive --eval '(load "~/.sbclrc")' \
+sbcl --dynamic-space-size 4GB --control-stack-size 1GB --noinform --non-interactive --eval '(load "~/.sbclrc")' \
  --eval '(let ((*standard-output* (make-broadcast-stream)) (*error-output* (make-broadcast-stream))) (ql:quickload (quote (:cl-sml :cl-sml/hamlet-oracle)) :silent t))' \
  --eval "(when $CHK (let ((*standard-output* (make-broadcast-stream)) (*error-output* (make-broadcast-stream))) (cl-sml:enable-hamlet-type-checker)))" \
  --eval "(let ((n 0)) (dolist (f (list $FILES)) (incf n) (format t \"~&=== ~A~%\" f) (let ((pkg (format nil \"SML.PROBE~D\" n))) (handler-case (let ((*error-output* (make-broadcast-stream)) (*compile-verbose* nil)) (when $BASIS (let ((cl-sml::*sml-type-checker* nil) (*standard-output* (make-broadcast-stream))) (cl-sml:load-sml-file (asdf:system-relative-pathname \"cl-sml\" \"hamlet/basis/all.sml\") :package pkg))) (handler-bind ((warning #'muffle-warning)) (cl-sml:load-sml-file (pathname f) :package pkg))) (serious-condition (c) (let ((s (princ-to-string c))) (format t \"~&!! ~A: ~A~%\" (type-of c) (subseq s 0 (min 300 (length s))))))))))" < /dev/null 2>&1 | grep -v "^WARNING: redefining"
