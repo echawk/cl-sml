@@ -1,5 +1,9 @@
 fun p s = print (s ^ "\n")
-val file = "/private/tmp/claude-501/-Users-ethan-sml-cl-sml/ea664555-fe04-4ec2-b261-892e363ba3ab/scratchpad/conf-modules/tmp/conf_textio_tmp.txt"
+(* The runner's TMPDIR (run.sh sets it to t/conformance/modules/tmp/). *)
+val dir = case OS.Process.getEnv "TMPDIR" of
+              SOME d => if String.isSuffix "/" d then d else d ^ "/"
+            | NONE => "/tmp/"
+val file = dir ^ "conf_textio_tmp.txt"
 val out = TextIO.openOut file
 val _ = TextIO.output (out, "line one\nline two\n")
 val _ = TextIO.output1 (out, #"x")

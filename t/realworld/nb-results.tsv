@@ -10,7 +10,7 @@ bm-count-graphs	checked-shim	TIMEOUT	RUNTIME	31.70	89.73	96	RW-TIMEOUT: Conditio
 bm-delta-blue	plain-shim	RUNTIME	RUNTIME	0.51		236	UNBOUND-VARIABLE: The variable SML.RW::|Constraint| is unbound.
 bm-delta-blue	checked-shim	SMLEXN	RUNTIME	63.41	0.15	265	uncaught SML exception Fail "Cycle encountered"
 bm-id-ray	plain-shim	TIMEOUT	RUNTIME	0.33	119.68	136	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
-bm-id-ray	checked-shim	CHECKER	CHECKER	39.63		0	HaMLet: 329.30-329.44: warning: pattern not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-sml/ea664555-fe04-4ec2-b261-892e363ba3ab/scratchpad/realworld/nb/bm-id-ray/prog.sml:451.14-458.8: type mismatch between different matches
+bm-id-ray	checked-shim	CHECKER	CHECKER	39.63		0	HaMLet: 329.30-329.44: warning: pattern not exhaustive realworld/nb/bm-id-ray/prog.sml:451.14-458.8: type mismatch between different matches
 bm-kcfa	plain-shim	RUNTIME	RUNTIME	9.51	0.03	453	UNBOUND-VARIABLE: The variable SML.RW::|K.compare| is unbound.
 bm-kcfa	checked-shim	TIMEOUT	LISPCOMPILE	119.89		159	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
 bm-lexgen	plain-shim	PARSE	PARSE	0.05		0	ESRAP-PARSE-ERROR: At      let fun f empty = tree(key,RED,empty,empty)           | f (tree(k,BLACK,l,r)) =                       ^ (Line 101, Column 17, Position 2790)  In context SML-PAT-TUPLE-OR-PARENS:  While parsing SML-PAT-TUPLE-OR-PARENS. Problem:    The production        #
@@ -26,7 +26,7 @@ bm-minimax	checked-shim	TIMEOUT	RUNTIME	15.72	106.66	125	RW-TIMEOUT: Condition R
 bm-mlyacc	plain-shim	PARSE	PARSE	43.39		0	ESRAP-PARSE-ERROR: At        abstype set = EMPTY | TR    ^ (Line 3667, Column 1, Position 131203)  In context SML-FUNCTOR:  While parsing SML-FUNCTOR. Expected:       the character Tab   or the character Newline   or the character Space   or the character ! (EXCLAMATION_MARK)   
 bm-mlyacc	checked-shim	TIMEOUT	CHECKER	121.67		0	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
 bm-nbody	plain-shim	RUNTIME	RUNTIME	0.15	0.02	41	UNBOUND-VARIABLE: The variable SML.RW::|Real.fmt| is unbound.
-bm-nbody	checked-shim	CHECKER	CHECKER	6.65		0	HaMLet: 108.17-108.20: warning: pattern not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-sml/ea664555-fe04-4ec2-b261-892e363ba3ab/scratchpad/realworld/nb/bm-nbody/prog.sml:114.26-114.30: unresolved flexible record type
+bm-nbody	checked-shim	CHECKER	CHECKER	6.65		0	HaMLet: 108.17-108.20: warning: pattern not exhaustive realworld/nb/bm-nbody/prog.sml:114.26-114.30: unresolved flexible record type
 bm-pidigits	plain-shim	SMLEXN	RUNTIME	0.18	0.02	52	uncaught SML exception Empty
 bm-pidigits	checked-shim	CHECKER	CHECKER	6.47		0	HaMLet: 138.16-138.26: unknown type IntInf.int
 bm-plclub-ray	plain-shim	RUNTIME	RUNTIME	11.21		749	UNBOUND-VARIABLE: The variable SML.RW::|Unsafe.Array.sub| is unbound.
@@ -34,7 +34,7 @@ bm-plclub-ray	checked-shim	CHECKER	CHECKER	31.08		0	HaMLet: 6.26-6.37: unknown t
 bm-ray	plain-shim	PARSE	PARSE	0.51		0	ESRAP-PARSE-ERROR: At      (* normal vector to sphere *)       fun normalSphere (Visible{h, s as Sphere{c, ...}}) = le                                      ^ (Line 354, Column 35, Position 11063)  In context SML-PAT-RECORD:  While parsing SML-PAT-RECORD. Expected:       the chara
 bm-ray	checked-shim	CHECKER	CHECKER	14.92		0	HaMLet: 241.29-241.45: unknown identifier TextIO.lookahead
 bm-tsp	plain-shim	RUNTIME	RUNTIME	0.35	0.40	119	TYPE-ERROR: The value               SML.RW:|Tree.NULL|             is not of type               LIST
-bm-tsp	checked-shim	CHECKER	CHECKER	15.54		0	HaMLet: 148.16-148.48: warning: match not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-sml/ea664555-fe04-4ec2-b261-892e363ba3ab/scratchpad/realworld/nb/bm-tsp/prog.sml:149.16-149.48: warning: match not exhaustive ../../../../private/tmp/claude-501/-Users
+bm-tsp	checked-shim	CHECKER	CHECKER	15.54		0	HaMLet: 148.16-148.48: warning: match not exhaustive realworld/nb/bm-tsp/prog.sml:149.16-149.48: warning: match not exhaustive <tmp>
 bm-tyan	plain-shim	RUNTIME	RUNTIME	0.26		0	SIMPLE-ERROR: All clauses in a fun binding must name the same function: (("~"                                                                           ((:PAT-VAR                                                                             "copy")                              
 bm-tyan	checked-shim	RUNTIME	RUNTIME	53.33		0	SIMPLE-ERROR: All clauses in a fun binding must name the same function: (("~"                                                                           ((:PAT-VAR                                                                             "copy")                             
 bm-vliw	plain-shim	SMLEXN	RUNTIME	23.17	0.04	2060	uncaught SML exception NAMESETTONODESET

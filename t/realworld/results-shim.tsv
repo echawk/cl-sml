@@ -11,7 +11,7 @@ bm-dlx	none!	0.25	RUNTIME/noref	5.87	0.02	UNBOUND-VARIABLE: The variable SML.RW:
 bm-f-arith	poly	1.44	TIMEOUT/runtime	0.04	120.49	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.	TIMEOUT/runtime	1.04	118.95	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
 bm-fannkuch	poly	0.14	PASS	0.06	12.40		PASS	1.40	9.27	
 bm-fft	poly	100.85	RUNTIME	0.13		UNBOUND-VARIABLE: The variable SML.RW::|R.Math.pi| is unbound.	CHECKER	0.16		HaMLet: 5.24-5.33: unknown structure RealArray
-bm-id-ray	mlton	0.91	RUNTIME	0.18		SIMPLE-TYPE-ERROR: Value of 1.0d0 in                    (SB-KERNEL:%COERCE-CALLABLE-FOR-CALL 1.0d0)           	CHECKER	17.47		HaMLet: 365.30-365.44: warning: pattern not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-
+bm-id-ray	mlton	0.91	RUNTIME	0.18		SIMPLE-TYPE-ERROR: Value of 1.0d0 in                    (SB-KERNEL:%COERCE-CALLABLE-FOR-CALL 1.0d0)           	CHECKER	17.47		HaMLet: 365.30-365.44: warning: pattern not exhaustive <tmp>
 bm-iter-pidigits	poly	0.21	RUNTIME	0.04	0.01	UNBOUND-VARIABLE: The variable SML.RW::|IntInf.quot| is unbound.	CHECKER	0.19		HaMLet: 124.24-124.35: unknown identifier IntInf.quot
 bm-kcfa	poly	1.11	PARSE	0.02		ESRAP-PARSE-ERROR: At      exception Impossible of string     fun failure {module : string, func : string,    	PARSE	67.15		ESRAP-PARSE-ERROR: At      exception Impossible of string     fun failure {module : string, func : string,    
 bm-knuth-bendix	poly	0.28	PASS	0.30	0.01		PASS	31.61	0.04	
@@ -24,7 +24,7 @@ bm-mazefun	poly	0.14	PASS	0.12	0.03		PASS	8.39	3.27
 bm-mc-ray	poly	25.87	PARSE	0.07		ESRAP-PARSE-ERROR: At           val fromRGB : RGB.t -> t       ^ (Line 257, Column 4, Position 6593)  In conte	CHECKER	29.81		HaMLet: 839.25-839.33: type mismatch on application
 bm-minimax	poly	1.19	PARSE	0.08		ESRAP-PARSE-ERROR: At           datatype player = X | O                              ^ (Line 124, Column 24, P	PARSE	4.97		ESRAP-PARSE-ERROR: At           datatype player = X | O                              ^ (Line 124, Column 24, P
 bm-mlyacc	poly	0.89	PARSE	0.10		ESRAP-PARSE-ERROR: At     type rhsData = {rhs:symbol list,code:string, prec:symbol option} list    datatype ru	TIMEOUT/checker	120.76		RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.
-bm-nbody	poly	0.14	RUNTIME	0.08		UNBOUND-VARIABLE: The variable SML.RW::|e| is unbound.	CHECKER	3.13		HaMLet: 131.17-131.20: warning: pattern not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-
+bm-nbody	poly	0.14	RUNTIME	0.08		UNBOUND-VARIABLE: The variable SML.RW::|e| is unbound.	CHECKER	3.13		HaMLet: 131.17-131.20: warning: pattern not exhaustive <tmp>
 bm-nucleic	mlton	0.15	PASS	29.93	0.13		CHECKER	43.62		HaMLet: 133.6-133.51: type mismatch on application
 bm-pidigits	poly	0.15	PARSE	0.04		ESRAP-PARSE-ERROR: At        fun stream {               next : 'b -> 'c,                       ^ (Line 148, Co	CHECKER	0.96		HaMLet: 166.16-166.26: unknown type IntInf.int
 bm-pingpong	mlton	0.14	RUNTIME	0.08		UNBOUND-VARIABLE: The variable SML.RW::|SMLofNJ.Cont.callcc| is unbound.	CHECKER	2.63		HaMLet: 175.22-175.39: unknown type SMLofNJ.Cont.cont
@@ -36,7 +36,7 @@ bm-sat	mlton	0.16	PASS	0.08	0.01		CHECKER	0.08		TYPE-ERROR: The value           
 bm-simple	mlton	8.34	TIMEOUT/runtime	11.41	108.57	RW-TIMEOUT: Condition RW::RW-TIMEOUT was signalled.	CHECKER	39.07		HaMLet: 382.38-382.58: type mismatch on application
 bm-smith-nf	poly	5.33	RUNTIME	0.28		UNBOUND-VARIABLE: The variable SML.RW::|IntInf.fromInt| is unbound.	CHECKER	19.21		HaMLet: 378.11-378.25: unknown identifier IntInf.fromInt
 bm-stream-sieve	poly	0.16	PASS	0.07	0.01		PASS	0.96	0.03	
-bm-tsp	poly	0.26	PARSE	4.11		ESRAP-PARSE-ERROR: At           datatype axis = X_AXIS | Y_AXIS                                 ^ (Line 474, C	CHECKER	7.11		HaMLet: 175.16-175.48: warning: match not exhaustive ../../../../private/tmp/claude-501/-Users-ethan-sml-cl-sm
+bm-tsp	poly	0.26	PARSE	4.11		ESRAP-PARSE-ERROR: At           datatype axis = X_AXIS | Y_AXIS                                 ^ (Line 474, C	CHECKER	7.11		HaMLet: 175.16-175.48: warning: match not exhaustive <tmp>
 bm-twenty-four	poly	0.15	PASS	0.14	0.01		PASS	7.62	0.19	
 bm-tyan	poly	0.26	RUNTIME	0.09		SIMPLE-ERROR: All clauses in a fun binding must name the same function: (("~"                                 	RUNTIME	54.57		SIMPLE-ERROR: All clauses in a fun binding must name the same function: (("~"                                 
 bm-vliw	poly	1.54	PARSE	0.74		ESRAP-PARSE-ERROR: At            datatype codetypes =               ASSIGNMENT of operation                   	CHECKER	34.89		UNBOUND-VARIABLE: The variable SML.HAMLET-TYPE-CHECKER::|recbind| is unbound.
