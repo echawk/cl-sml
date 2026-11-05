@@ -31,6 +31,7 @@ just called).  SIZE NIL means the host's default."
              (funcall thunk))
   #-sbcl (progn size (funcall thunk)))
 
+(declaim (inline portable-closure-first-value))
 (defun portable-closure-first-value (function)
   "The first value FUNCTION closes over, or NIL where FUNCTION is no
 closure or the host does not tell."
