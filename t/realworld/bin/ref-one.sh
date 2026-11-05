@@ -12,17 +12,17 @@ now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
 "$R/bin/mkrundir.sh" "$d" ref
 cd "$d/run-ref" || exit 1
 s=$(now)
-"$R/bin/timeout.pl" "${REF_TIMEOUT:-300}" env POLYRUN_FILE=../ref.sml poly --script "$R/bin/polyrun.sml" > ../ref.out 2> ../ref.err
+"$R/bin/timeout.pl" "${REF_TIMEOUT:-300}" env POLYRUN_FILE=../ref.sml poly --maxheap 4096 --script "$R/bin/polyrun.sml" > ../ref.out 2> ../ref.err
 rc=$?
 e=$(now)
 impl=poly
 if [ $rc != 0 ] && grep -q "error:\|InternalError" ../ref.out ../ref.err; then
-  if "$R/bin/timeout.pl" 600 mlton -default-type int64 \
+  if "$R/bin/timeout.pl" 600 mlton @MLton max-heap 6g -- -default-type int64 \
        -default-ann 'allowExtendedTextConsts true' \
        -output ../ref.exe ../ref.sml > ../mlton.err 2>&1; then
     "$R/bin/mkrundir.sh" "$d" ref; cd "$d/run-ref"
     s=$(now)
-    "$R/bin/timeout.pl" "${REF_TIMEOUT:-300}" ../ref.exe > ../ref.out 2> ../ref.err
+    "$R/bin/timeout.pl" "${REF_TIMEOUT:-300}" ../ref.exe @MLton max-heap 4g -- > ../ref.out 2> ../ref.err
     rc=$?
     e=$(now)
     impl=mlton

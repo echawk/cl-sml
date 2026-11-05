@@ -12,7 +12,7 @@ P=${CLSML_ROOT:-$(cd "$R/../.." && pwd)}
 mkdir -p "$S/cache" "$S/tmp"
 export XDG_CACHE_HOME="$S/cache" TMPDIR="$S/tmp"
 rm -f "$S/cl-sml-rw.core.new"
-sbcl --control-stack-size 1GB --dynamic-space-size 8GB --noinform --non-interactive \
+sbcl --control-stack-size 1GB --dynamic-space-size 4GB --noinform --non-interactive \
   --eval '(load "~/.sbclrc")' \
   --eval "(push #p\"$P/\" asdf:*central-registry*)" \
   --eval '(ql:quickload :cl-sml/cml :silent t)' \

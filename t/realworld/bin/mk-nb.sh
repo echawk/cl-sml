@@ -15,7 +15,7 @@ for n in "$@"; do
   if [ "$(cat "$w/ref.impl")" = poly ]; then
     mkdir -p "$d/run-polycheck"; [ -d "$d/DATA" ] && cp -R "$d/DATA" "$d/run-polycheck/"
     cat "$d/prog.sml" "$d/driver.sml" 2>/dev/null > "$d/run-polycheck/all.sml"
-    (cd "$d/run-polycheck" && "$R/bin/timeout.pl" 300 env POLYRUN_FILE=all.sml poly --script "$R/bin/polyrun.sml" > ../polycheck.out 2> ../polycheck.err)
+    (cd "$d/run-polycheck" && "$R/bin/timeout.pl" 300 env POLYRUN_FILE=all.sml poly --maxheap 4096 --script "$R/bin/polyrun.sml" > ../polycheck.out 2> ../polycheck.err)
     if cmp -s "$d/polycheck.out" "$w/ref.out"; then pc=same; else pc=DIFFERS; fi
   else pc=skip; fi
   echo "$n: rules=[$rules] poly=$pc"

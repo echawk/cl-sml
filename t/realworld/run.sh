@@ -6,7 +6,7 @@
 #                          checked = HaMLet checker, native = the native
 #                          checker, cl-sml's default; add -bare to skip the
 #                          HaMLet-basis preload, e.g. MODES=plain-bare)
-#   JOBS=6                 parallel programs
+#   JOBS=1                 parallel programs
 #   TIMEOUT=120            seconds per program (hard kill at +60s)
 #   REBUILD=1              force rebuilding cl-sml-rw.core (auto when src/,
 #                          or this harness's driver is newer)
@@ -26,7 +26,7 @@ R=$(cd "$(dirname "$0")" && pwd)
 S=${RW_STATE:-$R}
 P=${CLSML_ROOT:-$(cd "$R/../.." && pwd)}
 MODES=${MODES:-plain checked}
-JOBS=${JOBS:-6}
+JOBS=${JOBS:-1}
 export TIMEOUT=${TIMEOUT:-120}
 
 if [ -z "${NORUN:-}" ]; then

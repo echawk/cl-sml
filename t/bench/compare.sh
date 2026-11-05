@@ -94,7 +94,7 @@ build_image() {
     echo "building image..." >&2
     mkdir -p "$S/cache" "$S/tmp"
     XDG_CACHE_HOME=$S/cache TMPDIR=$S/tmp \
-    sbcl --control-stack-size 1GB --dynamic-space-size 8GB --noinform --non-interactive \
+    sbcl --control-stack-size 1GB --dynamic-space-size 4GB --noinform --non-interactive \
       --eval '(load "~/.sbclrc")' \
       --eval "(push #p\"$P/\" asdf:*central-registry*)" \
       --eval '(ql:quickload :cl-sml/cml :silent t)' \
@@ -115,15 +115,15 @@ run_one() {
   case $i in
     poly)
       "$RW/bin/timeout.pl" "$TIMEOUT" env POLYRUN_FILE=../all.sml \
-        "$POLY" --script "$RW/bin/polyrun.sml" > ../$i.out 2> ../$i.err ;;
+        "$POLY" --maxheap 4096 --script "$RW/bin/polyrun.sml" > ../$i.out 2> ../$i.err ;;
     mlton)
       if [ ! -x ../mlton.exe ] || [ ../all.sml -nt ../mlton.exe ]; then
         rm -f ../mlton.exe
-        "$MLTON" -default-type int64 -default-ann 'allowExtendedTextConsts true' \
+        "$MLTON" @MLton max-heap 6g -- -default-type int64 -default-ann 'allowExtendedTextConsts true' \
           -output ../mlton.exe ../all.sml > ../mlton-compile.err 2>&1
       fi
       if [ -x ../mlton.exe ]; then
-        "$RW/bin/timeout.pl" "$TIMEOUT" ../mlton.exe > ../$i.out 2> ../$i.err
+        "$RW/bin/timeout.pl" "$TIMEOUT" ../mlton.exe @MLton max-heap 4g -- > ../$i.out 2> ../$i.err
       else
         echo NA > ../$i.time; cd "$S"; return
       fi ;;
@@ -131,7 +131,7 @@ run_one() {
       policy=:default; [ $i = clsml-fast ] && policy=:fast
       XDG_CACHE_HOME=$S/cache TMPDIR=$S/tmp \
       "$RW/bin/timeout.pl" "$TIMEOUT" sbcl --core "$S/cl-sml.core" \
-        --control-stack-size 1GB --dynamic-space-size 8GB --noinform --non-interactive \
+        --control-stack-size 1GB --dynamic-space-size 4GB --noinform --non-interactive \
         --no-sysinit --no-userinit \
         --eval "(cmp:run \"$d/\" $policy)" > ../$i.out 2> ../$i.err ;;
   esac

@@ -11,7 +11,7 @@ rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
 "$R/bin/mkrundir.sh" "$d" "$m"
 rm -f "$d/$m.res" "$d/$m.bt" "$d/$m.out"
 "$R/bin/timeout.pl" $((T + 60)) sbcl --core "$S/cl-sml-rw.core" \
-  --control-stack-size 1GB --dynamic-space-size 8GB --noinform --non-interactive \
+  --control-stack-size 1GB --dynamic-space-size 4GB --noinform --non-interactive \
   --no-sysinit --no-userinit \
   --load "$R/bin/driver.lisp" \
   --eval "(rw:run \"$d/\" \"$m\" $T)" > "$d/$m.stdout" 2>&1
