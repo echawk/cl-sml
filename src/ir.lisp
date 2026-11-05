@@ -2925,11 +2925,16 @@ values (tuples, constructors, functions) or to a term to substitute."
                                        bindings)))
                  ;; A function that does not call itself (one of its own, not
                  ;; mutually recursive) is known: its calls in BODY may be
-                 ;; inlined like a let-bound function's.
+                 ;; inlined like a let-bound function's.  Not one whose self
+                 ;; tail calls became a :loop, as for inline templates: the
+                 ;; simplifier would put the loop's variables, which each
+                 ;; iteration assigns, in place of the parameters, and a
+                 ;; closure made in one iteration would see the next's.
                  (when (and (null (rest bindings))
                             (eq (ir-kind (second (first bindings))) :fn)
                             (not (ir-mentions-p (second (first bindings))
-                                                (first (first bindings)))))
+                                                (first (first bindings))))
+                            (not (ir-has-loop-p (second (first bindings)))))
                    (setf (gethash (first (first bindings)) env) (second (first bindings))))
                  (ir :letrec (ir-type node) bindings (simp body)))
                (simp body)))))

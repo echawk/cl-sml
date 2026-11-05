@@ -932,11 +932,18 @@
       | tailShadow n = let fun tailShadow m = m * 100 in tailShadow n end;
     val tailShadowed = tailShadow 3;
     fun tailGuarded 0 = 0 | tailGuarded n = tailGuarded (n - 1) handle Div => ~1;
-    val tailGuardedResult = tailGuarded 100;")
+    val tailGuardedResult = tailGuarded 100;
+    fun tailLocalThunks () =
+        let val made = ref []
+            fun go i = if i < 3 then (made := (fn () => i) :: !made; go (i + 1)) else ()
+        in go 0; map (fn f => f ()) (!made) end;
+    val tailLocalThunkValues = tailLocalThunks ();")
   (is (equal '(3 13) (cl-sml::sml-tuple->list (sml-value "tailPartial"))))
   (is (equal '(1 2 3) (sml-value "tailThunkValues")))
   (is (= 300 (sml-value "tailShadowed")))
-  (is (= 0 (sml-value "tailGuardedResult"))))
+  (is (= 0 (sml-value "tailGuardedResult")))
+  ;; A local loop inlined at its one call: each closure keeps its own I.
+  (is (equal '(2 1 0) (sml-value "tailLocalThunkValues"))))
 
 (test word-and-int-limits-do-not-depend-on-the-host
   (flet ((primitive (name &rest args)
