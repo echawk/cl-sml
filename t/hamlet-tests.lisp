@@ -279,3 +279,16 @@
     (finishes
       (load-sml-file (asdf:system-relative-pathname "cl-sml" "hamlet/hamlet.sml")
                      :package "SML.HAMLET-NATIVE-LOAD"))))
+
+(test hamlet-loads-through-the-repl-use
+  ;; `use' at the REPL takes another path than LOAD-SML-FILE: the REPL's
+  ;; checker session, its own Lisp source recording, a `use' phrase.
+  (let* ((path (namestring (asdf:system-relative-pathname "cl-sml" "hamlet/hamlet.sml")))
+         (out (make-string-output-stream))
+         (err (make-string-output-stream)))
+    (with-input-from-string (input (format nil "use ~S;~%Sml.execString;~%" path))
+      (cl-sml:repl :input input :output out :error-output err :prompt nil
+                   :package "SML.HAMLET-REPL-USE"))
+    (let ((printed (get-output-stream-string out)))
+      (is (search "val it = <fn> : string -> unit" printed) "~A~A"
+          printed (get-output-stream-string err)))))

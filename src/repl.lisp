@@ -332,6 +332,18 @@ accepts SOURCE (which then points at a gap in our parser)."
 (defun prompt-string (continuation-p)
   (if continuation-p "= " "- "))
 
+;;; SML recursion is deep, and SBCL gives each local function the frame
+;;; of the largest function compiled with it: the recursive table readers
+;;; inside HaMLet's parser functor overflow SBCL's default 2MB stack.
+(defparameter *repl-recommended-control-stack-size* (* 16 1024 1024))
+
+(defun warn-of-a-small-control-stack (stream)
+  (let ((size (portable-control-stack-size)))
+    (when (and size (< size *repl-recommended-control-stack-size*))
+      (format stream "~&; The control stack is ~DMB; large programs (HaMLet, say) need ~
+more: start SBCL with --control-stack-size 1GB, or use scripts/build-repl.sh.~%"
+              (round size (* 1024 1024))))))
+
 (defun repl (&key (input *standard-input*)
                   (output *standard-output*)
                   (error-output *error-output*)
@@ -406,6 +418,7 @@ accepts SOURCE (which then points at a gap in our parser)."
                                    (evaluate kind))
                                  (evaluate kind)))
                  (format output "~A~%" line))))
+      (warn-of-a-small-control-stack error-output)
       (loop
         (emit-prompt)
         (let ((line (read-line input nil :eof)))
