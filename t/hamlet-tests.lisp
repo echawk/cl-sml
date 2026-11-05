@@ -287,7 +287,7 @@
   (let* ((path (namestring (asdf:system-relative-pathname "cl-sml" "hamlet/hamlet.sml")))
          (out (make-string-output-stream))
          (err (make-string-output-stream)))
-    (flet ((run ()
+    (flet ((use-hamlet ()
              (with-input-from-string (input (format nil "use ~S;~%Sml.execString;~%" path))
                (cl-sml:repl :input input :output out :error-output err :prompt nil
                             :package "SML.HAMLET-REPL-USE"))))
@@ -296,8 +296,8 @@
       (if (cl-sml::portable-threads-with-stack-size-p)
           (cl-sml::call-on-portable-thread (* 2 1024 1024)
                                            cl-sml::*repl-inherited-specials*
-                                           #'run)
-          (run)))
+                                           #'use-hamlet)
+          (use-hamlet)))
     (let ((printed (get-output-stream-string out)))
       (is (search "val it = <fn> : string -> unit" printed) "~A~A"
           printed (get-output-stream-string err)))))
