@@ -88,19 +88,9 @@ Only SBCL honours it."))
   (flet ((run ()
            (let ((*current-thread* thread))
              (funcall function))))
-    (let ((size (scheduler-stack-size scheduler)))
-      #+sbcl (if size
-                       (let ((old (sb-alien:extern-alien "thread_control_stack_size"
-                                                         sb-alien:unsigned)))
-                         (setf (sb-alien:extern-alien "thread_control_stack_size"
-                                                      sb-alien:unsigned)
-                               size)
-                         (unwind-protect (bt:make-thread #'run :name "CML thread")
-                           (setf (sb-alien:extern-alien "thread_control_stack_size"
-                                                        sb-alien:unsigned)
-                                 old)))
-                       (bt:make-thread #'run :name "CML thread"))
-      #-sbcl (progn size (bt:make-thread #'run :name "CML thread")))))
+    (cl-sml::call-with-portable-thread-stack-size
+     (scheduler-stack-size scheduler)
+     (lambda () (bt:make-thread #'run :name "CML thread")))))
 
 (defmethod current-thread ((scheduler os-thread-scheduler))
   *current-thread*)

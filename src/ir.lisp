@@ -1500,8 +1500,7 @@ matched against FORM."
 
 (defmacro ir-known (type form)
   "FORM, whose value is known to be of TYPE."
-  #+sbcl `(sb-ext:truly-the ,type ,form)
-  #-sbcl `(the ,type ,form))
+  `(portable-truly-the ,type ,form))
 
 (defun dt-subforms (key value payloadp)
   "The forms of the subterms of VALUE, a variable, when it matches KEY."
@@ -1761,11 +1760,11 @@ tags compared by TEST, by FORM, or DEFAULT (NIL when the keys are all
 those of the type).  SBCL compiles a CASE on a few sparse keys to a
 perfect hash, slower than comparing them in turn, as trivia did."
   (flet ((no-jump-tables (form)
-           #+sbcl `(locally (declare (optimize (sb-c:jump-table 0))) ,form)
-           #-sbcl form)
+           `(locally (declare (optimize ,@(portable-jump-table-declaration nil)))
+              ,form))
          (jump-tables (form)
-           #+sbcl `(locally (declare (optimize (sb-c:jump-table 1))) ,form)
-           #-sbcl form))
+           `(locally (declare (optimize ,@(portable-jump-table-declaration t)))
+              ,form)))
     (if (> (length branches) 12)
         `(case ,form
            ,@(loop for ((key . branch) . more) on branches
@@ -1950,7 +1949,8 @@ when the tree would be too large."
 ;;; a program's `datatype real' does not), and only in typed terms.
 
 (defparameter *ir-representation-types*
-  '(("real" . double-float) #+sbcl ("int" . fixnum)
+  `(("real" . double-float)
+    ,@(and *portable-fixnum-int-p* '(("int" . fixnum)))
     ;; A ref is #(:ref value) and a vector a simple-vector of its
     ;; elements, but an array's type is 'a ref vector ref (Array.sml).
     ("ref" . simple-vector) ("vector" . simple-vector))

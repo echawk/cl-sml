@@ -563,9 +563,8 @@ by functor FUNCTOR-NAME, that the compiled code did not bind itself
     ((functionp constructor)
      ;; On SBCL the tag is the closure's one closed-over value (see
      ;; MAKE-SML-EXCEPTION-FUNCTION), cheaper than the table.
-     (or #+sbcl (and (sb-kernel:closurep constructor)
-                     (let ((tag (sb-kernel:%closure-index-ref constructor 0)))
-                       (and (sml-exception-tag-p tag) tag)))
+     (or (let ((tag (portable-closure-first-value constructor)))
+           (and (sml-exception-tag-p tag) tag))
          (gethash constructor *sml-exception-function-tags*)
          (error "Unknown SML exception constructor function: ~S" constructor)))
     ((and (consp constructor) (sml-exception-tag-p (car constructor)))
@@ -1418,8 +1417,7 @@ CL compiler, and converts the odd rational or single-float from Lisp)."
   (if (typep x 'double-float) x (coerce x 'double-float)))
 
 (defmacro sml-double-nan-p (x)
-  #+sbcl `(sb-ext:float-nan-p ,x)
-  #-sbcl `(portable-float-nan-p ,x))
+  `(portable-double-nan-p ,x))
 
 (defmacro sml-real-comparison (operator a b)
   "A and B, reals, compared by OPERATOR; false when either is a NaN.  The

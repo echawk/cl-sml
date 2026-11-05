@@ -4,6 +4,56 @@
   #+sbcl (make-hash-table :test #'eq :weakness :key)
   #-sbcl (make-hash-table :test #'eq))
 
+(defun make-portable-synchronized-eq-hash-table (&key weak)
+  "An EQ hash table that threads may read and write at once, with weak
+keys when WEAK and the host has them.  ABCL's hash tables are synchronized
+already."
+  #+sbcl (if weak
+             (make-hash-table :test 'eq :synchronized t :weakness :key)
+             (make-hash-table :test 'eq :synchronized t))
+  #+ecl (progn weak (make-hash-table :test 'eq :synchronized t))
+  #-(or sbcl ecl) (progn weak (make-hash-table :test 'eq)))
+
+(defun call-with-portable-thread-stack-size (size thunk)
+  "Call THUNK, which makes a thread, so that the thread gets a control stack
+of SIZE bytes where the host lets one choose (SBCL; elsewhere THUNK is
+just called).  SIZE NIL means the host's default."
+  #+sbcl (if size
+             (let ((old (sb-alien:extern-alien "thread_control_stack_size"
+                                               sb-alien:unsigned)))
+               (setf (sb-alien:extern-alien "thread_control_stack_size"
+                                            sb-alien:unsigned)
+                     size)
+               (unwind-protect (funcall thunk)
+                 (setf (sb-alien:extern-alien "thread_control_stack_size"
+                                              sb-alien:unsigned)
+                       old)))
+             (funcall thunk))
+  #-sbcl (progn size (funcall thunk)))
+
+(defun portable-closure-first-value (function)
+  "The first value FUNCTION closes over, or NIL where FUNCTION is no
+closure or the host does not tell."
+  #+sbcl (and (sb-kernel:closurep function)
+              (sb-kernel:%closure-index-ref function 0))
+  #-sbcl (progn function nil))
+
+(defmacro portable-truly-the (type form)
+  "FORM, whose value the compiler may take to be of TYPE without checking."
+  #+sbcl `(sb-ext:truly-the ,type ,form)
+  #-sbcl `(the ,type ,form))
+
+(defun portable-jump-table-declaration (enable)
+  "Optimize qualities that let the compiler (SBCL) compile a CASE to a
+jump table when ENABLE, and that forbid it otherwise; NIL elsewhere."
+  #+sbcl `((sb-c:jump-table ,(if enable 1 0)))
+  #-sbcl (progn enable nil))
+
+(defparameter *portable-fixnum-int-p*
+  #+sbcl t #-sbcl nil
+  "Is SML's Int.int exactly the host's fixnums?  (SBCL's are 63 bits, as
+cl-sml's Int is; other hosts' fixnums are narrower.)")
+
 ;;; The optimize policy of the Lisp the compiler emits (ROADMAP item 6),
 ;;; declared in each function it generates rather than proclaimed, so that
 ;;; loading SML never changes the policy of other Lisp code.  SML programs
@@ -120,6 +170,11 @@ than traps."
       (arithmetic-error (condition)
         (error "This Lisp cannot produce an IEEE NaN: ~A" condition)))))
 
+(defmacro portable-double-nan-p (x)
+  "Is the double X a NaN?  Open-coded where the host has a primitive."
+  #+sbcl `(sb-ext:float-nan-p ,x)
+  #-sbcl `(portable-float-nan-p ,x))
+
 (defun portable-float-nan-p (x)
   #+ecl (and (floatp x) (ext:float-nan-p x))
   #+sbcl (and (floatp x) (sb-ext:float-nan-p x))
@@ -152,6 +207,15 @@ than traps."
 
 (defun portable-command-line-arguments ()
   (uiop:command-line-arguments))
+
+(defun portable-control-stack-size ()
+  "The size in bytes of the current thread's control stack, or NIL where
+that is not known."
+  #+sbcl (- (sb-sys:sap-int (sb-vm::current-thread-offset-sap
+                             sb-vm::thread-control-stack-end-slot))
+            (sb-sys:sap-int (sb-vm::current-thread-offset-sap
+                             sb-vm::thread-control-stack-start-slot)))
+  #-sbcl nil)
 
 (defun portable-rational-to-double (q)
   "The double nearest to the rational Q, ties to even, or NIL when Q is

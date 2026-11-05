@@ -31,11 +31,7 @@
 (defun synchronized-copy (table &key weak)
   "A copy of the EQ hash TABLE that threads may read and write at once.
 ABCL's hash tables are synchronized already."
-  (let ((copy #+sbcl (if weak
-                         (make-hash-table :test 'eq :synchronized t :weakness :key)
-                         (make-hash-table :test 'eq :synchronized t))
-              #+ecl (make-hash-table :test 'eq :synchronized t)
-              #-(or sbcl ecl) (progn weak (make-hash-table :test 'eq))))
+  (let ((copy (cl-sml::make-portable-synchronized-eq-hash-table :weak weak)))
     (maphash (lambda (key value) (setf (gethash key copy) value)) table)
     copy))
 
