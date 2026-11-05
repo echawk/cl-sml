@@ -2170,6 +2170,8 @@ that SBCL compiles them as machine arithmetic."
              (if (or (equal a b) (and (constantp a) (constantp b)))
                  `(sml-real-quotient ,a ,b)
                  (wrap `(/ ,x ,y))))))
+        ;; div and mod are not overloaded at real (Appendix E).
+        (real-p nil)
         ((string= name "div") `(,(if int-p 'sml-int-div 'sml-integer-div) ,@args))
         ((string= name "mod") `(sml-int-mod ,@args)))))))
 
