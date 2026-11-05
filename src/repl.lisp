@@ -334,21 +334,50 @@ accepts SOURCE (which then points at a gap in our parser)."
 
 ;;; SML recursion is deep, and SBCL gives each local function the frame
 ;;; of the largest function compiled with it: the recursive table readers
-;;; inside HaMLet's parser functor overflow SBCL's default 2MB stack.
+;;; inside HaMLet's parser functor overflow SBCL's default 2MB stack.  On a
+;;; smaller stack than this, the REPL runs on a thread of its own with a
+;;; stack of *REPL-THREAD-CONTROL-STACK-SIZE* (where the host allows it).
 (defparameter *repl-recommended-control-stack-size* (* 16 1024 1024))
 
-(defun warn-of-a-small-control-stack (stream)
+(defparameter *repl-thread-control-stack-size* (* 1024 1024 1024))
+
+(defparameter *repl-inherited-specials*
+  '(*standard-output* *standard-input* *error-output* *trace-output*
+    *query-io* *debug-io* *terminal-io* *default-pathname-defaults*
+    *package* *readtable* *print-pretty* *read-default-float-format*
+    *sml-package* *sml-current-directory* *sml-type-checker*
+    *record-sml-lisp-source* *sml-optimize-policy* *sml-ir* *sml-ir-simplify*
+    *sml-defunctorize* *sml-decision-trees* *sml-ir-inline-size*
+    *show-lisp-compiler-output*)
+  "The special variables whose bindings the REPL's own thread takes over.")
+
+(defun repl-stack-too-small-p ()
   (let ((size (portable-control-stack-size)))
-    (when (and size (< size *repl-recommended-control-stack-size*))
+    (and size (< size *repl-recommended-control-stack-size*) size)))
+
+(defun warn-of-a-small-control-stack (stream)
+  (let ((size (repl-stack-too-small-p)))
+    (when size
       (format stream "~&; The control stack is ~DMB; large programs (HaMLet, say) need ~
 more: start SBCL with --control-stack-size 1GB, or use scripts/build-repl.sh.~%"
               (round size (* 1024 1024))))))
 
-(defun repl (&key (input *standard-input*)
-                  (output *standard-output*)
-                  (error-output *error-output*)
-                  (prompt t)
-                  (package "SML-USER"))
+(defun repl (&rest arguments &key input output error-output prompt package)
+  "Read, check, compile and run SML phrases from INPUT (by default the
+standard input) until its end or :quit, printing results on OUTPUT.  On a
+small control stack the REPL runs on a thread with a large one."
+  (declare (ignore input output error-output prompt package))
+  (if (and (repl-stack-too-small-p) (portable-threads-with-stack-size-p))
+      (call-on-portable-thread *repl-thread-control-stack-size*
+                               *repl-inherited-specials*
+                               (lambda () (apply #'repl-loop arguments)))
+      (apply #'repl-loop arguments)))
+
+(defun repl-loop (&key (input *standard-input*)
+                       (output *standard-output*)
+                       (error-output *error-output*)
+                       (prompt t)
+                       (package "SML-USER"))
   (let ((*sml-package* (ensure-sml-package package))
         (*repl-checked-value-types* nil)
         (buffer "")

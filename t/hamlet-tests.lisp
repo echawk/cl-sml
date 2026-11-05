@@ -282,13 +282,22 @@
 
 (test hamlet-loads-through-the-repl-use
   ;; `use' at the REPL takes another path than LOAD-SML-FILE: the REPL's
-  ;; checker session, its own Lisp source recording, a `use' phrase.
+  ;; checker session, its own Lisp source recording, a `use' phrase, and
+  ;; its own thread on a small stack.
   (let* ((path (namestring (asdf:system-relative-pathname "cl-sml" "hamlet/hamlet.sml")))
          (out (make-string-output-stream))
          (err (make-string-output-stream)))
-    (with-input-from-string (input (format nil "use ~S;~%Sml.execString;~%" path))
-      (cl-sml:repl :input input :output out :error-output err :prompt nil
-                   :package "SML.HAMLET-REPL-USE"))
+    (flet ((run ()
+             (with-input-from-string (input (format nil "use ~S;~%Sml.execString;~%" path))
+               (cl-sml:repl :input input :output out :error-output err :prompt nil
+                            :package "SML.HAMLET-REPL-USE"))))
+      ;; Started on a thread with SBCL's default 2MB stack, which HaMLet
+      ;; overflows, the REPL moves to a thread with a large one.
+      (if (cl-sml::portable-threads-with-stack-size-p)
+          (cl-sml::call-on-portable-thread (* 2 1024 1024)
+                                           cl-sml::*repl-inherited-specials*
+                                           #'run)
+          (run)))
     (let ((printed (get-output-stream-string out)))
       (is (search "val it = <fn> : string -> unit" printed) "~A~A"
           printed (get-output-stream-string err)))))

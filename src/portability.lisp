@@ -32,6 +32,36 @@ just called).  SIZE NIL means the host's default."
   #-sbcl (progn size (funcall thunk)))
 
 (declaim (inline portable-closure-first-value))
+(defun portable-threads-with-stack-size-p ()
+  "Can CALL-ON-PORTABLE-THREAD give a new thread a stack of its own size?"
+  #+(and sbcl sb-thread) t
+  #-(and sbcl sb-thread) nil)
+
+(defun call-on-portable-thread (stack-size specials thunk)
+  "THUNK's values, THUNK called on a new thread with a control stack of
+STACK-SIZE bytes and the special variables SPECIALS bound to their values
+here (a new thread otherwise sees their global values); this thread waits
+for it, and passes it an interactive interrupt (Ctrl-C) as a BREAK.  Where
+PORTABLE-THREADS-WITH-STACK-SIZE-P is false, THUNK is called here."
+  #+(and sbcl sb-thread)
+  (let* ((values (mapcar #'symbol-value specials))
+         (thread (call-with-portable-thread-stack-size
+                  stack-size
+                  (lambda ()
+                    (sb-thread:make-thread
+                     (lambda ()
+                       (progv specials values
+                         (multiple-value-list (funcall thunk))))
+                     :name "cl-sml (large stack)")))))
+    (loop
+      (handler-case
+          (return (values-list (sb-thread:join-thread thread :default nil)))
+        (sb-sys:interactive-interrupt ()
+          (sb-thread:interrupt-thread
+           thread (lambda () (break "Interactive interrupt")))))))
+  #-(and sbcl sb-thread)
+  (progn stack-size specials (funcall thunk)))
+
 (defun portable-closure-first-value (function)
   "The first value FUNCTION closes over, or NIL where FUNCTION is no
 closure or the host does not tell."
