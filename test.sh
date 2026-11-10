@@ -30,6 +30,10 @@ case "$(basename "$LISP")" in
         "$LISP" --batch \
             --eval "$REGISTER" --eval "$LOAD" --eval "$RUN" --eval '(quit)'
         ;;
+    ccl)
+        "$LISP" -Q -b \
+            -e "$REGISTER" -e "$LOAD" -e "$RUN" -e '(ccl:quit)'
+        ;;
     *)
         echo "Unsupported Common Lisp implementation: $LISP" >&2
         exit 2
