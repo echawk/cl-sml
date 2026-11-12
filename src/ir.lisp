@@ -1970,6 +1970,7 @@ when the tree would be too large."
 (defparameter *ir-representation-types*
   `(("real" . double-float)
     ,@(and *portable-fixnum-int-p* '(("int" . fixnum)))
+    ("word" . (unsigned-byte ,+sml-word-size+))
     ("char" . character) ("string" . sml-string) ("list" . list)
     ("ref" . simple-vector) ("vector" . simple-vector))
   "The Basis's types whose values the code may declare: name -> CL type.")
@@ -2012,7 +2013,8 @@ operand is never in tail position, so THE costs no tail call."
                       (not (and (eq (ir-kind node) :prim)
                                 (eq (first (third node)) :overloaded)))
                       (ir-representation-type (ir-type node)))))
-    (if (member cl-type '(fixnum double-float character sml-string))
+    (if (or (member cl-type '(fixnum double-float character sml-string))
+            (and (consp cl-type) (eq (first cl-type) 'unsigned-byte)))
         `(the ,cl-type ,form)
         form)))
 
