@@ -5,7 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
 SBCL="${SBCL:-sbcl}"
-OUTPUT="$ROOT/cl-sml"
+OUTPUT="${1:-$ROOT/cl-sml}"
 
 # The image is saved with sb-ext:save-lisp-and-die: SBCL only.
 if [ "$(basename "${LISP:-$SBCL}")" != sbcl ]; then
@@ -22,10 +22,12 @@ STACK="${CL_SML_STACK:-1GB}"
 # CL_SML_HAMLET=1 makes HaMLet the checker instead (the test-only system
 # cl-sml/hamlet-oracle and HaMLet, from hamlet/, loaded into the image);
 # CL_SML_NO_TYPE_CHECKER=1 builds an image that does not check (plain mode).
+# The image has every optional system: Concurrent ML (cl-sml/cml) and the
+# Coalton backend (cl-sml/coalton); SYSTEMS overrides the list.
 if [ -n "${CL_SML_NO_TYPE_CHECKER:-}" ]; then
     ENABLE='(cl-sml:disable-type-checker)'
 elif [ -n "${CL_SML_HAMLET:-}" ]; then
-    SYSTEMS=':cl-sml :cl-sml/hamlet-oracle'
+    SYSTEMS=':cl-sml :cl-sml/cml :cl-sml/coalton :cl-sml/hamlet-oracle'
     ENABLE='(uiop:symbol-call (quote #:cl-sml) (quote #:enable-hamlet-type-checker))'
 else
     ENABLE='(uiop:symbol-call (quote #:cl-sml.types) (quote #:initial-env))'
@@ -36,6 +38,6 @@ fi
     --control-stack-size "$STACK" --noinform --non-interactive \
     --eval '(load "~/.sbclrc")' \
     --eval "(push #p\"$ROOT/\" asdf:*central-registry*)" \
-    --eval "(ql:quickload '(${SYSTEMS:-:cl-sml}))" \
+    --eval "(ql:quickload '(${SYSTEMS:-:cl-sml :cl-sml/cml :cl-sml/coalton}))" \
     --eval "$ENABLE" \
     --eval "(sb-ext:save-lisp-and-die \"$OUTPUT\" :executable t :save-runtime-options t :toplevel (lambda () (sb-ext:exit :code (cl-sml:main))))"
