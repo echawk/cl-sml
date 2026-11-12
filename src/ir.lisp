@@ -2602,13 +2602,19 @@ letrec and loop variables, local declarations and pattern variables."
         ((eq pat :wild) :wild)))
 
 (defun ir-tuple-pattern-p (pat)
-  "Is PAT (AST) made of variables, wildcards and tuples only, so that it
-cannot fail?"
+  "Is PAT (AST) made of variables, wildcards, tuples and records only, so
+that it cannot fail?"
   (loop while (and (consp pat) (eq (car pat) :pat-typed))
         do (setf pat (second pat)))
   (or (ir-variable-pattern-name pat)
       (and (consp pat) (eq (car pat) :pat-tuple)
-           (every #'ir-tuple-pattern-p (cdr pat)))))
+           (every #'ir-tuple-pattern-p (cdr pat)))
+      ;; A record pattern, `{x, y, ...}' too.
+      (and (consp pat) (eq (car pat) :pat-record)
+           (every (lambda (field)
+                    (or (eq field :record-rest)
+                        (and (consp field) (ir-tuple-pattern-p (second field)))))
+                  (cdr pat)))))
 
 (defun ir-note-inline-template (ast cell worker-arity local-exceptions lexical-env)
   "Forms recording the inline template of the function `fun' AST binds to
