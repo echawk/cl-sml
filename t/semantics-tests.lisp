@@ -1013,3 +1013,16 @@ parameters are declared.")
         (is (string= (apply #'lines *representation-edge-results*)
                      (run-sml *representation-edges*))
             "Policy ~S, declarations ~S" policy declarations)))))
+
+(test loop-records-flattened-keep-closures-apart
+  ;; A loop's record parameter becomes one variable per field
+  ;; (IR-FLATTEN-LOOP-RECORDS); a closure over a field still sees the
+  ;; value of its own iteration.
+  (is (string= "4 2 1 | 13"
+               (run-sml "fun loop 0 p acc = (p, acc)
+                           | loop n {x, y} acc = loop (n - 1) {x = y, y = x + n} ((fn () => x) :: acc)
+                         val ({x, y}, fs) = loop 3 {x = 1, y = 2} []
+                         fun sum 0 (a, b) = a + b
+                           | sum n (a, b) = sum (n - 1) (b, a + 1)
+                         val _ = print (String.concatWith \" \" (map (fn f => Int.toString (f ())) fs)
+                                        ^ \" | \" ^ Int.toString (sum 5 (x, y) - 1))"))))

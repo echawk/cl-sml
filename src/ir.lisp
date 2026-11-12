@@ -2203,12 +2203,18 @@ whole body when it does real arithmetic (see SML-IEEE)."
     (:select `(svref ,(ir-emit (fourth node)) ,(third node)))
     (:select-label `(sml-record-ref ,(ir-emit (fourth node)) ,(third node)))
     (:con (destructuring-bind (repr tag args) (cddr node)
-            (let ((args (ir-emit-list args)))
-              (ecase repr
-                (:cons `(cons ,tag ,@args))
-                (:boxed `(cons ',tag ,@args))
-                (:flat `(vector ',tag ,@args))
-                (:flat-construct `(sml-construct-flat ',tag ,@args))))))
+            (let* ((args (ir-emit-list args))
+                   (form (ecase repr
+                           (:cons `(cons ,tag ,@args))
+                           (:boxed `(cons ',tag ,@args))
+                           (:flat `(vector ',tag ,@args))
+                           (:flat-construct `(sml-construct-flat ',tag ,@args)))))
+              ;; A datatype's constructor applied to constants is built
+              ;; once: its value is immutable and has no identity in SML.
+              ;; (An exception's tag, :cons, may be made at run time.)
+              (if (and (member repr '(:boxed :flat)) (every #'constantp args))
+                  `(load-time-value ,form t)
+                  form))))
     (:app (ir-emit-application node))
     (:call `(,(third node) ,@(ir-emit-list (fourth node))))
     (:fn (destructuring-bind (params body name) (cddr node)
@@ -3013,11 +3019,165 @@ values (tuples, constructors, functions) or to a term to substitute."
                            (fourth node))))
       (:match (ir-simplify-match node env))
       (:loop (destructuring-bind (tag variables inits body) (cddr node)
-               (ir :loop (ir-type node) tag variables
-                   (mapcar (lambda (a) (simp a)) inits) (simp body))))
+               (let* ((loop (ir :loop (ir-type node) tag variables
+                                (mapcar (lambda (a) (simp a)) inits) (simp body)))
+                      (flat (ir-flatten-loop-records loop)))
+                 ;; Simplify again what flattening exposed (a record the
+                 ;; tail call passed, now only taken apart).
+                 (if (eq flat loop)
+                     loop
+                     (destructuring-bind (tag variables inits body) (cddr flat)
+                       (ir :loop (ir-type flat) tag variables inits (simp body)))))))
       (:tail-call (ir :tail-call (ir-type node) (third node)
                       (mapcar (lambda (a) (simp a)) (fourth node))))
       (:decl (ir :decl (ir-type node) (third node) (simp (fourth node)))))))
+
+;;; A loop variable holding a tuple or record of which the loop only takes
+;;; fields (and that its self tail calls pass as a new tuple or record, or
+;;; as itself) becomes one variable per field, so that the loop allocates
+;;; no tuple or record per iteration.
+
+(defun ir-loop-variable-only-selected-p (body variable tag index)
+  "Is VARIABLE, the INDEXth variable of loop TAG, used in BODY only as the
+argument of :select, or as the INDEXth argument of a tail call of TAG that
+is a variable or a tuple or record?"
+  (labels ((variable-p (n) (and (eq (ir-kind n) :var) (eq (third n) variable)))
+           (ok (n)
+             (case (ir-kind n)
+               (:var (not (variable-p n)))
+               (:select (or (variable-p (fourth n)) (ok (fourth n))))
+               ;; A closure must not see the fields change (a loop's
+               ;; variables are assigned at each iteration).
+               ((:fn :letrec) (not (ir-mentions-p n variable)))
+               ;; A column of wildcards matched against the variable.
+               (:match
+                (destructuring-bind (scrutinees rules &rest failure) (cddr n)
+                  (declare (ignore failure))
+                  (and (loop for scrutinee in scrutinees
+                             for j from 0
+                             always (if (variable-p scrutinee)
+                                        (every (lambda (rule)
+                                                 (eq (first (nth j (first rule))) :p-wild))
+                                               rules)
+                                        (ok scrutinee)))
+                       (every (lambda (rule) (ok (second rule))) rules))))
+               (:tail-call
+                (if (eq (car (third n)) tag)
+                    (loop for arg in (fourth n)
+                          for i from 0
+                          always (if (= i index)
+                                     (or (eq (ir-kind arg) :var)
+                                         (and (member (ir-kind arg) '(:tuple :record))
+                                              (every #'ok (ir-aggregate-fields arg))))
+                                     (ok arg)))
+                    (every #'ok (fourth n))))
+               (t (let ((good t))
+                    (ir-walk-children (lambda (c) (unless (ok c) (setf good nil))) n)
+                    good)))))
+    (ok body)))
+
+(defun ir-unalias-loop-variables (body variables)
+  "BODY with the variables a :match binds to a loop variable (a :p-var
+column whose scrutinee is one of VARIABLES) replaced by the loop variable,
+where no closure captures them."
+  (labels ((captured-p (n symbol)
+             (case (ir-kind n)
+               ((:fn :letrec) (ir-mentions-p n symbol))
+               (t (let ((found nil))
+                    (ir-walk-children (lambda (c) (when (captured-p c symbol) (setf found t))) n)
+                    found))))
+           (rename (n from to)
+             (if (and (eq (ir-kind n) :var) (eq (third n) from))
+                 (ir :var (ir-type n) to)
+                 (ir-map (lambda (c) (rename c from to)) n)))
+           (rw (n)
+             (let ((n (ir-map #'rw n)))
+               (if (eq (ir-kind n) :match)
+                   (destructuring-bind (scrutinees rules failure) (cddr n)
+                     (ir :match (ir-type n) scrutinees
+                         (mapcar (lambda (rule)
+                                   (destructuring-bind (patterns rule-body) rule
+                                     (let ((patterns (copy-list patterns)))
+                                       (loop for scrutinee in scrutinees
+                                             for tail on patterns
+                                             for pattern = (car tail)
+                                             when (and (eq (ir-kind scrutinee) :var)
+                                                       (member (third scrutinee) variables)
+                                                       (eq (first pattern) :p-var)
+                                                       (not (captured-p rule-body (third pattern))))
+                                               do (setf rule-body (rename rule-body (third pattern)
+                                                                          (third scrutinee))
+                                                        (car tail) (list :p-wild (second pattern))))
+                                       (list patterns rule-body))))
+                                 rules)
+                         failure))
+                   n))))
+    (rw body)))
+
+(defun ir-flatten-loop-records (node)
+  "NODE, a :loop, with each of its tuple or record variables that it only
+takes apart replaced by a variable per field."
+  (destructuring-bind (tag variables inits body) (cddr node)
+    (setf body (ir-unalias-loop-variables body variables))
+    (loop for variable in variables
+          for init in inits
+          for index from 0
+          for type = (ir-type init)
+          when (and (consp type) (eq (first type) :record) (second type) (not (third type))
+                    (member (ir-kind init) '(:var :tuple :record))
+                    (ir-loop-variable-only-selected-p body variable tag index))
+            do (let* ((field-types (mapcar #'cdr (second type)))
+                      (fields (loop for k from 1 to (length field-types)
+                                    collect (gensym (format nil "~A.~D" variable k))))
+                      (new-variables (append (subseq variables 0 index) fields
+                                             (nthcdr (1+ index) variables))))
+                 (labels ((field-terms (term)
+                            (if (member (ir-kind term) '(:tuple :record))
+                                (mapcar #'rw (ir-aggregate-fields term))
+                                (loop for field-type in field-types
+                                      for k from 1
+                                      collect (ir :select field-type k (rw term)))))
+                          (splice (terms term)
+                            (append (subseq terms 0 index) (field-terms term)
+                                    (nthcdr (1+ index) terms)))
+                          (rw (n)
+                            (cond ((and (eq (ir-kind n) :select)
+                                        (eq (ir-kind (fourth n)) :var)
+                                        (eq (third (fourth n)) variable))
+                                   (ir :var (ir-type n) (nth (1- (third n)) fields)))
+                                  ((and (eq (ir-kind n) :tail-call) (eq (car (third n)) tag))
+                                   (let ((args (fourth n)))
+                                     (ir :tail-call (ir-type n) (cons tag new-variables)
+                                         (append (mapcar #'rw (subseq args 0 index))
+                                                 (field-terms (nth index args))
+                                                 (mapcar #'rw (nthcdr (1+ index) args))))))
+                                  ((and (eq (ir-kind n) :match)
+                                        (find-if (lambda (scrutinee)
+                                                   (and (eq (ir-kind scrutinee) :var)
+                                                        (eq (third scrutinee) variable)))
+                                                 (third n)))
+                                   ;; Drop the column of wildcards.
+                                   (destructuring-bind (scrutinees rules failure) (cddr n)
+                                     (let ((keep (mapcar (lambda (scrutinee)
+                                                           (not (and (eq (ir-kind scrutinee) :var)
+                                                                     (eq (third scrutinee) variable))))
+                                                         scrutinees)))
+                                       (flet ((kept (list) (loop for x in list for k in keep
+                                                                 when k collect x)))
+                                         ;; Wildcards only: the first rule matches.
+                                         (when (notany #'identity keep)
+                                           (return-from rw (rw (second (first rules)))))
+                                         (rw (ir :match (ir-type n) (kept scrutinees)
+                                                 (mapcar (lambda (rule)
+                                                           (list (kept (first rule)) (second rule)))
+                                                         rules)
+                                                 failure))))))
+                                  (t (ir-map #'rw n)))))
+                   (return-from ir-flatten-loop-records
+                     (ir-flatten-loop-records
+                      (ir :loop (ir-type node) tag new-variables
+                          (splice inits init) (rw body)))))))
+    node))
 
 (defun ir-aggregate-fields (node)
   "The field terms of the :tuple or :record NODE, in slot order."
